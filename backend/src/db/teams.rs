@@ -1,0 +1,303 @@
+use std::collections::HashMap;
+
+use sqlx::postgres::PgPool;
+use sqlx::Row;
+
+use crate::error::Result;
+use crate::models::db::{FantasyTeam, FantasyTeamBets, NhlBetCount, TeamNhlCount};
+use crate::models::fantasy::{FantasyTeamInGame, PlayerInGame};
+
+pub struct TeamDbService<'a> {
+    pool: &'a PgPool,
+}
+
+impl<'a> TeamDbService<'a> {
+    pub fn new(pool: &'a PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Get a fantasy team by ID, verifying it belongs to the given league
+    pub async fn get_team(&self, team_id: i64, league_id: &str) -> Result<FantasyTeam> {
+        let team = sqlx::query_as::<_, FantasyTeam>(
+            r#"
+            SELECT DISTINCT ft.id, ft.name
+            FROM fantasy_teams ft
+            INNER JOIN league_members lm ON lm.fantasy_team_id = ft.id
+            WHERE ft.id = $1 AND lm.league_id = $2::uuid
+            "#,
+        )
+        .bind(team_id)
+        .bind(league_id)
+        .fetch_one(self.pool)
+        .await?;
+
+        Ok(team)
+    }
+
+    /// Get all fantasy teams in a league
+    pub async fn get_all_teams(&self, league_id: &str) -> Result<Vec<FantasyTeam>> {
+        let teams = sqlx::query_as::<_, FantasyTeam>(
+            r#"
+            SELECT DISTINCT ft.id, ft.name
+            FROM fantasy_teams ft
+            INNER JOIN league_members lm ON lm.fantasy_team_id = ft.id
+            WHERE lm.league_id = $1::uuid
+            "#,
+        )
+        .bind(league_id)
+        .fetch_all(self.pool)
+        .await?;
+
+        Ok(teams)
+    }
+
+    /// For each fantasy team in a league, return how many players they have from each NHL team.
+    pub async fn get_fantasy_bets_by_nhl_team(
+        &self,
+        league_id: &str,
+    ) -> Result<Vec<FantasyTeamBets>> {
+        let rows: Vec<TeamNhlCount> = sqlx::query_as::<_, TeamNhlCount>(
+            r#"
+            SELECT
+                t.id          AS team_id,
+                t.name        AS team_name,
+                p.nhl_team    AS nhl_team,
+                COUNT(*)      AS num_players
+            FROM fantasy_teams t
+            INNER JOIN league_members lm ON lm.fantasy_team_id = t.id
+            JOIN fantasy_players p ON p.team_id = t.id
+            WHERE lm.league_id = $1::uuid
+            GROUP BY t.id, t.name, p.nhl_team
+            ORDER BY t.id
+            "#,
+        )
+        .bind(league_id)
+        .fetch_all(self.pool)
+        .await?;
+
+        // Group them in Rust by (team_id + team_name)
+        let mut map: HashMap<(i64, String), Vec<NhlBetCount>> = HashMap::new();
+
+        for row in rows {
+            map.entry((row.team_id, row.team_name.clone()))
+                .or_default()
+                .push(NhlBetCount {
+                    nhl_team: row.nhl_team,
+                    num_players: row.num_players,
+                });
+        }
+
+        // Build a vec of FantasyTeamBets for final output
+        let mut result = Vec::with_capacity(map.len());
+        for ((team_id, team_name), bets) in map {
+            result.push(FantasyTeamBets {
+                team_id,
+                team_name,
+                bets,
+            });
+        }
+
+        // Sort the final result by team_id
+        result.sort_by_key(|entry| entry.team_id);
+
+        Ok(result)
+    }
+
+    /// Get fantasy teams (in a league) with players in specified NHL teams
+    pub async fn get_fantasy_teams_for_nhl_teams(
+        &self,
+        nhl_teams: &[&str],
+        league_id: &str,
+    ) -> Result<Vec<FantasyTeamInGame>> {
+        if nhl_teams.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build parameterized placeholders for the IN clause
+        // $1 is league_id, then $2..$N+1 are the nhl teams
+        let placeholders = nhl_teams
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 2))
+            .collect::<Vec<_>>()
+            .join(",");
+        let query_str = format!(
+            r#"SELECT
+                  p.id as player_id,
+                  p.nhl_id as nhl_id,
+                  p.name as player_name,
+                  p.team_id as fantasy_team_id,
+                  t.name as fantasy_team_name,
+                  p.nhl_team,
+                  p.position
+               FROM fantasy_players p
+               JOIN fantasy_teams t ON p.team_id = t.id
+               INNER JOIN league_members lm ON lm.fantasy_team_id = t.id
+               WHERE lm.league_id = $1::uuid
+               AND p.nhl_team IN ({})"#,
+            placeholders
+        );
+
+        // Bind league_id first, then each team abbreviation
+        let mut query = sqlx::query(&query_str);
+        query = query.bind(league_id);
+        for team in nhl_teams {
+            query = query.bind(team);
+        }
+
+        let rows = query
+            .map(|row: sqlx::postgres::PgRow| {
+                let player_id: i64 = row.get("player_id");
+                let nhl_id: i64 = row.get("nhl_id");
+                let player_name: String = row.get("player_name");
+                let fantasy_team_id: i64 = row.get("fantasy_team_id");
+                let fantasy_team_name: String = row.get("fantasy_team_name");
+                let nhl_team: String = row.get("nhl_team");
+                let position: String = row.get("position");
+
+                (
+                    fantasy_team_id,
+                    fantasy_team_name,
+                    player_id,
+                    nhl_id,
+                    player_name,
+                    nhl_team,
+                    position,
+                )
+            })
+            .fetch_all(self.pool)
+            .await?;
+
+        // Group by fantasy team
+        let mut teams_map: HashMap<i64, FantasyTeamInGame> = HashMap::new();
+
+        for (
+            fantasy_team_id,
+            fantasy_team_name,
+            player_id,
+            nhl_id,
+            player_name,
+            nhl_team,
+            position,
+        ) in rows
+        {
+            let team_entry =
+                teams_map
+                    .entry(fantasy_team_id)
+                    .or_insert_with(|| FantasyTeamInGame {
+                        team_id: fantasy_team_id,
+                        team_name: fantasy_team_name.clone(),
+                        players: Vec::new(),
+                    });
+
+            team_entry.players.push(PlayerInGame {
+                player_id,
+                nhl_id,
+                player_name,
+                nhl_team,
+                position,
+            });
+        }
+
+        let result: Vec<FantasyTeamInGame> = teams_map.into_values().collect();
+        Ok(result)
+    }
+
+    /// Update a fantasy team's name.
+    pub async fn update_team_name(&self, team_id: i64, name: &str) -> Result<()> {
+        sqlx::query("UPDATE fantasy_teams SET name = $1 WHERE id = $2")
+            .bind(name)
+            .bind(team_id)
+            .execute(self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_daily_ranking_stats(
+        &self,
+        league_id: &str,
+    ) -> Result<Vec<crate::models::db::TeamDailyRankingStats>> {
+        // Check if the table has any rows for this league
+        let count: Option<i64> =
+            sqlx::query_scalar("SELECT COUNT(*) FROM daily_rankings WHERE league_id = $1::uuid")
+                .bind(league_id)
+                .fetch_optional(self.pool)
+                .await?;
+
+        if count.unwrap_or(0) == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Build a map of team stats
+        let mut team_stats: HashMap<i64, crate::models::db::TeamDailyRankingStats> = HashMap::new();
+
+        // First, initialize team stats with team IDs for this league
+        let team_ids: Vec<i64> =
+            sqlx::query_scalar("SELECT DISTINCT team_id FROM daily_rankings WHERE league_id = $1::uuid")
+                .bind(league_id)
+                .fetch_all(self.pool)
+                .await?;
+
+        for team_id in team_ids {
+            team_stats.insert(
+                team_id,
+                crate::models::db::TeamDailyRankingStats {
+                    team_id,
+                    wins: 0,
+                    top_three: 0,
+                    win_dates: Vec::new(),
+                    top_three_dates: Vec::new(),
+                },
+            );
+        }
+
+        // Query to get all daily rankings for this league with computed rank
+        let daily_rankings = sqlx::query(
+            r#"
+            SELECT
+                r1.date,
+                r1.team_id,
+                r1.daily_points,
+                (
+                    SELECT COUNT(*) + 1
+                    FROM daily_rankings r2
+                    WHERE r2.date = r1.date
+                    AND r2.league_id = r1.league_id
+                    AND r2.daily_points > r1.daily_points
+                ) AS true_rank
+            FROM daily_rankings r1
+            WHERE r1.league_id = $1::uuid
+            ORDER BY r1.date, true_rank
+            "#,
+        )
+        .bind(league_id)
+        .map(|row: sqlx::postgres::PgRow| {
+            (
+                row.get::<String, _>("date"),
+                row.get::<i64, _>("team_id"),
+                row.get::<i64, _>("true_rank"),
+            )
+        })
+        .fetch_all(self.pool)
+        .await?;
+
+        // Process all daily rankings
+        for (date, team_id, true_rank) in daily_rankings {
+            if let Some(stats) = team_stats.get_mut(&team_id) {
+                if true_rank == 1 {
+                    stats.wins += 1;
+                    stats.win_dates.push(date.clone());
+                }
+                // If this was a 2nd or 3rd place finish (exclusive)
+                else if true_rank <= 3 {
+                    stats.top_three += 1;
+                    stats.top_three_dates.push(date.clone());
+                }
+            }
+        }
+
+        // Convert HashMap to Vec
+        Ok(team_stats.into_values().collect())
+    }
+}
