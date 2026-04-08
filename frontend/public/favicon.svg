@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="64" fill="#1A1A1A"/>
+  <text x="256" y="200" text-anchor="middle" dominant-baseline="central" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="180" fill="#FFFFFF" letter-spacing="-8">FP</text>
+  <rect x="96" y="300" width="320" height="8" rx="4" fill="#FACC15"/>
+  <text x="256" y="370" text-anchor="middle" dominant-baseline="central" font-family="Arial, sans-serif" font-weight="700" font-size="72" fill="#2563EB" letter-spacing="16">NHL</text>
+  <circle cx="256" cy="438" r="24" fill="none" stroke="#FACC15" stroke-width="6"/>
+  <line x1="240" y1="462" x2="220" y2="482" stroke="#FACC15" stroke-width="6" stroke-linecap="round"/>
+  <line x1="272" y1="462" x2="292" y2="482" stroke="#FACC15" stroke-width="6" stroke-linecap="round"/>
+</svg>

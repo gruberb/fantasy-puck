@@ -1,0 +1,467 @@
+@import "tailwindcss";
+
+/* Color variables */
+:root {
+    --brutal-black: #1A1A1A;
+    --brutal-white: #FAFAFA;
+    --brutal-cream: #F5F0E8;
+    --brutal-blue: #2563EB;
+    --brutal-red: #EF4444;
+    --brutal-yellow: #FACC15;
+    --brutal-pink: #EC4899;
+    --brutal-teal: #14B8A6;
+    --brutal-orange: #F97316;
+    --brutal-purple: #8B5CF6;
+    --brutal-gray: #6B7280;
+}
+
+/* Custom cursor - arrow only, browser native hand for clickable */
+* {
+    cursor: url('/cursor-default-32.png') 0 0, default;
+}
+
+/* Prevent layout shift when scrollbar appears/disappears */
+html {
+    scrollbar-gutter: stable;
+}
+
+/* Base styles */
+body {
+    font-family: "Space Grotesk", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: #FAFAFA;
+    color: #1A1A1A;
+}
+
+/* Typography - brutalist: uppercase, tracked, bold */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+h1 {
+    font-size: 2rem;
+    line-height: 2.5rem;
+}
+
+h2 {
+    font-size: 1.5rem;
+    line-height: 2rem;
+}
+
+/* Custom utility classes */
+@layer components {
+    /* Card styling */
+    .card {
+        @apply border-2 border-[#1A1A1A] bg-white p-6 rounded-none;
+    }
+
+    /* Remove card padding/border when it wraps a ranking table (avoid box-in-box) */
+    .card:has(.ranking-table-container) {
+        @apply border-0 p-0;
+    }
+
+    /* Updated button styles */
+    .btn {
+        @apply px-5 py-2.5 rounded-none font-bold uppercase tracking-wider text-sm border-2 border-[#1A1A1A] transition-all duration-100;
+    }
+
+    .btn-primary {
+        @apply bg-[#2563EB] text-white border-2 border-[#1A1A1A];
+        box-shadow: 4px 4px 0px 0px #1A1A1A;
+    }
+
+    .btn-primary:hover {
+        @apply translate-x-[2px] translate-y-[2px];
+        box-shadow: none;
+    }
+
+    .btn-secondary {
+        @apply bg-white text-[#1A1A1A] border-2 border-[#1A1A1A];
+        box-shadow: 2px 2px 0px 0px #1A1A1A;
+    }
+
+    .btn-secondary:hover {
+        @apply translate-x-[1px] translate-y-[1px];
+        box-shadow: none;
+    }
+
+    /* Game card styling */
+    .game-card {
+        @apply bg-white border-2 border-[#1A1A1A] rounded-none overflow-hidden;
+    }
+
+    .game-card-header {
+        @apply bg-[#F5F0E8] border-b-2 border-[#1A1A1A] p-4 flex items-center justify-between;
+    }
+
+    .game-status {
+        @apply px-2.5 py-1 rounded-none text-xs font-bold uppercase tracking-wider border-2 border-[#1A1A1A];
+    }
+
+    .status-live {
+        @apply bg-[#EF4444] text-white;
+    }
+
+    .status-final {
+        @apply bg-[#1A1A1A] text-white;
+    }
+
+    .status-scheduled {
+        @apply bg-[#14B8A6] text-white;
+    }
+
+    /* Table styles */
+    .table-container {
+        @apply bg-white border-2 border-[#1A1A1A] rounded-none overflow-hidden;
+    }
+
+    .table-header {
+        @apply bg-[#F5F0E8] py-3 px-4 text-left text-xs font-bold uppercase tracking-wider text-[#1A1A1A] border-b-2 border-[#1A1A1A];
+    }
+
+    .table-cell {
+        @apply py-3 px-4 border-t border-[#1A1A1A]/10;
+    }
+
+    .table-row {
+        @apply hover:bg-[#FACC15]/10 transition-colors duration-100;
+    }
+
+    /* Stats components */
+    .stat-card {
+        @apply border-2 border-[#1A1A1A] bg-white p-4 rounded-none;
+    }
+
+    .stat-value {
+        @apply font-bold text-2xl;
+    }
+
+    .stat-label {
+        @apply text-xs uppercase tracking-widest text-gray-500 font-semibold;
+    }
+
+    /* Theme-colored components */
+    .theme-gradient {
+        @apply bg-[#1A1A1A] text-white;
+    }
+
+    /* Navbar specific styles */
+    .navbar {
+        @apply bg-white border-b-3 border-[#1A1A1A];
+    }
+
+    .nav-link {
+        @apply block text-[#1A1A1A] uppercase font-medium tracking-wider px-4 py-2 hover:bg-[#2563EB] hover:text-white transition-colors duration-100;
+    }
+
+    .nav-link-active {
+        @apply block bg-[#FACC15] text-[#1A1A1A] font-bold uppercase tracking-wider px-4 py-2;
+    }
+
+    /* Team colors accent */
+    .team-accent {
+        @apply w-3 flex-shrink-0;
+    }
+}
+
+/* Animations - pulse only for live indicator */
+.animate-pulse {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+/* Custom scrollbar - brutalist black/yellow */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #F5F0E8;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #1A1A1A;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #FACC15;
+}
+
+/* RankingTable Styling */
+.ranking-table-container {
+    @apply rounded-none overflow-hidden border-2 border-[#1A1A1A] bg-white;
+}
+
+.ranking-table-container:hover {
+    /* No transform or fancy shadow on hover - brutalist stays flat */
+}
+
+.ranking-table-header {
+    @apply p-5 border-b-2 border-[#1A1A1A] bg-white text-[#1A1A1A];
+}
+
+.ranking-table-header h2 {
+    @apply text-2xl font-bold uppercase tracking-wide text-[#1A1A1A];
+}
+
+.ranking-table-header p {
+    @apply text-[#1A1A1A]/60;
+}
+
+.ranking-table-header a {
+    @apply text-[#2563EB] hover:text-[#2563EB]/80 font-bold uppercase tracking-wider transition-colors flex items-center;
+}
+
+.ranking-table-body {
+    @apply bg-white;
+}
+
+.ranking-table {
+    @apply w-full border-collapse;
+}
+
+.ranking-table thead th {
+    @apply py-3 px-4 text-left text-xs font-bold uppercase tracking-wider text-[#1A1A1A] border-b-2 border-[#1A1A1A] bg-[#F5F0E8];
+}
+
+.ranking-table thead th button {
+    @apply font-bold flex items-center transition-colors hover:text-[#2563EB] uppercase;
+}
+
+.ranking-table tbody tr {
+    @apply border-b border-[#1A1A1A]/10 transition-colors duration-100;
+}
+
+.ranking-table tbody tr:hover {
+    @apply bg-[#FACC15]/10;
+}
+
+.ranking-table tbody tr:last-child {
+    @apply border-b-0;
+}
+
+.ranking-table td {
+    @apply py-3 px-4 text-sm;
+}
+
+/* Rank indicators - brutalist square style */
+.rank-indicator {
+    @apply inline-flex items-center justify-center h-8 w-8 rounded-none text-sm font-bold border-2 border-[#1A1A1A];
+}
+
+.rank-indicator-1 {
+    background: #FACC15;
+    color: #1A1A1A;
+}
+
+.rank-indicator-2 {
+    background: #e5e7eb;
+    color: #1A1A1A;
+}
+
+.rank-indicator-3 {
+    background: #F97316;
+    color: #fff;
+}
+
+.rank-indicator-default {
+    @apply bg-white border-2 border-[#1A1A1A] text-[#1A1A1A];
+}
+
+/* Scrollable table improvements */
+.table-scroll-indicator {
+    @apply p-2 text-xs text-center text-[#6B7280] border-t-2 border-[#1A1A1A] animate-pulse uppercase tracking-wider font-bold;
+}
+
+/* Skeleton loader for RankingTable */
+.skeleton-header {
+    @apply h-8 bg-[#F5F0E8] rounded-none w-1/3 mb-2 animate-pulse;
+}
+
+.skeleton-row {
+    @apply h-10 bg-[#F5F0E8] rounded-none mb-2 animate-pulse;
+}
+
+/* Enhanced card styling - brutalist */
+.fantasy-card {
+    @apply bg-white border-2 border-[#1A1A1A] rounded-none overflow-hidden;
+}
+
+.fantasy-card:hover {
+    /* No transform - brutalist stays flat */
+}
+
+.card-header {
+    @apply bg-white text-[#1A1A1A] p-5 font-bold uppercase tracking-wide border-b-2 border-[#1A1A1A];
+}
+
+.stat-card-enhanced {
+    @apply border-2 border-[#1A1A1A] bg-white p-4 rounded-none;
+}
+
+.stat-card-enhanced:hover {
+    /* No transform - brutalist stays flat */
+}
+
+/* Enhanced buttons - brutalist */
+.btn-gradient {
+    @apply px-5 py-2.5 rounded-none font-bold uppercase tracking-wider text-sm text-white bg-[#2563EB] border-2 border-[#1A1A1A] transition-all duration-100;
+    box-shadow: 4px 4px 0px 0px #1A1A1A;
+}
+
+.btn-gradient:hover {
+    @apply translate-x-[2px] translate-y-[2px];
+    box-shadow: none;
+}
+
+.btn-secondary-enhanced {
+    @apply px-5 py-2.5 rounded-none font-bold uppercase tracking-wider text-sm text-[#1A1A1A] bg-white border-2 border-[#1A1A1A] transition-all duration-100;
+    box-shadow: 2px 2px 0px 0px #1A1A1A;
+}
+
+.btn-secondary-enhanced:hover {
+    @apply translate-x-[1px] translate-y-[1px];
+    box-shadow: none;
+}
+
+/* Enhanced badges - brutalist */
+.badge {
+    @apply rounded-none px-2.5 py-1 border-2 border-[#1A1A1A] font-bold uppercase text-xs tracking-wider inline-flex items-center;
+}
+
+.badge-primary {
+    @apply bg-[#2563EB] text-white;
+}
+
+.badge-success {
+    @apply bg-[#14B8A6] text-white;
+}
+
+.badge-warning {
+    @apply bg-[#FACC15] text-[#1A1A1A];
+}
+
+.badge-danger {
+    @apply bg-[#EF4444] text-white;
+}
+
+.badge-info {
+    @apply bg-[#2563EB]/20 text-[#2563EB];
+}
+
+.badge-neutral {
+    @apply bg-[#F5F0E8] text-[#1A1A1A];
+}
+
+/* Live indicator pulse - brutalist square */
+.live-indicator {
+    @apply relative flex items-center;
+}
+
+.live-indicator::before {
+    content: "";
+    @apply w-2 h-2 bg-red-500 rounded-none mr-2;
+    animation: pulse-animation 2s infinite;
+}
+
+@keyframes pulse-animation {
+    0% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+    }
+}
+
+/* Enhanced tooltips - brutalist */
+.enhanced-tooltip {
+    @apply relative inline-block;
+}
+
+.enhanced-tooltip .tooltip-text {
+    @apply invisible absolute z-10 w-48 text-center rounded-none p-2 text-xs bg-[#1A1A1A] text-white border-2 border-[#1A1A1A] font-bold;
+    bottom: 125%;
+    left: 50%;
+    margin-left: -24px;
+    opacity: 0;
+    transition: opacity 0.1s;
+    box-shadow: 2px 2px 0px 0px #FACC15;
+}
+
+.enhanced-tooltip:hover .tooltip-text {
+    @apply visible opacity-100;
+}
+
+/* Custom scroll indicator - brutalist */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: #F5F0E8;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #1A1A1A;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #FACC15;
+}
+
+/* Enhanced focus states for accessibility */
+.focus-ring {
+    @apply outline-none transition-shadow duration-100;
+}
+
+.focus-ring:focus-visible {
+    @apply ring-2 ring-[#1A1A1A] ring-offset-2;
+}
+
+/* Team-specific accent colors */
+.team-palette {
+    --team-primary: #1A1A1A;
+    --team-secondary: #FACC15;
+    --team-primary-light: rgba(26, 26, 26, 0.1);
+    --team-secondary-light: rgba(250, 204, 21, 0.1);
+}
+
+/* Responsive typography adjustments */
+@media (max-width: 640px) {
+    .responsive-text-sm {
+        font-size: 0.875rem;
+    }
+
+    .responsive-title {
+        font-size: 1.5rem;
+    }
+}
+
+.react-datepicker {
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    z-index: 9999 !important;
+}
+
+.react-datepicker__triangle {
+    display: none !important;
+}

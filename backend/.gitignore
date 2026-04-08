@@ -1,0 +1,6 @@
+/target
+teams/
+.idea/
+digest.txt
+.env
+*.db
