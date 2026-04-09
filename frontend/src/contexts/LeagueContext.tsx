@@ -111,9 +111,9 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
 
   const myMemberships: LeagueMembership[] = membershipsQuery.data ?? [];
 
-  // Fetch draft session via React Query (only when active league is set)
+  // Fetch draft session — uses same query key as useDraftSession so WS updates propagate
   const draftQuery = useQuery({
-    queryKey: ["leagueContext", "draft", activeLeagueId],
+    queryKey: ["draft", "session", activeLeagueId],
     queryFn: async () => {
       const data = (await api.getDraftByLeague(activeLeagueId!)) as {
         session: DraftSession;
