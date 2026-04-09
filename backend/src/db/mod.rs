@@ -181,6 +181,12 @@ impl FantasyDb {
             .await
     }
 
+    pub async fn remove_sleeper(&self, sleeper_id: i64) -> Result<()> {
+        sleepers::SleeperDbService::new(&self.pool)
+            .remove_sleeper(sleeper_id)
+            .await
+    }
+
     pub async fn get_daily_ranking_stats(
         &self,
         league_id: &str,

@@ -17,6 +17,7 @@ import DraftPage from "@/pages/DraftPage";
 import JoinLeaguePage from "@/pages/JoinLeaguePage";
 import SettingsPage from "@/pages/SettingsPage";
 import InsightsPage from "@/pages/InsightsPage";
+import PulsePage from "@/pages/PulsePage";
 
 function App() {
   return (
@@ -46,6 +47,7 @@ function App() {
               <Route path="teams/:teamId" element={<FantasyTeamDetailPage />} />
               <Route path="rankings" element={<RankingsPage />} />
               <Route path="insights" element={<InsightsPage />} />
+              <Route path="pulse" element={<PulsePage />} />
               <Route path="draft" element={<ProtectedRoute><DraftPage /></ProtectedRoute>} />
             </Route>
           </Route>

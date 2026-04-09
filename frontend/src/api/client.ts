@@ -206,6 +206,10 @@ export const api = {
     return fetchApi(withLeague("fantasy/players", leagueId));
   },
 
+  async removeSleeper(sleeperId: number) {
+    return fetchApi(`fantasy/sleepers/${sleeperId}`, { method: "DELETE" });
+  },
+
   async createDraftSession(
     leagueId: string,
     totalRounds: number,

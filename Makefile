@@ -1,10 +1,13 @@
 .PHONY: run db-start db-stop db-reset backend frontend install clean check
 
-# Start local dev: Supabase DB + backend + frontend
+# Start local dev: Supabase DB + backend (wait for ready) + frontend
 run: db-start
-	@echo "Starting backend and frontend..."
+	@echo "Starting backend..."
+	@cd backend && cp .env.development .env && cargo run -- serve --port 3000 &
+	@echo "Waiting for backend to be ready..."
+	@until curl -s http://localhost:3000/api/nhl/playoffs > /dev/null 2>&1; do sleep 1; done
+	@echo "Backend ready. Starting frontend..."
 	@trap 'kill 0' EXIT; \
-		cd backend && cp .env.development .env && cargo run -- serve --port 3000 & \
 		cd frontend && npm run dev & \
 		wait
 
@@ -47,6 +50,10 @@ check:
 	@cd backend && cargo check
 	@cd frontend && npx tsc --noEmit
 	@echo "All checks passed."
+
+cache-clear:
+	@cd backend && echo "DELETE FROM response_cache;" | supabase db query
+	@echo "Cache cleared."
 
 clean:
 	@cd backend && cargo clean

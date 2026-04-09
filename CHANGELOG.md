@@ -4,6 +4,37 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.2.0 — 2026-04-09
+
+### Added
+- **Pulse page** — new quick-glance dashboard (Dashboard > Pulse in nav) showing: my team rank/points/today, players grouped by tonight's games with start times, and league board with opponent activity
+- **Sleeper delete endpoint** — `DELETE /api/fantasy/sleepers/:id` for removing sleeper picks
+- **Sleeper management in admin** — sleepers now visible in Player Management with yellow badge and Remove button
+- **Makefile improvements** — `make run` waits for backend to be ready before starting frontend; `make cache-clear` to wipe response cache
+
+### Changed
+- **Nav restructure** — Dashboard, Pulse, Insights, Games, Stats, Skaters in main nav; Teams moved to dropdown alongside Browse Leagues and Manage Leagues
+- **Games page simplified** — removed My League and Player Matchups tabs; Games page now shows only NHL game cards
+- **Insights narratives** — Claude no longer prefixes game narratives with matchup labels (e.g. "CBJ @ BUF:"); streak labels now readable ("Won 2" instead of "W2")
+- **Insights layout** — game cards in 2-column grid on desktop
+- **Fantasy summary and team cards** — redesigned with consistent black/white headers, compact player rows
+- **Player matchups** — team logos instead of colored squares, compact VS rows
+- **Pulse headers** — white background with black text, consistent across all sections
+
+### Fixed
+- **Draft finalize propagation** — non-owners now see sleeper round transition without page reload (invalidateQueries on sessionUpdated WS event)
+- **Player delete** — admin page now correctly deletes players by NHL ID (was sending NHL ID to an endpoint expecting DB ID)
+- **Admin player count** — includes sleeper in the total count per team
+- **Admin player list** — correctly parses nested NHL-team-grouped API response instead of expecting flat array
+- **AdminPage infinite loop** — fixed useEffect dependency on `members` array reference causing re-render loop
+- **Dashboard post-draft-delete** — shows rankings instead of "Draft Hasn't Started" when teams have data but draft session was deleted
+- **Sleeper visibility** — sleeper stays visible in admin even when all regular players are removed
+
+### Removed
+- GameTabs, FantasySummary, FantasyTeamCard, PlayerComparison, PlayerWithStats, FantasyTeamSummary components
+- useFantasyTeams hook
+- matchDay duplicate components
+
 ## v1.1.0 — 2026-04-08
 
 ### Fixed

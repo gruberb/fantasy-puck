@@ -190,6 +190,10 @@ pub fn create_router(db: FantasyDb, nhl_client: NhlClient, jwt_secret: String) -
             "/api/fantasy/sleepers",
             get(handlers::sleepers::get_sleepers),
         )
+        .route(
+            "/api/fantasy/sleepers/{sleeper_id}",
+            delete(handlers::sleepers::remove_sleeper),
+        )
         // ---------------------------------------------------------------
         // Insights
         // ---------------------------------------------------------------

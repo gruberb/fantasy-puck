@@ -36,7 +36,7 @@ const InsightsPage = () => {
         <InsightCard accent="#2563EB" title="What to Watch Today">
           <Narrative text={narratives.todaysWatch} />
           {signals.todaysGames.length > 0 && (
-            <div className="mt-4 space-y-4">
+            <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
               {signals.todaysGames.map((game, i) => (
                 <GameSignalCard
                   key={i}
@@ -192,7 +192,7 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
                 <div className="flex items-center gap-1.5 mt-0.5">
                   {game.awayStreak && (
                     <span className={`text-[10px] font-bold px-1 py-px leading-none ${game.awayStreak.startsWith("W") ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
-                      {game.awayStreak}
+                      {formatStreak(game.awayStreak)}
                     </span>
                   )}
                   {game.awayL10 && <span className="text-[10px] text-gray-400">L10: {game.awayL10}</span>}
@@ -217,7 +217,7 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
                   {game.homeL10 && <span className="text-[10px] text-gray-400">L10: {game.homeL10}</span>}
                   {game.homeStreak && (
                     <span className={`text-[10px] font-bold px-1 py-px leading-none ${game.homeStreak.startsWith("W") ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
-                      {game.homeStreak}
+                      {formatStreak(game.homeStreak)}
                     </span>
                   )}
                 </div>
@@ -407,6 +407,15 @@ function SleeperCard({ sleeper }: { sleeper: SleeperAlertSignal }) {
       </div>
     </div>
   );
+}
+
+/** Convert streak codes like "W2" -> "Won 2", "L5" -> "Lost 5", "OT1" -> "OT 1" */
+function formatStreak(streak: string | null): string {
+  if (!streak) return "";
+  if (streak.startsWith("W")) return `Won ${streak.slice(1)}`;
+  if (streak.startsWith("L")) return `Lost ${streak.slice(1)}`;
+  if (streak.startsWith("OT")) return `OT ${streak.slice(2)}`;
+  return streak;
 }
 
 export default InsightsPage;

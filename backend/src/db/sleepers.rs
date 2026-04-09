@@ -29,4 +29,12 @@ impl<'a> SleeperDbService<'a> {
         Ok(sleepers)
     }
 
+    /// Remove a sleeper by ID or NHL ID
+    pub async fn remove_sleeper(&self, sleeper_id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM fantasy_sleepers WHERE id = $1 OR nhl_id = $1")
+            .bind(sleeper_id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
 }

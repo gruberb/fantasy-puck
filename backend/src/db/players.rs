@@ -42,9 +42,9 @@ impl<'a> PlayerDbService<'a> {
         Ok(player)
     }
 
-    /// Remove a player from a fantasy team.
+    /// Remove a player from a fantasy team. Accepts either DB id or NHL id.
     pub async fn remove_player(&self, player_id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM fantasy_players WHERE id = $1")
+        sqlx::query("DELETE FROM fantasy_players WHERE id = $1 OR nhl_id = $1")
             .bind(player_id)
             .execute(self.pool)
             .await?;

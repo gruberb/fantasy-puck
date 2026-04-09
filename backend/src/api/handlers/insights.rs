@@ -824,7 +824,7 @@ Return JSON with these exact fields:
 
 - **todays_watch**: A brief 1-2 sentence overview of today's slate — the big picture.
 
-- **game_narratives**: An array of exactly {num_games} strings, one per game IN THE SAME ORDER as the games listed below. Each string should be 2-3 punchy sentences previewing that specific matchup: key players, goalie edge, series stakes, streaks, and last game results. Keep it concise.
+- **game_narratives**: An array of exactly {num_games} strings, one per game IN THE SAME ORDER as the games listed below. Each string should be 2-3 punchy sentences previewing that specific matchup: key players, goalie edge, series stakes, streaks, and last game results. Do NOT start with the team matchup (e.g. "CBJ @ BUF:") — the matchup is already shown in the UI header. Jump straight into the analysis.
 
 - **hot_players**: 3-4 sentences analyzing the hottest players. Reference actual form stats and NHL Edge data (skating speed, shot speed) when available. Mention fantasy team owners.
 
