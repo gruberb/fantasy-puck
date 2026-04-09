@@ -7,8 +7,8 @@ export const API_URL =
 // App settings
 export const APP_CONFIG = {
   APP_NAME: "Fantasy NHL Dashboard",
-  DEFAULT_SEASON: "20252026",
-  DEFAULT_GAME_TYPE: 3, // 3 = Playoffs
+  DEFAULT_SEASON: import.meta.env.VITE_NHL_SEASON || "20252026",
+  DEFAULT_GAME_TYPE: Number(import.meta.env.VITE_NHL_GAME_TYPE) || 3, // 3 = Playoffs
   FORM_GAMES: 5,
   SKATERS_LIMIT: 1000,
   HOME_SKATERS_LIMIT: 10,

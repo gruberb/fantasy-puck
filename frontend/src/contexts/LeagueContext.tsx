@@ -1,17 +1,16 @@
 import {
   createContext,
   useContext,
-  useEffect,
-  useState,
   useCallback,
   ReactNode,
 } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "./AuthContext";
 import { api } from "@/api/client";
 import type { League } from "@/types/league";
 import type { DraftSession } from "@/features/draft";
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// -- Types ------------------------------------------------------------------
 
 export interface MembershipRow {
   leagueId: string;
@@ -33,22 +32,14 @@ export interface LeagueMembership {
 }
 
 interface LeagueContextType {
-  // The currently viewed league (from URL or selection)
   activeLeagueId: string | null;
   setActiveLeagueId: (id: string | null) => void;
   activeLeague: League | null;
-
-  // All available leagues (fetched from backend)
   allLeagues: League[];
   leaguesLoading: boolean;
-
-  // Auth-specific (only when logged in)
   myMemberships: LeagueMembership[];
   myLeagues: League[];
-
-  // Draft session for the active league
   draftSession: DraftSession | null;
-
   loading: boolean;
 }
 
@@ -56,27 +47,36 @@ const STORAGE_KEY = "lastViewedLeagueId";
 
 const LeagueContext = createContext<LeagueContextType | undefined>(undefined);
 
-// ── Provider ───────────────────────────────────────────────────────────────
+// -- Helper to transform membership rows ------------------------------------
+
+function transformMemberships(data: MembershipRow[], userId: string): LeagueMembership[] {
+  return (data ?? []).map((m) => ({
+    id: m.leagueId,
+    league_id: m.leagueId,
+    user_id: userId,
+    fantasy_team_id: m.fantasyTeamId ?? 0,
+    draft_order: m.draftOrder,
+    leagues: {
+      id: m.leagueId,
+      name: m.leagueName,
+      season: m.leagueSeason,
+    },
+    fantasy_teams: m.fantasyTeamId
+      ? { id: m.fantasyTeamId, name: m.teamName ?? "No team" }
+      : null,
+  }));
+}
+
+// -- Provider ---------------------------------------------------------------
+
+import { useState } from "react";
 
 export const LeagueProvider = ({ children }: { children: ReactNode }) => {
   const { user } = useAuth();
 
-  const [allLeagues, setAllLeagues] = useState<League[]>([]);
-  const [leaguesLoading, setLeaguesLoading] = useState(true);
-  const [activeLeagueId, setActiveLeagueIdState] = useState<string | null>(
-    null,
-  );
-  const [myMemberships, setMyMemberships] = useState<LeagueMembership[]>([]);
-  const [draftSession, setDraftSession] = useState<DraftSession | null>(null);
-  const [membershipsLoading, setMembershipsLoading] = useState(false);
+  const [activeLeagueId, setActiveLeagueIdState] = useState<string | null>(null);
 
-  // Derived: list of leagues from memberships
-  const myLeagues = myMemberships.map((m) => m.leagues);
-
-  // Derived: active league object
-  const activeLeague = allLeagues.find((l) => l.id === activeLeagueId) ?? null;
-
-  // Set active league ID and persist to localStorage only when logged in
+  // Set active league ID and persist to localStorage
   const setActiveLeagueId = useCallback(
     (id: string | null) => {
       setActiveLeagueIdState(id);
@@ -91,118 +91,43 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
     [user],
   );
 
-  // Fetch leagues - public only when not logged in, all when logged in
-  useEffect(() => {
-    let cancelled = false;
+  // Fetch leagues via React Query
+  const leaguesQuery = useQuery({
+    queryKey: ["leagues", user?.id ?? "public"],
+    queryFn: () => api.getLeagues(!user),
+  });
 
-    const fetchLeagues = async () => {
-      setLeaguesLoading(true);
-      try {
-        const publicOnly = !user;
-        const leagues = await api.getLeagues(publicOnly);
-        if (!cancelled) {
-          setAllLeagues(leagues);
-        }
-      } catch (err) {
-        console.error("Error fetching leagues:", err);
-      } finally {
-        if (!cancelled) {
-          setLeaguesLoading(false);
-        }
-      }
-    };
+  const allLeagues: League[] = leaguesQuery.data ?? [];
 
-    fetchLeagues();
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
+  // Fetch memberships via React Query (only when logged in)
+  const membershipsQuery = useQuery({
+    queryKey: ["memberships", user?.id],
+    queryFn: async () => {
+      const data = (await api.getMemberships()) as MembershipRow[];
+      return transformMemberships(data, user!.id);
+    },
+    enabled: !!user?.id,
+  });
 
-  // Fetch memberships when user is authenticated
-  useEffect(() => {
-    if (!user?.id) {
-      setMyMemberships([]);
-      return;
-    }
+  const myMemberships: LeagueMembership[] = membershipsQuery.data ?? [];
 
-    let cancelled = false;
+  // Fetch draft session via React Query (only when active league is set)
+  const draftQuery = useQuery({
+    queryKey: ["leagueContext", "draft", activeLeagueId],
+    queryFn: async () => {
+      const data = (await api.getDraftByLeague(activeLeagueId!)) as {
+        session: DraftSession;
+      } | null;
+      return data?.session ?? null;
+    },
+    enabled: !!activeLeagueId,
+  });
 
-    const fetchMemberships = async () => {
-      setMembershipsLoading(true);
-      try {
-        const data = (await api.getMemberships()) as MembershipRow[];
-
-        if (cancelled) return;
-
-        // Transform the flat membership response into the expected shape
-        const memberships: LeagueMembership[] = (data ?? []).map((m) => ({
-          id: m.leagueId,
-          league_id: m.leagueId,
-          user_id: user.id,
-          fantasy_team_id: m.fantasyTeamId ?? 0,
-          draft_order: m.draftOrder,
-          leagues: {
-            id: m.leagueId,
-            name: m.leagueName,
-            season: m.leagueSeason,
-          },
-          fantasy_teams: m.fantasyTeamId
-            ? { id: m.fantasyTeamId, name: m.teamName ?? "No team" }
-            : null,
-        }));
-
-        setMyMemberships(memberships);
-      } catch (err) {
-        console.error("Error fetching league memberships:", err);
-      } finally {
-        if (!cancelled) {
-          setMembershipsLoading(false);
-        }
-      }
-    };
-
-    fetchMemberships();
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id]);
-
-  // Fetch draft session when active league changes
-  useEffect(() => {
-    if (!activeLeagueId) {
-      setDraftSession(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    const fetchDraft = async () => {
-      try {
-        const data = (await api.getDraftByLeague(activeLeagueId)) as {
-          session: DraftSession;
-        } | null;
-
-        if (cancelled) return;
-
-        if (data?.session) {
-          setDraftSession(data.session);
-        } else {
-          setDraftSession(null);
-        }
-      } catch {
-        if (!cancelled) {
-          setDraftSession(null);
-        }
-      }
-    };
-
-    fetchDraft();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeLeagueId]);
-
-  const loading = leaguesLoading || membershipsLoading;
+  // Derived
+  const activeLeague = allLeagues.find((l) => l.id === activeLeagueId) ?? null;
+  const myLeagues = myMemberships.map((m) => m.leagues);
+  const draftSession = draftQuery.data ?? null;
+  const loading = leaguesQuery.isLoading || membershipsQuery.isLoading;
 
   return (
     <LeagueContext.Provider
@@ -211,7 +136,7 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
         setActiveLeagueId,
         activeLeague,
         allLeagues,
-        leaguesLoading,
+        leaguesLoading: leaguesQuery.isLoading,
         myMemberships,
         myLeagues,
         draftSession,
@@ -223,7 +148,7 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
   );
 };
 
-// ── Hook ───────────────────────────────────────────────────────────────────
+// -- Hook -------------------------------------------------------------------
 
 export const useLeague = (): LeagueContextType => {
   const context = useContext(LeagueContext);

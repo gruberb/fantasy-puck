@@ -8,7 +8,7 @@ use axum::{
 use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{GAME_TYPE, SEASON};
+use crate::api::{game_type, season};
 use crate::error::Result;
 
 pub async fn get_sleepers(
@@ -19,7 +19,7 @@ pub async fn get_sleepers(
     let sleepers = state.db.get_all_sleepers(league_id).await?;
     let stats = state
         .nhl_client
-        .get_skater_stats(&SEASON, GAME_TYPE)
+        .get_skater_stats(&season(), game_type())
         .await?;
 
     // Get fantasy team names for this league

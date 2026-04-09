@@ -12,7 +12,7 @@ use crate::api::dtos::*;
 use crate::api::dtos::conversion::IntoResponse;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{GAME_TYPE, SEASON};
+use crate::api::{game_type, season};
 use crate::Error;
 use crate::error::Result;
 use crate::models::db::FantasyTeamWithPlayers;
@@ -40,7 +40,7 @@ pub async fn get_rankings(
 
     let stats = state
         .nhl_client
-        .get_skater_stats(&SEASON, GAME_TYPE)
+        .get_skater_stats(&season(), game_type())
         .await?;
 
     Ok(json_success(TeamRanking::calculate_rankings(
@@ -166,7 +166,7 @@ pub async fn get_playoff_rankings(
     }
 
     // 2. Get NHL skater stats and calculate base rankings
-    let stats = state.nhl_client.get_skater_stats(&SEASON, GAME_TYPE).await?;
+    let stats = state.nhl_client.get_skater_stats(&season(), game_type()).await?;
     let base_rankings = TeamRanking::calculate_rankings(teams_with_players.clone(), stats.clone());
 
     // 3. Get team bets (which NHL teams each fantasy team has players on)
@@ -179,7 +179,7 @@ pub async fn get_playoff_rankings(
     // 4. Get playoff data to determine which teams are still in
     let playoff_raw = state
         .nhl_client
-        .get_playoff_carousel(SEASON.to_string())
+        .get_playoff_carousel(season().to_string())
         .await
         .map_err(|_| crate::error::Error::NotFound("Playoff data not available".into()))?;
 
@@ -195,7 +195,7 @@ pub async fn get_playoff_rankings(
     };
 
     // 5. Get top 10 skaters and count per fantasy team
-    let top_skaters = state.nhl_client.get_skater_stats(&SEASON, GAME_TYPE).await?;
+    let top_skaters = state.nhl_client.get_skater_stats(&season(), game_type()).await?;
     let mut top_player_ids: Vec<(i64, i32)> = top_skaters
         .points
         .iter()

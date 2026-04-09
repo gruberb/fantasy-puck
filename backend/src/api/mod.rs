@@ -12,8 +12,29 @@ pub mod handlers;
 pub mod response;
 pub mod routes;
 
-pub const SEASON: u32 = 20252026;
-pub const GAME_TYPE: u8 = 3;
+use std::sync::OnceLock;
+
+fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+}
+
+static SEASON_CELL: OnceLock<u32> = OnceLock::new();
+static GAME_TYPE_CELL: OnceLock<u8> = OnceLock::new();
+static PLAYOFF_START_CELL: OnceLock<String> = OnceLock::new();
+static SEASON_END_CELL: OnceLock<String> = OnceLock::new();
+
+/// Call once at startup (after dotenv) to read season config from env vars.
+pub fn init_season_config() {
+    SEASON_CELL.get_or_init(|| env_or("NHL_SEASON", 20252026u32));
+    GAME_TYPE_CELL.get_or_init(|| env_or("NHL_GAME_TYPE", 3u8));
+    PLAYOFF_START_CELL.get_or_init(|| std::env::var("NHL_PLAYOFF_START").unwrap_or_else(|_| "2026-04-18".into()));
+    SEASON_END_CELL.get_or_init(|| std::env::var("NHL_SEASON_END").unwrap_or_else(|_| "2026-06-15".into()));
+}
+
+pub fn season() -> u32 { *SEASON_CELL.get_or_init(|| env_or("NHL_SEASON", 20252026u32)) }
+pub fn game_type() -> u8 { *GAME_TYPE_CELL.get_or_init(|| env_or("NHL_GAME_TYPE", 3u8)) }
+pub fn playoff_start() -> &'static str { PLAYOFF_START_CELL.get_or_init(|| std::env::var("NHL_PLAYOFF_START").unwrap_or_else(|_| "2026-04-18".into())) }
+pub fn season_end() -> &'static str { SEASON_END_CELL.get_or_init(|| std::env::var("NHL_SEASON_END").unwrap_or_else(|_| "2026-06-15".into())) }
 
 pub async fn run_server(
     db: FantasyDb,

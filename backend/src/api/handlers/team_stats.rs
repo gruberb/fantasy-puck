@@ -9,7 +9,7 @@ use axum::{
 use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{GAME_TYPE, SEASON};
+use crate::api::{game_type, season};
 use crate::error::Result;
 use crate::models::db::FantasyTeamWithPlayers;
 
@@ -34,7 +34,7 @@ pub async fn get_team_stats(
     // 2. Get NHL skater stats
     let stats = state
         .nhl_client
-        .get_skater_stats(&SEASON, GAME_TYPE)
+        .get_skater_stats(&season(), game_type())
         .await?;
 
     // 3. Calculate rankings
