@@ -4,6 +4,11 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.2.1 — 2026-04-09
+
+### Fixed
+- **Insights mobile layout** — game card player stats and goalie info no longer float/jump on narrow screens; stats stack vertically on mobile (side-by-side on desktop), player names truncate reliably, goalie record and save stats split into stable lines
+
 ## v1.2.0 — 2026-04-09
 
 ### Added

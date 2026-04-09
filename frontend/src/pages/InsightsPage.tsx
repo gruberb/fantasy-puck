@@ -244,7 +244,7 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
       {/* Players to Watch + Goalies - compact two-column layout */}
       {(game.pointsLeaders || game.homeGoalie) && (
         <div className="px-4 py-3 border-t border-gray-100">
-          <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-4">
             {/* Away side */}
             <div>
               {game.pointsLeaders && (
@@ -261,9 +261,9 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
                     return (
                       <div key={label} className="flex items-center gap-1.5 mb-1 text-xs">
                         <img src={player.headshot} alt="" className="w-5 h-5 rounded-full bg-gray-100 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                        <span className="font-medium truncate">{player.name}</span>
-                        <span className="ml-auto font-bold tabular-nums">{player.value}</span>
-                        <span className="text-[10px] text-gray-400 w-6">{label}</span>
+                        <span className="font-medium truncate flex-1 min-w-0">{player.name}</span>
+                        <span className="font-bold tabular-nums flex-shrink-0">{player.value}</span>
+                        <span className="text-[10px] text-gray-400 w-6 flex-shrink-0">{label}</span>
                       </div>
                     );
                   })}
@@ -273,7 +273,8 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
                 <div className="mt-2 pt-2 border-t border-gray-100">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-gray-300 mb-1">Goalie</p>
                   <p className="text-xs font-medium">{game.awayGoalie.name}</p>
-                  <p className="text-[11px] text-gray-500">{game.awayGoalie.record} &middot; {game.awayGoalie.gaa.toFixed(2)} GAA &middot; .{Math.round(game.awayGoalie.savePctg * 1000)} SV%</p>
+                  <p className="text-[11px] text-gray-500 tabular-nums">{game.awayGoalie.record} &middot; {game.awayGoalie.gaa.toFixed(2)} GAA</p>
+                  <p className="text-[11px] text-gray-500 tabular-nums">.{Math.round(game.awayGoalie.savePctg * 1000)} SV%</p>
                 </div>
               )}
             </div>
@@ -293,9 +294,9 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
                     return (
                       <div key={label} className="flex items-center gap-1.5 mb-1 text-xs">
                         <img src={player.headshot} alt="" className="w-5 h-5 rounded-full bg-gray-100 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                        <span className="font-medium truncate">{player.name}</span>
-                        <span className="ml-auto font-bold tabular-nums">{player.value}</span>
-                        <span className="text-[10px] text-gray-400 w-6">{label}</span>
+                        <span className="font-medium truncate flex-1 min-w-0">{player.name}</span>
+                        <span className="font-bold tabular-nums flex-shrink-0">{player.value}</span>
+                        <span className="text-[10px] text-gray-400 w-6 flex-shrink-0">{label}</span>
                       </div>
                     );
                   })}
@@ -305,7 +306,8 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
                 <div className="mt-2 pt-2 border-t border-gray-100">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-gray-300 mb-1">Goalie</p>
                   <p className="text-xs font-medium">{game.homeGoalie.name}</p>
-                  <p className="text-[11px] text-gray-500">{game.homeGoalie.record} &middot; {game.homeGoalie.gaa.toFixed(2)} GAA &middot; .{Math.round(game.homeGoalie.savePctg * 1000)} SV%</p>
+                  <p className="text-[11px] text-gray-500 tabular-nums">{game.homeGoalie.record} &middot; {game.homeGoalie.gaa.toFixed(2)} GAA</p>
+                  <p className="text-[11px] text-gray-500 tabular-nums">.{Math.round(game.homeGoalie.savePctg * 1000)} SV%</p>
                 </div>
               )}
             </div>
