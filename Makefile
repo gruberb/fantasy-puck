@@ -1,24 +1,18 @@
-.PHONY: run dev db-start db-stop db-reset backend frontend install clean check
+.PHONY: run db-start db-stop db-reset backend frontend install clean check
 
-# Start backend + frontend (no local DB — uses whatever DATABASE_URL is configured)
-run:
+# Start local dev: Supabase DB + backend + frontend
+run: db-start
 	@echo "Starting backend and frontend..."
 	@trap 'kill 0' EXIT; \
-		cd backend && cargo run -- serve --port 3000 & \
+		cd backend && cp .env.development .env && cargo run -- serve --port 3000 & \
 		cd frontend && npm run dev & \
 		wait
-
-# Start everything: local database + backend + frontend
-dev:
-	@$(MAKE) db-start
-	@$(MAKE) run
 
 # --- Database (Supabase local) ---
 
 db-start:
 	@echo "Starting local Supabase database..."
 	@cd backend && supabase start --ignore-health-check
-	@echo "Database ready at postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 
 db-stop:
 	@cd backend && supabase stop
@@ -30,10 +24,10 @@ db-reset:
 db-status:
 	@cd backend && supabase status
 
-# --- Individual services ---
+# --- Individual services (for when DB is already running) ---
 
 backend:
-	@cd backend && cargo run -- serve --port 3000
+	@cd backend && cp .env.development .env && cargo run -- serve --port 3000
 
 frontend:
 	@cd frontend && npm run dev
@@ -45,7 +39,7 @@ install:
 	@cd frontend && npm install
 	@echo "Building backend (first run may take a while)..."
 	@cd backend && cargo build
-	@echo "Done. Run 'make run' to start."
+	@echo "Done. Start Docker, then run 'make run'."
 
 # --- Utilities ---
 
@@ -57,3 +51,13 @@ check:
 clean:
 	@cd backend && cargo clean
 	@rm -rf frontend/node_modules frontend/dist
+
+# --- Production deploy (uses Fly.io secrets, not local env) ---
+
+deploy-backend:
+	@cd backend && fly deploy
+
+deploy-frontend:
+	@cd frontend && fly deploy
+
+deploy: deploy-backend deploy-frontend
