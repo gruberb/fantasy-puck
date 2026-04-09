@@ -16,7 +16,7 @@ pub fn process_game_performances(
                 .iter()
                 .map(|player| {
                     let (goals, assists) =
-                        find_player_stats_by_name(boxscore, &player.nhl_team, &player.player_name);
+                        find_player_stats_by_name(boxscore, &player.nhl_team, &player.player_name, Some(player.nhl_id));
                     let points = goals + assists;
 
                     PlayerGamePerformance {

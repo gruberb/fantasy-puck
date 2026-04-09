@@ -11,7 +11,7 @@ import type {
 } from "@/features/insights";
 
 const InsightsPage = () => {
-  const { insights, isLoading, error } = useInsights();
+  const { insights, isLoading, error, refetch } = useInsights();
 
   if (isLoading) {
     return <LoadingSpinner size="large" message="Generating insights..." />;
@@ -21,7 +21,7 @@ const InsightsPage = () => {
     return (
       <ErrorMessage
         message="Failed to load insights. Please try again."
-        onRetry={() => window.location.reload()}
+        onRetry={() => refetch()}
       />
     );
   }

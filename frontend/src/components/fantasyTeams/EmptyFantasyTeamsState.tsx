@@ -1,4 +1,4 @@
-export default function EmptyFantasyTeamsState() {
+export default function EmptyFantasyTeamsState({ onRetry }: { onRetry?: () => void }) {
   return (
     <div className="bg-white rounded-none p-12 text-center border border-gray-100">
       <div className="relative">
@@ -34,7 +34,7 @@ export default function EmptyFantasyTeamsState() {
 
       <div className="mt-6">
         <button
-          onClick={() => window.location.reload()}
+          onClick={() => onRetry?.()}
           className="inline-flex items-center px-4 py-2 bg-[#2563EB]/10 hover:bg-[#2563EB]/20 text-[#2563EB] rounded-none transition-colors"
         >
           <svg

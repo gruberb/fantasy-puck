@@ -2,7 +2,8 @@ import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { draftApi } from '../api/draft-api';
 import { realtimeService } from '@/lib/realtime';
-import type { DraftSession } from '../types';
+import { draftPicksQueryKey } from './use-draft-picks';
+import type { DraftSession, DraftPick } from '../types';
 
 export const draftSessionQueryKey = (leagueId: string | null) =>
   ['draft', 'session', leagueId] as const;
@@ -21,11 +22,12 @@ export function useDraftSession(leagueId: string | null) {
 
   const session = query.data ?? null;
 
-  // Subscribe to realtime updates via WebSocket
+  // Single WebSocket subscription handling ALL draft events (session, picks, sleepers)
   useEffect(() => {
     if (!session?.id) return;
+    const sessionId = session.id;
 
-    const unsubscribe = realtimeService.subscribeToDraft(session.id, {
+    const unsubscribe = realtimeService.subscribeToDraft(sessionId, {
       onSessionUpdated: (partial) => {
         queryClient.setQueryData<DraftSession | null>(
           draftSessionQueryKey(leagueId),
@@ -34,6 +36,26 @@ export function useDraftSession(leagueId: string | null) {
             return { ...prev, ...partial };
           },
         );
+      },
+      onPickMade: (pick: DraftPick) => {
+        queryClient.setQueryData<DraftPick[]>(
+          draftPicksQueryKey(sessionId),
+          (prev) => {
+            if (!prev) return [pick];
+            if (prev.some((p) => p.id === pick.id)) return prev;
+            return [...prev, pick];
+          },
+        );
+        if (leagueId) {
+          queryClient.invalidateQueries({ queryKey: draftSessionQueryKey(leagueId) });
+        }
+      },
+      onSleeperUpdated: () => {
+        queryClient.invalidateQueries({ queryKey: ['draft', 'eligibleSleepers', sessionId] });
+        queryClient.invalidateQueries({ queryKey: ['draft', 'sleeperPicks', sessionId] });
+        if (leagueId) {
+          queryClient.invalidateQueries({ queryKey: draftSessionQueryKey(leagueId) });
+        }
       },
     });
 

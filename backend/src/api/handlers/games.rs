@@ -148,7 +148,7 @@ async fn process_games(
                     // Update home team players with points data
                     for player in &mut home_team_players {
                         let (goals, assists) =
-                            find_player_stats_by_name(&boxscore, home_team, &player.player_name);
+                            find_player_stats_by_name(&boxscore, home_team, &player.player_name, Some(player.nhl_id));
                         player.goals = goals;
                         player.assists = assists;
                         player.points = goals + assists;
@@ -157,7 +157,7 @@ async fn process_games(
                     // Update away team players with points data
                     for player in &mut away_team_players {
                         let (goals, assists) =
-                            find_player_stats_by_name(&boxscore, away_team, &player.player_name);
+                            find_player_stats_by_name(&boxscore, away_team, &player.player_name, Some(player.nhl_id));
                         player.goals = goals;
                         player.assists = assists;
                         player.points = goals + assists;
@@ -260,12 +260,9 @@ async fn process_games_extended(
     date: String,
     league_id: &str,
 ) -> Result<Json<ApiResponse<TodaysGamesResponse>>> {
-    // Check if viewing "today" in hockey time (for early-morning logic)
     let now_utc = chrono::Utc::now();
-    let month = now_utc.format("%m").to_string().parse::<u32>().unwrap_or(1);
-    let nhl_tz_offset: i64 = if (3..=10).contains(&month) { -4 } else { -5 };
-    let now = now_utc + chrono::Duration::hours(nhl_tz_offset);
-    let hockey_today = now.format("%Y-%m-%d").to_string();
+    let now_et = now_utc.with_timezone(&chrono_tz::America::New_York);
+    let hockey_today = now_et.format("%Y-%m-%d").to_string();
     let is_today = date == hockey_today;
 
     // Cache key for extended games (separate from match_day cache)
@@ -301,8 +298,8 @@ async fn process_games_extended(
     }
 
     // Early morning: include yesterday's live games (only when viewing today)
-    if is_today && now.time().hour() < 12 {
-        let hockey_yesterday = (now - chrono::Duration::days(1))
+    if is_today && now_et.time().hour() < 12 {
+        let hockey_yesterday = (now_et - chrono::Duration::days(1))
             .format("%Y-%m-%d")
             .to_string();
         if let Ok(yesterday_schedule) = state.nhl_client.get_schedule_by_date(&hockey_yesterday).await {
@@ -390,13 +387,13 @@ async fn process_games_extended(
         if game.game_state.is_live() || game.game_state.is_completed() {
             if let Some(Some(boxscore)) = boxscore_cache.get(&game.id) {
                 for player in &mut home_team_players {
-                    let (goals, assists) = find_player_stats_by_name(boxscore, home_team, &player.player_name);
+                    let (goals, assists) = find_player_stats_by_name(boxscore, home_team, &player.player_name, Some(player.nhl_id));
                     player.goals = goals;
                     player.assists = assists;
                     player.points = goals + assists;
                 }
                 for player in &mut away_team_players {
-                    let (goals, assists) = find_player_stats_by_name(boxscore, away_team, &player.player_name);
+                    let (goals, assists) = find_player_stats_by_name(boxscore, away_team, &player.player_name, Some(player.nhl_id));
                     player.goals = goals;
                     player.assists = assists;
                     player.points = goals + assists;
@@ -514,11 +511,8 @@ pub async fn get_match_day(
 ) -> Result<Json<ApiResponse<MatchDayResponse>>> {
     let league_id = &league_params.league_id;
 
-    // Calculate Eastern time offset (EDT March-November, EST otherwise)
     let now_utc = chrono::Utc::now();
-    let month = now_utc.format("%m").to_string().parse::<u32>().unwrap_or(1);
-    let nhl_tz_offset: i64 = if (3..=10).contains(&month) { -4 } else { -5 };
-    let now = now_utc + chrono::Duration::hours(nhl_tz_offset);
+    let now = now_utc.with_timezone(&chrono_tz::America::New_York);
     let hockey_today = now.format("%Y-%m-%d").to_string();
 
     // Create cache key for today's match day (scoped by league)
