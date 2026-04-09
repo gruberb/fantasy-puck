@@ -4,6 +4,8 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.1.0 — 2026-04-08
+
 ### Fixed
 - Draft state not propagating to other participants — finalize (sleeper transition) and complete (draft done) now update all clients in real-time without requiring a page reload. Root cause: LeagueContext and useDraftSession cached the same draft session under different React Query keys, so WebSocket updates only reached one of them.
 - Makefile `run` target now always uses local dev database (`.env.development`), never connects to production
