@@ -189,8 +189,8 @@ const HomePage = () => {
   if (user && activeLeague && isMember) {
     const draftStatus = draftSession?.status;
 
-    // Draft not started (no session or 'pending')
-    if (!draftSession || draftStatus === "pending") {
+    // Draft not started (no session or 'pending') — but only if there's no existing data
+    if ((!draftSession || draftStatus === "pending") && !hasAnyData && !isLoading) {
       return (
         <div>
           <PageHeader title={activeLeague.name} badge={formatSeason(activeLeague.season)} />

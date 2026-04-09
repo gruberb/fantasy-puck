@@ -27,6 +27,10 @@ RUN npm ci --include=dev
 # Copy application code
 COPY . .
 
+# Set API URL for production build
+ARG VITE_API_URL="https://api.fantasy-puck.ca/api"
+ENV VITE_API_URL=${VITE_API_URL}
+
 # Build application
 RUN npm run build
 

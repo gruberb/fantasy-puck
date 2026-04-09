@@ -36,6 +36,8 @@ export function useDraftSession(leagueId: string | null) {
             return { ...prev, ...partial };
           },
         );
+        // Also invalidate to force a full refetch — ensures all fields are current
+        queryClient.invalidateQueries({ queryKey: draftSessionQueryKey(leagueId) });
       },
       onPickMade: (pick: DraftPick) => {
         queryClient.setQueryData<DraftPick[]>(

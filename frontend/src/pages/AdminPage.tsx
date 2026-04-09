@@ -32,6 +32,7 @@ interface TeamPlayers {
   teamId: number;
   teamName: string;
   players: FantasyPlayer[];
+  sleeper: FantasyPlayer | null;
 }
 
 interface NhlSkaterLeader {
@@ -82,28 +83,50 @@ const AdminPage = () => {
     if (teamIds.length === 0) { setTeamPlayers([]); return; }
     setPlayersLoading(true);
     try {
-      const rawPlayers = await api.getFantasyPlayers(selectedLeagueId) as Array<{
-        id: number;
-        teamId: number;
-        nhlId: number;
-        name: string;
-        position: string;
+      // API returns players grouped by NHL team: [{ nhlTeam, players: [...] }]
+      const rawGroups = await api.getFantasyPlayers(selectedLeagueId) as Array<{
         nhlTeam: string;
+        players: Array<{
+          nhlId: number;
+          name: string;
+          fantasyTeamId: number;
+          fantasyTeamName: string;
+          position: string;
+          nhlTeam: string;
+        }>;
       }>;
-      // Map camelCase backend response to snake_case FantasyPlayer shape used in the UI
-      const allPlayers: FantasyPlayer[] = (rawPlayers ?? []).map((p) => ({
-        id: p.id,
-        team_id: p.teamId,
-        nhl_id: p.nhlId,
-        name: p.name,
-        position: p.position,
-        nhl_team: p.nhlTeam,
-      }));
+      // Flatten into FantasyPlayer array
+      const allPlayers: FantasyPlayer[] = (rawGroups ?? []).flatMap((group) =>
+        group.players.map((p) => ({
+          id: p.nhlId,
+          team_id: p.fantasyTeamId,
+          nhl_id: p.nhlId,
+          name: p.name,
+          position: p.position,
+          nhl_team: p.nhlTeam,
+        })),
+      );
       const playersByTeam = new Map<number, FantasyPlayer[]>();
       for (const p of allPlayers) {
         if (!playersByTeam.has(p.team_id)) playersByTeam.set(p.team_id, []);
         playersByTeam.get(p.team_id)!.push(p);
       }
+      // Fetch sleepers too
+      let sleepersByTeam = new Map<number, FantasyPlayer>();
+      try {
+        const sleepersRaw = await api.getSleepers(selectedLeagueId) as Array<{
+          nhlId: number; name: string; position: string; nhlTeam: string;
+          fantasyTeamId: number | null;
+        }>;
+        for (const s of sleepersRaw ?? []) {
+          if (s.fantasyTeamId) {
+            sleepersByTeam.set(s.fantasyTeamId, {
+              id: s.nhlId, team_id: s.fantasyTeamId, nhl_id: s.nhlId,
+              name: s.name, position: s.position, nhl_team: s.nhlTeam,
+            });
+          }
+        }
+      } catch { /* sleepers optional */ }
       const results: TeamPlayers[] = members
         .filter((m) => m.fantasyTeamId)
         .map((m) => ({
@@ -112,6 +135,7 @@ const AdminPage = () => {
           teamId: m.fantasyTeamId,
           teamName: m.teamName ?? "No team",
           players: playersByTeam.get(m.fantasyTeamId) ?? [],
+          sleeper: sleepersByTeam.get(m.fantasyTeamId) ?? null,
         }));
       setTeamPlayers(results);
     } catch (e: any) {
@@ -120,7 +144,8 @@ const AdminPage = () => {
     } finally { setPlayersLoading(false); }
   }, [selectedLeagueId, members]);
 
-  useEffect(() => { fetchTeamPlayersAuto(); }, [fetchTeamPlayersAuto]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchTeamPlayersAuto(); }, [selectedLeagueId, members.length]);
 
   // Fetch NHL players for search autocomplete
   const fetchNhlPlayersCache = useCallback(async () => {
@@ -271,6 +296,11 @@ const AdminPage = () => {
   const handleDeletePlayer = async (playerId: number, playerName: string) => {
     if (!window.confirm(`Remove "${playerName}" from their team?`)) return;
     try { await api.removePlayer(playerId); await fetchTeamPlayersAuto(); flash(`Player "${playerName}" removed.`); } catch (e: any) { flashError(e.message || "Failed to remove player"); }
+  };
+
+  const handleDeleteSleeper = async (sleeperId: number, sleeperName: string) => {
+    if (!window.confirm(`Remove sleeper "${sleeperName}"?`)) return;
+    try { await api.removeSleeper(sleeperId); await fetchTeamPlayersAuto(); flash(`Sleeper "${sleeperName}" removed.`); } catch (e: any) { flashError(e.message || "Failed to remove sleeper"); }
   };
 
   const handleAddPlayerFromSearch = async (nhlPlayer: NhlSkaterLeader) => {
@@ -550,25 +580,38 @@ const AdminPage = () => {
                         <span className="text-gray-500 text-sm ml-2">({tp.memberName})</span>
                       </div>
                       <div className="flex items-center gap-3">
-                        <span className="text-xs bg-[#2563EB]/10 text-[#2563EB] px-2 py-1 rounded-none font-medium">{tp.players.length} player{tp.players.length !== 1 ? "s" : ""}</span>
+                        <span className="text-xs bg-[#2563EB]/10 text-[#2563EB] px-2 py-1 rounded-none font-medium">{tp.players.length + (tp.sleeper ? 1 : 0)} player{tp.players.length + (tp.sleeper ? 1 : 0) !== 1 ? "s" : ""}</span>
                         <svg className={`w-4 h-4 text-gray-400 transition-transform ${expandedTeams.has(tp.teamId) ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                       </div>
                     </button>
                     {expandedTeams.has(tp.teamId) && (
                       <div className="p-4 space-y-2 border-t border-[#1A1A1A]">
-                        {tp.players.length === 0 ? (
+                        {tp.players.length === 0 && !tp.sleeper ? (
                           <p className="text-gray-500 text-sm">No players on this team.</p>
                         ) : (
-                          tp.players.map((p) => (
-                            <div key={p.id} className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-none border border-gray-200">
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium text-gray-900 text-sm">{p.name}</span>
-                                <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 bg-gray-200 text-gray-600">{p.position}</span>
-                                <span className="text-xs text-gray-400">{p.nhl_team}</span>
+                          <>
+                            {tp.players.map((p) => (
+                              <div key={p.id} className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-none border border-gray-200">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-gray-900 text-sm">{p.name}</span>
+                                  <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 bg-gray-200 text-gray-600">{p.position}</span>
+                                  <span className="text-xs text-gray-400">{p.nhl_team}</span>
+                                </div>
+                                <button onClick={() => handleDeletePlayer(p.id, p.name)} className="text-red-400 hover:text-red-600 hover:bg-red-50 rounded-none px-2 py-1 text-xs font-medium transition-colors">Remove</button>
                               </div>
-                              <button onClick={() => handleDeletePlayer(p.id, p.name)} className="text-red-400 hover:text-red-600 hover:bg-red-50 rounded-none px-2 py-1 text-xs font-medium transition-colors">Remove</button>
-                            </div>
-                          ))
+                            ))}
+                            {tp.sleeper && (
+                              <div className="flex items-center justify-between py-2 px-3 bg-[#FACC15]/10 rounded-none border border-[#FACC15]/30 mt-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 bg-[#FACC15] text-[#1A1A1A]">Sleeper</span>
+                                  <span className="font-medium text-gray-900 text-sm">{tp.sleeper.name}</span>
+                                  <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 bg-gray-200 text-gray-600">{tp.sleeper.position}</span>
+                                  <span className="text-xs text-gray-400">{tp.sleeper.nhl_team}</span>
+                                </div>
+                                <button onClick={() => handleDeleteSleeper(tp.sleeper!.nhl_id, tp.sleeper!.name)} className="text-red-400 hover:text-red-600 hover:bg-red-50 rounded-none px-2 py-1 text-xs font-medium transition-colors">Remove</button>
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     )}

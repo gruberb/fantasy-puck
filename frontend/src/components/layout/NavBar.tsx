@@ -115,6 +115,16 @@ const NavBar = () => {
             )}
             {hasLeague && (
               <NavLink
+                to={`${lp}/pulse`}
+                className={({ isActive }) =>
+                  isActive ? activeLinkClass : inactiveLinkClass
+                }
+              >
+                Pulse
+              </NavLink>
+            )}
+            {hasLeague && (
+              <NavLink
                 to={`${lp}/insights`}
                 className={({ isActive }) =>
                   isActive ? activeLinkClass : inactiveLinkClass
@@ -151,16 +161,6 @@ const NavBar = () => {
             >
               Skaters
             </NavLink>
-            {hasLeague && (
-              <NavLink
-                to={`${lp}/teams`}
-                className={({ isActive }) =>
-                  isActive ? activeLinkClass : inactiveLinkClass
-                }
-              >
-                Teams
-              </NavLink>
-            )}
 
             {/* "Leagues" link — only when not logged in */}
             {!user && (
@@ -247,19 +247,28 @@ const NavBar = () => {
                       )}
                     </div>
 
+                    {hasLeague && (
+                      <NavLink
+                        to={`${lp}/teams`}
+                        onClick={() => setUserMenuOpen(false)}
+                        className="block px-4 py-2.5 text-sm text-[#1A1A1A] font-bold uppercase hover:bg-[#FACC15]/10 cursor-pointer"
+                      >
+                        Teams
+                      </NavLink>
+                    )}
                     <button
                       type="button"
                       onClick={handleGoToLeagues}
                       className="block w-full text-left px-4 py-2.5 text-sm text-[#1A1A1A] font-bold uppercase hover:bg-[#FACC15]/10 cursor-pointer"
                     >
-                      All Leagues
+                      Browse Leagues
                     </button>
                     <NavLink
                       to="/admin"
                       onClick={() => setUserMenuOpen(false)}
                       className="block px-4 py-2.5 text-sm text-[#1A1A1A] font-bold uppercase hover:bg-[#FACC15]/10 cursor-pointer"
                     >
-                      My Leagues
+                      Manage Leagues
                     </NavLink>
                     <NavLink
                       to="/settings"
@@ -360,6 +369,17 @@ const NavBar = () => {
             )}
             {hasLeague && (
               <NavLink
+                to={`${lp}/pulse`}
+                onClick={() => setMobileOpen(false)}
+                className={({ isActive }) =>
+                  isActive ? activeLinkClass : inactiveLinkClass
+                }
+              >
+                Pulse
+              </NavLink>
+            )}
+            {hasLeague && (
+              <NavLink
                 to={`${lp}/insights`}
                 onClick={() => setMobileOpen(false)}
                 className={({ isActive }) =>
@@ -402,17 +422,6 @@ const NavBar = () => {
             >
               Skaters
             </NavLink>
-            {hasLeague && (
-              <NavLink
-                to={`${lp}/teams`}
-                onClick={() => setMobileOpen(false)}
-                className={({ isActive }) =>
-                  isActive ? activeLinkClass : inactiveLinkClass
-                }
-              >
-                Teams
-              </NavLink>
-            )}
 
             {/* Leagues link for everyone */}
             {!activeLeague && (

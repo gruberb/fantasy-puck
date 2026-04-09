@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     Json,
 };
 
@@ -9,6 +9,7 @@ use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
+use crate::auth::middleware::AuthUser;
 use crate::error::Result;
 
 pub async fn get_sleepers(
@@ -91,4 +92,14 @@ pub async fn get_sleepers(
     sleeper_stats.sort_by(|a, b| b.total_points.cmp(&a.total_points));
 
     Ok(json_success(sleeper_stats))
+}
+
+/// DELETE /api/fantasy/sleepers/:sleeper_id
+pub async fn remove_sleeper(
+    State(state): State<Arc<AppState>>,
+    _auth_user: AuthUser,
+    Path(sleeper_id): Path<i64>,
+) -> Result<Json<ApiResponse<()>>> {
+    state.db.remove_sleeper(sleeper_id).await?;
+    Ok(json_success(()))
 }
