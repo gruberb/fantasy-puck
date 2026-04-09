@@ -11,7 +11,6 @@
     "validate": "npm run typecheck && npm run lint"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.101.1",
     "@tailwindcss/postcss": "^4.1.4",
     "@tanstack/react-query": "^5.74.4",
     "@types/react-datepicker": "^6.2.0",

@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLeague } from "@/contexts/LeagueContext";
 import { getNHLTeamFullName, getNHLTeamLogoUrl } from "@/utils/nhlTeams";
@@ -96,6 +96,7 @@ function TeamDropdown({ teams, value, onChange, playerCount }: { teams: string[]
 
 const DraftPage = () => {
   const { leagueId } = useParams<{ leagueId: string }>();
+  const navigate = useNavigate();
   const { user, profile, loading: authLoading } = useAuth();
   const { activeLeague } = useLeague();
   const isLeagueOwner = !!(user && activeLeague?.created_by === user.id);
@@ -316,7 +317,7 @@ const DraftPage = () => {
     } catch (e) {
       console.error("Failed to complete draft:", e);
     }
-    window.location.href = `/league/${leagueId}`;
+    navigate(`/league/${leagueId}`);
   };
 
   const isMySleeperTurn = !!(sleeperPicker && myMember && sleeperPicker.id === myMember.id);

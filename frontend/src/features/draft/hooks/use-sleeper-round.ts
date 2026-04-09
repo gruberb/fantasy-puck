@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useCallback } from 'react';
+import { useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { draftApi } from '../api/draft-api';
 import { draftSessionQueryKey } from './use-draft-session';
-import { realtimeService } from '@/lib/realtime';
 import { getPickerForPick } from '../types';
 import type { DraftSession, LeagueMember, PlayerPoolEntry } from '../types';
 
@@ -57,20 +56,7 @@ export function useSleeperRound(
     }
   }, [draftSessionId, leagueId, queryClient]);
 
-  // Subscribe to realtime updates for sleeper round via WebSocket
-  useEffect(() => {
-    if (!draftSessionId) return;
-
-    const unsubscribe = realtimeService.subscribeToDraft(draftSessionId, {
-      onSleeperUpdated: () => {
-        invalidateAll();
-      },
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, [draftSessionId, invalidateAll]);
+  // WebSocket subscription is handled centrally by useDraftSession
 
   const startSleeperMutation = useMutation({
     mutationFn: (sessionId: string) => draftApi.startSleeperRound(sessionId),

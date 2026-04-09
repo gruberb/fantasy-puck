@@ -46,27 +46,26 @@ async fn main() -> anyhow::Result<()> {
     let playoff_start = "2026-04-18";
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
-    if today.as_str() >= playoff_start {
-        if scheduler::is_rankings_table_empty(&db).await? {
-            info!("Daily rankings table is empty - populating historical data...");
-            let end_date = today.as_str().min("2026-06-15");
-            info!(
-                "Populating historical rankings from {} to {}",
-                playoff_start, end_date
-            );
-            populate_historical_rankings(&db, &nhl_client, playoff_start, end_date).await?;
-        } else {
-            info!("Daily rankings already populated - skipping initialization");
-        }
-    } else {
-        info!(
-            "Playoffs haven't started yet (starts {}). Skipping rankings population.",
-            playoff_start
-        );
-    }
-
     // Initialize the rankings scheduler
     init_rankings_scheduler(Arc::new(db.clone()), Arc::new(nhl_client.clone())).await?;
+
+    // Run backfill in background (non-blocking) so the server starts immediately
+    if today.as_str() >= playoff_start {
+        if scheduler::is_rankings_table_empty(&db).await? {
+            let db_bg = db.clone();
+            let nhl_bg = nhl_client.clone();
+            let start = playoff_start.to_string();
+            let end = today.as_str().min("2026-06-15").to_string();
+            tokio::spawn(async move {
+                info!("Background: populating historical rankings from {} to {}", start, end);
+                if let Err(e) = populate_historical_rankings(&db_bg, &nhl_bg, &start, &end).await {
+                    tracing::error!("Background backfill failed: {}", e);
+                } else {
+                    info!("Background: historical rankings populated successfully");
+                }
+            });
+        }
+    }
 
     // Run the API server
     let jwt_secret =

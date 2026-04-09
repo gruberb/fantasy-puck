@@ -9,13 +9,18 @@ use tracing::info;
 
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::error::Result;
+use crate::auth::middleware::AuthUser;
+use crate::error::{Error, Result};
 use crate::utils::scheduler;
 
 pub async fn process_rankings(
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path(date): Path<String>,
 ) -> Result<Json<ApiResponse<String>>> {
+    if !auth.is_admin {
+        return Err(Error::Forbidden("Admin access required".into()));
+    }
     // Process rankings for all leagues
     let league_ids = state.db.get_all_league_ids().await?;
     for league_id in &league_ids {
@@ -35,9 +40,13 @@ pub struct InvalidateCacheParams {
 }
 
 pub async fn invalidate_cache(
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Query(params): Query<InvalidateCacheParams>,
 ) -> Result<Json<ApiResponse<String>>> {
+    if !auth.is_admin {
+        return Err(Error::Forbidden("Admin access required".into()));
+    }
     match params.scope.as_deref() {
         Some("all") => {
             state.db.cache().invalidate_all().await?;
@@ -47,13 +56,7 @@ pub async fn invalidate_cache(
             ))
         }
         Some("today") => {
-            // Calculate today's date in Eastern time (NHL's primary timezone)
-            // Using -5 for EST, -4 for EDT. A rough heuristic: March-November is EDT.
-            let now_utc = chrono::Utc::now();
-            let month = now_utc.format("%m").to_string().parse::<u32>().unwrap_or(1);
-            let nhl_tz_offset = if (3..=10).contains(&month) { -4 } else { -5 };
-            let now = now_utc + chrono::Duration::hours(nhl_tz_offset);
-            let today = now.format("%Y-%m-%d").to_string();
+            let today = crate::api::handlers::insights::hockey_today();
             state.db.cache().invalidate_by_date(&today).await?;
             Ok(json_success(format!(
                 "Cache invalidated for today ({})",
@@ -65,12 +68,7 @@ pub async fn invalidate_cache(
             Ok(json_success(format!("Cache invalidated for date {}", date)))
         }
         None => {
-            // Default to invalidating today's cache
-            let now_utc = chrono::Utc::now();
-            let month = now_utc.format("%m").to_string().parse::<u32>().unwrap_or(1);
-            let nhl_tz_offset = if (3..=10).contains(&month) { -4 } else { -5 };
-            let now = now_utc + chrono::Duration::hours(nhl_tz_offset);
-            let today = now.format("%Y-%m-%d").to_string();
+            let today = crate::api::handlers::insights::hockey_today();
             let cache_key = format!("match_day:{}", today);
             state.db.cache().invalidate_cache(&cache_key).await?;
             Ok(json_success(format!(

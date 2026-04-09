@@ -19,7 +19,7 @@ impl<'a> SleeperDbService<'a> {
             SELECT DISTINCT s.id, s.team_id, s.nhl_id, s.name, s.position, s.nhl_team
             FROM fantasy_sleepers s
             LEFT JOIN league_members lm ON lm.fantasy_team_id = s.team_id
-            WHERE s.team_id IS NULL OR lm.league_id = $1::uuid
+            WHERE lm.league_id = $1::uuid
             "#,
         )
         .bind(league_id)

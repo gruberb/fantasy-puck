@@ -209,47 +209,23 @@ impl NhlClient {
         let teams = self.get_all_teams().await?;
         let mut matching_players = Vec::new();
 
-        // Flag to track if we've found at least one matching player
-        let mut found_match = false;
+        let query_lower = query.to_lowercase();
 
-        // For each team, get their roster
         for team_abbrev in teams {
-            if found_match {
-                info!("Match found, stopping search.");
-                break;
-            }
-
-            info!("Checking {} roster...", team_abbrev);
             match self.get_team_roster(&team_abbrev).await {
                 Ok(players) => {
-                    // Filter players from this team who match the query
                     let team_matches: Vec<Player> = players
                         .into_iter()
                         .filter(|player| {
-                            // Check if any language version of the name contains the query
-                            for first_name in player.first_name.values() {
-                                for last_name in player.last_name.values() {
-                                    let full_name = format!("{} {}", first_name, last_name);
-                                    if full_name.to_lowercase().contains(&query.to_lowercase()) {
-                                        return true;
-                                    }
-                                }
-                            }
-
-                            // If only checking the default name version, it would be:
-                            let first_name = player.first_name.get("default").unwrap();
-                            let last_name = player.last_name.get("default").unwrap();
-                            let full_name = format!("{} {}", first_name, last_name);
-
-                            full_name.to_lowercase().contains(&query.to_lowercase())
+                            let first = player.first_name.get("default").cloned().unwrap_or_default();
+                            let last = player.last_name.get("default").cloned().unwrap_or_default();
+                            let full_name = format!("{} {}", first, last).to_lowercase();
+                            full_name.contains(&query_lower)
                         })
                         .collect();
 
-                    // If we found any matches, add them and set the flag
                     if !team_matches.is_empty() {
                         matching_players.extend(team_matches);
-                        found_match = true;
-                        info!("Found match in {} roster!", team_abbrev);
                     }
                 }
                 Err(e) => {

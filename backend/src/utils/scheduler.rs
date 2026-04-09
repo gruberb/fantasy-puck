@@ -122,17 +122,21 @@ pub async fn process_daily_rankings(
     // Store rankings in the database (with league_id)
     for ranking in &daily_rankings {
         sqlx::query(
-            "INSERT INTO daily_rankings (date, team_id, league_id, rank, points)
-                    VALUES ($1, $2, $3::uuid, $4, $5)
+            "INSERT INTO daily_rankings (date, team_id, league_id, rank, points, goals, assists)
+                    VALUES ($1, $2, $3::uuid, $4, $5, $6, $7)
                     ON CONFLICT (team_id, date) DO UPDATE SET
                         rank = EXCLUDED.rank,
-                        points = EXCLUDED.points",
+                        points = EXCLUDED.points,
+                        goals = EXCLUDED.goals,
+                        assists = EXCLUDED.assists",
         )
         .bind(date)
         .bind(ranking.team_id)
         .bind(league_id)
         .bind(ranking.rank as i64)
         .bind(ranking.daily_points)
+        .bind(ranking.daily_goals)
+        .bind(ranking.daily_assists)
         .execute(db.pool())
         .await?;
     }
@@ -227,6 +231,18 @@ pub async fn init_rankings_scheduler(
                 .to_string();
 
             process_daily_rankings_all_leagues(&db, &nhl_client, &yesterday).await;
+
+            // Clean up old cache entries (older than 7 days)
+            let week_ago = (Utc::now() - Duration::days(7)).format("%Y-%m-%d").to_string();
+            if let Err(e) = sqlx::query("DELETE FROM response_cache WHERE date IS NOT NULL AND date < $1")
+                .bind(&week_ago)
+                .execute(db.pool())
+                .await
+            {
+                error!("Failed to clean up old cache entries: {}", e);
+            } else {
+                info!("Cleaned up response_cache entries older than {}", week_ago);
+            }
         })
     })
     .map_err(|e| Error::Internal(format!("Failed to create morning job: {}", e)))?;

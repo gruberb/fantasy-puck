@@ -16,13 +16,10 @@ use crate::api::{GAME_TYPE, SEASON};
 use crate::error::Result;
 use crate::models::fantasy::PlayerStats;
 
-/// Calculate the current NHL "hockey date" in Eastern Time
+/// Calculate the current NHL "hockey date" in Eastern Time (proper DST handling)
 pub fn hockey_today() -> String {
-    let now_utc = Utc::now();
-    let month = now_utc.format("%m").to_string().parse::<u32>().unwrap_or(1);
-    let nhl_tz_offset: i64 = if (3..=10).contains(&month) { -4 } else { -5 };
-    let now = now_utc + chrono::Duration::hours(nhl_tz_offset);
-    now.format("%Y-%m-%d").to_string()
+    use chrono_tz::America::New_York;
+    Utc::now().with_timezone(&New_York).format("%Y-%m-%d").to_string()
 }
 
 /// Generate and cache insights for a given league. Used by both the API handler and the cron job.
@@ -722,6 +719,9 @@ async fn scrape_headlines() -> Result<Vec<String>> {
     }
 
     all_headlines.truncate(15);
+    if all_headlines.is_empty() {
+        warn!("Headline scraper returned 0 results — DailyFaceoff selectors may be broken");
+    }
     Ok(all_headlines)
 }
 

@@ -31,9 +31,17 @@ async fn handle_draft_ws(socket: WebSocket, session_id: String, state: Arc<AppSt
 
     let mut rx = state.draft_hub.subscribe(&session_id).await;
     let (mut ws_sender, mut ws_receiver) = socket.split();
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
 
     loop {
         tokio::select! {
+            // Server-side ping to keep connection alive through proxies
+            _ = ping_interval.tick() => {
+                if ws_sender.send(Message::Ping(vec![].into())).await.is_err() {
+                    break;
+                }
+            }
+
             // Forward broadcast events to the WebSocket client
             msg = rx.recv() => {
                 match msg {

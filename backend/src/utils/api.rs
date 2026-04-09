@@ -169,7 +169,7 @@ pub async fn process_players_for_team(
                     // Get boxscore data from cache
                     if let Some(Some(boxscore)) = boxscore_cache.get(&game_id) {
                         let (goals, assists) =
-                            find_player_stats_by_name(boxscore, nhl_team, &player.player_name);
+                            find_player_stats_by_name(boxscore, nhl_team, &player.player_name, Some(player.nhl_id));
                         extended_player.goals = goals;
                         extended_player.assists = assists;
                         extended_player.points = goals + assists;

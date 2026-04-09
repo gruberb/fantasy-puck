@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import ActionButtons from "@/components/home/ActionButtons";
 import LoadingSpinner from "@/components/common/LoadingSpinner";
 import RankingTable from "@/components/common/RankingTable";
@@ -75,6 +76,8 @@ function JoinLeagueBanner({ league, userId }: { league: League; userId: string }
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const handleJoin = async () => {
     if (!teamName.trim()) {
@@ -85,7 +88,8 @@ function JoinLeagueBanner({ league, userId }: { league: League; userId: string }
     setError(null);
     try {
       await api.joinLeague(league.id, teamName.trim());
-      window.location.reload();
+      queryClient.invalidateQueries();
+      navigate(0);
     } catch (e: any) {
       setError(e.message || "Failed to join league");
     } finally {
