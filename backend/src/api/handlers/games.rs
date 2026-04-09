@@ -446,8 +446,8 @@ async fn process_games_extended(
     }
 
     // Build extended fantasy team data (playoff stats, form, TOI)
-    let season = crate::api::SEASON;
-    let game_type = crate::api::GAME_TYPE;
+    let season = crate::api::season();
+    let game_type = crate::api::game_type();
     let form_games = 5;
     let mut all_players_by_fantasy_team: HashMap<i64, Vec<FantasyPlayerExtendedResponse>> = HashMap::new();
     let mut processed_players = HashSet::new();
@@ -564,8 +564,8 @@ pub async fn get_match_day(
         .to_string();
 
     // Season and game type for playoff stats
-    let season = crate::api::SEASON;
-    let game_type = crate::api::GAME_TYPE;
+    let season = crate::api::season();
+    let game_type = crate::api::game_type();
     let form_games = 5;
 
     // Always fetch today's schedule

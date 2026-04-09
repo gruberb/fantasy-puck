@@ -12,7 +12,7 @@ use tracing::{error, warn};
 use crate::api::dtos::insights::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{GAME_TYPE, SEASON};
+use crate::api::{game_type, season};
 use crate::error::Result;
 use crate::models::fantasy::PlayerStats;
 
@@ -111,7 +111,7 @@ async fn compute_hot_players(
 ) -> Result<Vec<HotPlayerSignal>> {
     let stats = state
         .nhl_client
-        .get_skater_stats(&SEASON, GAME_TYPE)
+        .get_skater_stats(&season(), game_type())
         .await?;
 
     // Take top 20 by playoff points
@@ -135,7 +135,7 @@ async fn compute_hot_players(
             async move {
                 match state
                     .nhl_client
-                    .get_player_form(player_id, &SEASON, GAME_TYPE, 5)
+                    .get_player_form(player_id, &season(), game_type(), 5)
                     .await
                 {
                     Ok((goals, assists, points)) => Some((player_id, goals, assists, points, 5usize)),
@@ -238,7 +238,7 @@ async fn compute_hot_players(
 async fn compute_cup_contenders(state: &Arc<AppState>) -> Result<Vec<ContenderSignal>> {
     let carousel = state
         .nhl_client
-        .get_playoff_carousel(format!("{}", SEASON))
+        .get_playoff_carousel(format!("{}", season()))
         .await?;
 
     let carousel = match carousel {
@@ -525,7 +525,7 @@ async fn compute_fantasy_race(
     let teams = state.db.get_all_teams(league_id).await?;
     let stats = state
         .nhl_client
-        .get_skater_stats(&SEASON, GAME_TYPE)
+        .get_skater_stats(&season(), game_type())
         .await?;
 
     // Determine which NHL teams play today
@@ -605,7 +605,7 @@ async fn compute_sleeper_alerts(
     let sleepers = state.db.get_all_sleepers(league_id).await?;
     let stats = state
         .nhl_client
-        .get_skater_stats(&SEASON, GAME_TYPE)
+        .get_skater_stats(&season(), game_type())
         .await?;
 
     // Build fantasy team name map

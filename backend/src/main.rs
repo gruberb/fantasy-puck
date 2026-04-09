@@ -34,6 +34,11 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting fantasy hockey application");
 
+    // Initialize season config from env vars (NHL_SEASON, NHL_GAME_TYPE, etc.)
+    api::init_season_config();
+    info!("Season config: {} game_type={} playoffs={} end={}",
+        api::season(), api::game_type(), api::playoff_start(), api::season_end());
+
     // Initialize services
     let nhl_client = NhlClient::new();
     nhl_client.start_cache_cleanup(std::time::Duration::from_secs(300));
@@ -41,21 +46,18 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("DATABASE_URL").expect("DATABASE_URL must be set in environment");
     let db = FantasyDb::new(&database_url).await?;
 
-    // Check if daily rankings need to be populated
-    // Only backfill if the season has started and there's historical data to process
-    let playoff_start = "2026-04-18";
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
     // Initialize the rankings scheduler
     init_rankings_scheduler(Arc::new(db.clone()), Arc::new(nhl_client.clone())).await?;
 
     // Run backfill in background (non-blocking) so the server starts immediately
-    if today.as_str() >= playoff_start {
+    if today.as_str() >= api::playoff_start() {
         if scheduler::is_rankings_table_empty(&db).await? {
             let db_bg = db.clone();
             let nhl_bg = nhl_client.clone();
-            let start = playoff_start.to_string();
-            let end = today.as_str().min("2026-06-15").to_string();
+            let start = api::playoff_start().to_string();
+            let end = today.as_str().min(api::season_end()).to_string();
             tokio::spawn(async move {
                 info!("Background: populating historical rankings from {} to {}", start, end);
                 if let Err(e) = populate_historical_rankings(&db_bg, &nhl_bg, &start, &end).await {

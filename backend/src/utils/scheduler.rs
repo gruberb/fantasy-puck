@@ -124,7 +124,7 @@ pub async fn process_daily_rankings(
         sqlx::query(
             "INSERT INTO daily_rankings (date, team_id, league_id, rank, points, goals, assists)
                     VALUES ($1, $2, $3::uuid, $4, $5, $6, $7)
-                    ON CONFLICT (team_id, date) DO UPDATE SET
+                    ON CONFLICT (team_id, date, league_id) DO UPDATE SET
                         rank = EXCLUDED.rank,
                         points = EXCLUDED.points,
                         goals = EXCLUDED.goals,

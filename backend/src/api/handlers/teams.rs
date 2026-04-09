@@ -10,7 +10,7 @@ use tracing::error;
 use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{GAME_TYPE, SEASON};
+use crate::api::{game_type, season};
 use crate::auth::middleware::AuthUser;
 use crate::error::Result;
 use crate::models::db::{FantasyPlayer, FantasyTeam};
@@ -64,7 +64,7 @@ pub async fn get_team(
     // Fetch stats from NHL API
     let stats = state
         .nhl_client
-        .get_skater_stats(&SEASON, GAME_TYPE)
+        .get_skater_stats(&season(), game_type())
         .await
         .unwrap_or_else(|e| {
             error!("Warning: Couldn't fetch detailed stats: {}", e);
