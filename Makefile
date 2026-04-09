@@ -1,21 +1,23 @@
-.PHONY: run dev db-start db-stop db-reset backend frontend install clean
+.PHONY: run dev db-start db-stop db-reset backend frontend install clean check
 
-# Start everything: database + backend + frontend
-run: db-start
+# Start backend + frontend (no local DB — uses whatever DATABASE_URL is configured)
+run:
 	@echo "Starting backend and frontend..."
 	@trap 'kill 0' EXIT; \
-		$(MAKE) backend & \
-		$(MAKE) frontend & \
+		cd backend && cargo run -- serve --port 3000 & \
+		cd frontend && npm run dev & \
 		wait
 
-# Alias
-dev: run
+# Start everything: local database + backend + frontend
+dev:
+	@$(MAKE) db-start
+	@$(MAKE) run
 
 # --- Database (Supabase local) ---
 
 db-start:
 	@echo "Starting local Supabase database..."
-	@cd backend && supabase start --ignore-health-check 2>/dev/null || true
+	@cd backend && supabase start --ignore-health-check
 	@echo "Database ready at postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 
 db-stop:
@@ -28,28 +30,18 @@ db-reset:
 db-status:
 	@cd backend && supabase status
 
-# --- Backend (Rust/Axum) ---
+# --- Individual services ---
 
 backend:
-	@echo "Starting backend on :3000..."
 	@cd backend && cargo run -- serve --port 3000
 
-backend-check:
-	@cd backend && cargo check
-
-# --- Frontend (React/Vite) ---
-
 frontend:
-	@echo "Starting frontend on :5173..."
 	@cd frontend && npm run dev
-
-frontend-check:
-	@cd frontend && npx tsc --noEmit
 
 # --- Setup ---
 
 install:
-	@echo "Installing dependencies..."
+	@echo "Installing frontend dependencies..."
 	@cd frontend && npm install
 	@echo "Building backend (first run may take a while)..."
 	@cd backend && cargo build
@@ -57,7 +49,9 @@ install:
 
 # --- Utilities ---
 
-check: backend-check frontend-check
+check:
+	@cd backend && cargo check
+	@cd frontend && npx tsc --noEmit
 	@echo "All checks passed."
 
 clean:
