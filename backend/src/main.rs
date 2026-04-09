@@ -23,8 +23,10 @@ struct App {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Load environment variables from .env file if present
-    dotenv().ok();
+    // Load environment variables: prefer .env.development for local dev, fall back to .env
+    if dotenv::from_filename(".env.development").is_err() {
+        dotenv().ok();
+    }
 
     // Initialize tracing - only once
     tracing_subscriber::fmt::init();
