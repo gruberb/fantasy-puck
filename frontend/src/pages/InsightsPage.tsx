@@ -180,16 +180,14 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
     <div className={`border-2 rounded-none overflow-hidden ${game.isElimination ? "border-red-400" : "border-gray-200"}`}>
       {/* Header: Teams */}
       <div className={`px-4 py-3 ${game.isElimination ? "bg-red-50" : "bg-gray-50"}`}>
-        <div className="flex items-center">
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            <img src={getNHLTeamLogoUrl(game.awayTeam)} alt={game.awayTeam} className="w-7 h-7 flex-shrink-0" />
+        <div className="flex items-start">
+          <div className="flex items-start gap-2 flex-1 min-w-0">
+            <img src={getNHLTeamLogoUrl(game.awayTeam)} alt={game.awayTeam} className="w-7 h-7 flex-shrink-0 mt-0.5" />
             <div className="min-w-0">
-              <div className="flex items-baseline gap-1.5">
-                <span className="font-extrabold text-sm uppercase tracking-wider">{getNHLTeamShortName(game.awayTeam)}</span>
-                {game.awayRecord && <span className="text-[11px] text-gray-400">{game.awayRecord}</span>}
-              </div>
+              <p className="font-extrabold text-sm uppercase tracking-wider leading-tight">{getNHLTeamShortName(game.awayTeam)}</p>
+              {game.awayRecord && <p className="text-[11px] text-gray-400 mt-0.5">{game.awayRecord}</p>}
               {awayMeta.length > 0 && (
-                <div className="flex items-center gap-1.5 mt-0.5">
+                <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                   {game.awayStreak && (
                     <span className={`text-[10px] font-bold px-1 py-px leading-none ${game.awayStreak.startsWith("W") ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
                       {formatStreak(game.awayStreak)}
@@ -205,14 +203,12 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
             <span className="text-[10px] text-gray-400 uppercase">@</span>
             {game.venue && <p className="text-[9px] text-gray-300 mt-0.5 max-w-[100px] leading-tight">{game.venue}</p>}
           </div>
-          <div className="flex items-center gap-2 flex-1 min-w-0 justify-end text-right">
+          <div className="flex items-start gap-2 flex-1 min-w-0 justify-end text-right">
             <div className="min-w-0">
-              <div className="flex items-baseline gap-1.5 justify-end">
-                {game.homeRecord && <span className="text-[11px] text-gray-400">{game.homeRecord}</span>}
-                <span className="font-extrabold text-sm uppercase tracking-wider">{getNHLTeamShortName(game.homeTeam)}</span>
-              </div>
+              <p className="font-extrabold text-sm uppercase tracking-wider leading-tight">{getNHLTeamShortName(game.homeTeam)}</p>
+              {game.homeRecord && <p className="text-[11px] text-gray-400 mt-0.5">{game.homeRecord}</p>}
               {homeMeta.length > 0 && (
-                <div className="flex items-center gap-1.5 mt-0.5 justify-end">
+                <div className="flex items-center gap-1.5 mt-0.5 justify-end flex-wrap">
                   {game.homeLastResult && <span className="text-[10px] text-gray-400">{game.homeLastResult}</span>}
                   {game.homeL10 && <span className="text-[10px] text-gray-400">L10: {game.homeL10}</span>}
                   {game.homeStreak && (
@@ -223,7 +219,7 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
                 </div>
               )}
             </div>
-            <img src={getNHLTeamLogoUrl(game.homeTeam)} alt={game.homeTeam} className="w-7 h-7 flex-shrink-0" />
+            <img src={getNHLTeamLogoUrl(game.homeTeam)} alt={game.homeTeam} className="w-7 h-7 flex-shrink-0 mt-0.5" />
           </div>
         </div>
         {game.seriesContext && <p className="text-[10px] text-gray-400 mt-1.5 text-center">{game.seriesContext}</p>}
