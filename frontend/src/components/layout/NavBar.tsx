@@ -104,7 +104,7 @@ const NavBar = () => {
 
           {/* Desktop Navigation */}
           <div className="hidden lg:flex items-center space-x-1">
-            {!hasLeague && (
+            {(!user || !hasLeague) && (
               <NavLink
                 to="/"
                 end
@@ -353,7 +353,7 @@ const NavBar = () => {
             )}
 
             {/* Nav links */}
-            {!hasLeague && (
+            {(!user || !hasLeague) && (
               <button
                 type="button"
                 onClick={handleGoToLeagues}

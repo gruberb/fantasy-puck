@@ -4,6 +4,11 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.3.1 — 2026-04-10
+
+### Fixed
+- **Leagues nav link** — always visible for logged-out users browsing a league, so they can navigate back to the league picker
+
 ## v1.3.0 — 2026-04-10
 
 ### Added
