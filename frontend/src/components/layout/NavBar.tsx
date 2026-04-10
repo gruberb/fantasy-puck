@@ -12,7 +12,7 @@ const NavBar = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, profile, signOut } = useAuth();
-  const { activeLeagueId, activeLeague, myLeagues, setActiveLeagueId } = useLeague();
+  const { activeLeagueId, activeLeague, myLeagues, myMemberships, setActiveLeagueId } = useLeague();
 
   const [leagueSwitcherOpen, setLeagueSwitcherOpen] = useState(false);
 
@@ -20,6 +20,8 @@ const NavBar = () => {
   const lp = activeLeagueId ? `/league/${activeLeagueId}` : "";
   const hasLeague = !!activeLeagueId;
   const isMember = myLeagues.some((l) => l.id === activeLeagueId);
+  const activeMembership = myMemberships.find((m) => m.league_id === activeLeagueId);
+  const hasTeam = !!activeMembership?.fantasy_teams;
 
   const toggleMobileMenu = () => {
     setMobileOpen((prev) => !prev);
@@ -102,6 +104,18 @@ const NavBar = () => {
 
           {/* Desktop Navigation */}
           <div className="hidden lg:flex items-center space-x-1">
+            {!hasLeague && (
+              <NavLink
+                to="/"
+                end
+                onClick={() => setActiveLeagueId(null)}
+                className={() =>
+                  isLeaguePickerActive ? activeLinkClass : inactiveLinkClass
+                }
+              >
+                Leagues
+              </NavLink>
+            )}
             {hasLeague && (
               <NavLink
                 to={`${lp}`}
@@ -113,7 +127,7 @@ const NavBar = () => {
                 Dashboard
               </NavLink>
             )}
-            {hasLeague && (
+            {hasLeague && hasTeam && (
               <NavLink
                 to={`${lp}/pulse`}
                 className={({ isActive }) =>
@@ -123,16 +137,14 @@ const NavBar = () => {
                 Pulse
               </NavLink>
             )}
-            {hasLeague && (
-              <NavLink
-                to={`${lp}/insights`}
-                className={({ isActive }) =>
-                  isActive ? activeLinkClass : inactiveLinkClass
-                }
-              >
-                Insights
-              </NavLink>
-            )}
+            <NavLink
+              to={hasLeague ? `${lp}/insights` : "/insights"}
+              className={({ isActive }) =>
+                isActive ? activeLinkClass : inactiveLinkClass
+              }
+            >
+              Insights
+            </NavLink>
             <NavLink
               to={`/games/${getFixedAnalysisDateString()}`}
               className={({ isActive }) =>
@@ -161,20 +173,6 @@ const NavBar = () => {
             >
               Skaters
             </NavLink>
-
-            {/* "Leagues" link — only when not logged in */}
-            {!user && (
-              <NavLink
-                to="/"
-                end
-                onClick={() => setActiveLeagueId(null)}
-                className={() =>
-                  isLeaguePickerActive ? activeLinkClass : inactiveLinkClass
-                }
-              >
-                Leagues
-              </NavLink>
-            )}
           </div>
 
           {/* User Menu / Login Button */}
@@ -355,6 +353,15 @@ const NavBar = () => {
             )}
 
             {/* Nav links */}
+            {!hasLeague && (
+              <button
+                type="button"
+                onClick={handleGoToLeagues}
+                className={`${isLeaguePickerActive ? activeLinkClass : inactiveLinkClass} w-full text-left cursor-pointer`}
+              >
+                Leagues
+              </button>
+            )}
             {hasLeague && (
               <NavLink
                 to={`${lp}`}
@@ -367,7 +374,7 @@ const NavBar = () => {
                 Dashboard
               </NavLink>
             )}
-            {hasLeague && (
+            {hasLeague && hasTeam && (
               <NavLink
                 to={`${lp}/pulse`}
                 onClick={() => setMobileOpen(false)}
@@ -378,17 +385,16 @@ const NavBar = () => {
                 Pulse
               </NavLink>
             )}
-            {hasLeague && (
-              <NavLink
-                to={`${lp}/insights`}
-                onClick={() => setMobileOpen(false)}
-                className={({ isActive }) =>
-                  isActive ? activeLinkClass : inactiveLinkClass
-                }
-              >
-                Insights
-              </NavLink>
-            )}
+
+            <NavLink
+              to={hasLeague ? `${lp}/insights` : "/insights"}
+              onClick={() => setMobileOpen(false)}
+              className={({ isActive }) =>
+                isActive ? activeLinkClass : inactiveLinkClass
+              }
+            >
+              Insights
+            </NavLink>
 
             <NavLink
               to={`/games/${getFixedAnalysisDateString()}`}
@@ -422,17 +428,6 @@ const NavBar = () => {
             >
               Skaters
             </NavLink>
-
-            {/* Leagues link for everyone */}
-            {!activeLeague && (
-              <button
-                type="button"
-                onClick={handleGoToLeagues}
-                className={`${inactiveLinkClass} w-full text-left cursor-pointer`}
-              >
-                Browse Leagues
-              </button>
-            )}
 
             {/* Mobile User Section */}
             <div className="border-t-2 border-[#1A1A1A]/10 mt-2 pt-2">

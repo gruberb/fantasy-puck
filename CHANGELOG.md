@@ -4,6 +4,21 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.3.0 — 2026-04-10
+
+### Added
+- **Global Insights page** — Insights now accessible at `/insights` without selecting a league; shows NHL-wide game previews, hot players, and contenders
+
+### Changed
+- **Nav rework based on context** — navigation adapts to three states:
+  - No league selected: Leagues, Games, Insights, Skaters
+  - League selected, no team: Dashboard, Insights, Games, Stats, Skaters (Pulse hidden)
+  - League selected, has team: Dashboard, Pulse, Insights, Games, Stats, Skaters
+- **Leagues nav link** — now visible for all users when no league is selected (was login-only)
+
+### Fixed
+- **Insights game card header** — team name, record, and streak info stacked vertically so long names like "Maple Leafs" no longer push the record out of alignment
+
 ## v1.2.1 — 2026-04-09
 
 ### Fixed

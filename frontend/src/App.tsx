@@ -34,6 +34,7 @@ function App() {
             {/* Global NHL pages */}
             <Route path="/skaters" element={<SkatersPage />} />
             <Route path="/games/:date" element={<GamesPage />} />
+            <Route path="/insights" element={<InsightsPage />} />
 
             {/* Protected pages (not league-scoped) */}
             <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
