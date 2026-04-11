@@ -173,60 +173,60 @@ function Narrative({ text }: { text: string }) {
 }
 
 function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative?: string }) {
-  const awayMeta = [game.awayStreak, game.awayL10 ? `L10: ${game.awayL10}` : null, game.awayLastResult].filter(Boolean);
-  const homeMeta = [game.homeStreak, game.homeL10 ? `L10: ${game.homeL10}` : null, game.homeLastResult].filter(Boolean);
-
   return (
-    <div className={`border-2 rounded-none overflow-hidden ${game.isElimination ? "border-red-400" : "border-gray-200"}`}>
-      {/* Header: Teams */}
+    <div className={`border-2 overflow-hidden ${game.isElimination ? "border-red-400" : "border-gray-200"}`}>
+      {/* Elimination banner */}
+      {game.isElimination && (
+        <div className="bg-red-600 px-4 py-1 text-center">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-white">Elimination Game</span>
+        </div>
+      )}
+
+      {/* Header: Teams stacked vertically */}
       <div className={`px-4 py-3 ${game.isElimination ? "bg-red-50" : "bg-gray-50"}`}>
-        <div className="flex items-start">
-          <div className="flex items-start gap-2 flex-1 min-w-0">
-            <img src={getNHLTeamLogoUrl(game.awayTeam)} alt={game.awayTeam} className="w-7 h-7 flex-shrink-0 mt-0.5" />
-            <div className="min-w-0">
-              <p className="font-extrabold text-sm uppercase tracking-wider leading-tight">{getNHLTeamShortName(game.awayTeam)}</p>
-              {game.awayRecord && <p className="text-[11px] text-gray-400 mt-0.5">{game.awayRecord}</p>}
-              {awayMeta.length > 0 && (
-                <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                  {game.awayStreak && (
-                    <span className={`text-[10px] font-bold px-1 py-px leading-none ${game.awayStreak.startsWith("W") ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
-                      {formatStreak(game.awayStreak)}
-                    </span>
-                  )}
-                  {game.awayL10 && <span className="text-[10px] text-gray-400">L10: {game.awayL10}</span>}
-                  {game.awayLastResult && <span className="text-[10px] text-gray-400">{game.awayLastResult}</span>}
-                </div>
-              )}
-            </div>
+        {/* Away team */}
+        <div className="flex items-center gap-3">
+          <img src={getNHLTeamLogoUrl(game.awayTeam)} alt={game.awayTeam} className="w-8 h-8 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="font-extrabold text-sm uppercase tracking-wider leading-tight">{getNHLTeamShortName(game.awayTeam)}</p>
+            {game.awayRecord && <p className="text-[11px] text-gray-400">{game.awayRecord}</p>}
           </div>
-          <div className="text-center px-2 flex-shrink-0">
-            <span className="text-[10px] text-gray-400 uppercase">@</span>
-            {game.venue && <p className="text-[9px] text-gray-300 mt-0.5 max-w-[100px] leading-tight">{game.venue}</p>}
-          </div>
-          <div className="flex items-start gap-2 flex-1 min-w-0 justify-end text-right">
-            <div className="min-w-0">
-              <p className="font-extrabold text-sm uppercase tracking-wider leading-tight">{getNHLTeamShortName(game.homeTeam)}</p>
-              {game.homeRecord && <p className="text-[11px] text-gray-400 mt-0.5">{game.homeRecord}</p>}
-              {homeMeta.length > 0 && (
-                <div className="flex items-center gap-1.5 mt-0.5 justify-end flex-wrap">
-                  {game.homeLastResult && <span className="text-[10px] text-gray-400">{game.homeLastResult}</span>}
-                  {game.homeL10 && <span className="text-[10px] text-gray-400">L10: {game.homeL10}</span>}
-                  {game.homeStreak && (
-                    <span className={`text-[10px] font-bold px-1 py-px leading-none ${game.homeStreak.startsWith("W") ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
-                      {formatStreak(game.homeStreak)}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-            <img src={getNHLTeamLogoUrl(game.homeTeam)} alt={game.homeTeam} className="w-7 h-7 flex-shrink-0 mt-0.5" />
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {game.awayStreak && (
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 leading-none ${game.awayStreak.startsWith("W") ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                {formatStreak(game.awayStreak)}
+              </span>
+            )}
+            {game.awayL10 && <span className="text-[10px] text-gray-400 tabular-nums">L10: {game.awayL10}</span>}
           </div>
         </div>
-        {game.seriesContext && <p className="text-[10px] text-gray-400 mt-1.5 text-center">{game.seriesContext}</p>}
-        {game.isElimination && (
-          <div className="text-center mt-1">
-            <span className="inline-block text-[10px] font-bold uppercase bg-red-600 text-white px-2 py-0.5 leading-none">Elimination</span>
+
+        {/* Venue divider */}
+        <div className="flex items-center gap-3 my-2.5">
+          <div className="flex-1 border-t border-gray-200" />
+          <span className="text-[10px] text-gray-300 font-bold uppercase tracking-wider flex-shrink-0">@ {game.venue}</span>
+          <div className="flex-1 border-t border-gray-200" />
+        </div>
+
+        {/* Home team */}
+        <div className="flex items-center gap-3">
+          <img src={getNHLTeamLogoUrl(game.homeTeam)} alt={game.homeTeam} className="w-8 h-8 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="font-extrabold text-sm uppercase tracking-wider leading-tight">{getNHLTeamShortName(game.homeTeam)}</p>
+            {game.homeRecord && <p className="text-[11px] text-gray-400">{game.homeRecord}</p>}
           </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {game.homeStreak && (
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 leading-none ${game.homeStreak.startsWith("W") ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                {formatStreak(game.homeStreak)}
+              </span>
+            )}
+            {game.homeL10 && <span className="text-[10px] text-gray-400 tabular-nums">L10: {game.homeL10}</span>}
+          </div>
+        </div>
+
+        {game.seriesContext && (
+          <p className="text-[10px] text-gray-400 mt-2 text-center font-medium">{game.seriesContext}</p>
         )}
       </div>
 
@@ -237,76 +237,67 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
         </div>
       )}
 
-      {/* Players to Watch + Goalies - compact two-column layout */}
-      {(game.pointsLeaders || game.homeGoalie) && (
+      {/* Players to Watch - head-to-head comparison */}
+      {game.pointsLeaders && (
         <div className="px-4 py-3 border-t border-gray-100">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-4">
-            {/* Away side */}
-            <div>
-              {game.pointsLeaders && (
-                <>
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-300 mb-1.5">
-                    {getNHLTeamShortName(game.awayTeam)} - Last 5
-                  </p>
-                  {[
-                    { label: "PTS", leaders: game.pointsLeaders },
-                    { label: "G", leaders: game.goalsLeaders },
-                    { label: "A", leaders: game.assistsLeaders },
-                  ].filter(r => r.leaders).map(({ label, leaders }) => {
-                    const player = leaders![0];
-                    return (
-                      <div key={label} className="flex items-center gap-1.5 mb-1 text-xs">
-                        <img src={player.headshot} alt="" className="w-5 h-5 rounded-full bg-gray-100 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                        <span className="font-medium truncate flex-1 min-w-0">{player.name}</span>
-                        <span className="font-bold tabular-nums flex-shrink-0">{player.value}</span>
-                        <span className="text-[10px] text-gray-400 w-6 flex-shrink-0">{label}</span>
-                      </div>
-                    );
-                  })}
-                </>
-              )}
-              {game.awayGoalie && (
-                <div className="mt-2 pt-2 border-t border-gray-100">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-300 mb-1">Goalie</p>
-                  <p className="text-xs font-medium">{game.awayGoalie.name}</p>
-                  <p className="text-[11px] text-gray-500 tabular-nums">{game.awayGoalie.record} &middot; {game.awayGoalie.gaa.toFixed(2)} GAA</p>
-                  <p className="text-[11px] text-gray-500 tabular-nums">.{Math.round(game.awayGoalie.savePctg * 1000)} SV%</p>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-300 mb-3">
+            Players to Watch &middot; Last 5
+          </p>
+          {[
+            { label: "Points", leaders: game.pointsLeaders },
+            { label: "Goals", leaders: game.goalsLeaders },
+            { label: "Assists", leaders: game.assistsLeaders },
+          ].filter(r => r.leaders).map(({ label, leaders }) => {
+            const away = leaders![0];
+            const home = leaders![1];
+            const total = away.value + home.value;
+            const awayPct = total > 0 ? (away.value / total) * 100 : 50;
+            return (
+              <div key={label} className="mb-4 last:mb-0">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <img src={away.headshot} alt="" className="w-7 h-7 rounded-full bg-gray-100 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                    <span className="text-xs font-medium truncate">{away.name}</span>
+                  </div>
+                  <div className="flex items-baseline gap-1.5 flex-shrink-0">
+                    <span className="font-bold text-base tabular-nums text-right w-5">{away.value}</span>
+                    <span className="text-[10px] text-gray-400 uppercase w-12 text-center">{label}</span>
+                    <span className="font-bold text-base tabular-nums w-5">{home.value}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0 justify-end">
+                    <span className="text-xs font-medium truncate text-right">{home.name}</span>
+                    <img src={home.headshot} alt="" className="w-7 h-7 rounded-full bg-gray-100 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                  </div>
                 </div>
-              )}
-            </div>
-            {/* Home side */}
-            <div>
-              {game.pointsLeaders && (
-                <>
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-300 mb-1.5">
-                    {getNHLTeamShortName(game.homeTeam)} - Last 5
-                  </p>
-                  {[
-                    { label: "PTS", leaders: game.pointsLeaders },
-                    { label: "G", leaders: game.goalsLeaders },
-                    { label: "A", leaders: game.assistsLeaders },
-                  ].filter(r => r.leaders).map(({ label, leaders }) => {
-                    const player = leaders![1];
-                    return (
-                      <div key={label} className="flex items-center gap-1.5 mb-1 text-xs">
-                        <img src={player.headshot} alt="" className="w-5 h-5 rounded-full bg-gray-100 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                        <span className="font-medium truncate flex-1 min-w-0">{player.name}</span>
-                        <span className="font-bold tabular-nums flex-shrink-0">{player.value}</span>
-                        <span className="text-[10px] text-gray-400 w-6 flex-shrink-0">{label}</span>
-                      </div>
-                    );
-                  })}
-                </>
-              )}
-              {game.homeGoalie && (
-                <div className="mt-2 pt-2 border-t border-gray-100">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-300 mb-1">Goalie</p>
-                  <p className="text-xs font-medium">{game.homeGoalie.name}</p>
-                  <p className="text-[11px] text-gray-500 tabular-nums">{game.homeGoalie.record} &middot; {game.homeGoalie.gaa.toFixed(2)} GAA</p>
-                  <p className="text-[11px] text-gray-500 tabular-nums">.{Math.round(game.homeGoalie.savePctg * 1000)} SV%</p>
+                <div className="flex h-1 mt-1.5 gap-px">
+                  <div className="bg-[#1A1A1A]" style={{ width: `${awayPct}%` }} />
+                  <div className="bg-gray-300" style={{ width: `${100 - awayPct}%` }} />
                 </div>
-              )}
-            </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Goalies - side by side comparison */}
+      {(game.awayGoalie || game.homeGoalie) && (
+        <div className="px-4 py-3 border-t border-gray-100">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-300 mb-2">Goalies</p>
+          <div className="grid grid-cols-2 gap-3">
+            {game.awayGoalie && (
+              <div>
+                <p className="text-xs font-bold">{game.awayGoalie.name}</p>
+                <p className="text-[11px] text-gray-500 tabular-nums">{game.awayGoalie.record}</p>
+                <p className="text-[11px] text-gray-500 tabular-nums">{game.awayGoalie.gaa.toFixed(2)} GAA &middot; .{Math.round(game.awayGoalie.savePctg * 1000)} SV%</p>
+              </div>
+            )}
+            {game.homeGoalie && (
+              <div className="text-right">
+                <p className="text-xs font-bold">{game.homeGoalie.name}</p>
+                <p className="text-[11px] text-gray-500 tabular-nums">{game.homeGoalie.record}</p>
+                <p className="text-[11px] text-gray-500 tabular-nums">{game.homeGoalie.gaa.toFixed(2)} GAA &middot; .{Math.round(game.homeGoalie.savePctg * 1000)} SV%</p>
+              </div>
+            )}
           </div>
         </div>
       )}
