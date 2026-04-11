@@ -137,14 +137,16 @@ const NavBar = () => {
                 Pulse
               </NavLink>
             )}
-            <NavLink
-              to={hasLeague ? `${lp}/insights` : "/insights"}
-              className={({ isActive }) =>
-                isActive ? activeLinkClass : inactiveLinkClass
-              }
-            >
-              Insights
-            </NavLink>
+            {hasLeague && (
+              <NavLink
+                to={`${lp}/insights`}
+                className={({ isActive }) =>
+                  isActive ? activeLinkClass : inactiveLinkClass
+                }
+              >
+                Insights
+              </NavLink>
+            )}
             <NavLink
               to={`/games/${getFixedAnalysisDateString()}`}
               className={({ isActive }) =>
@@ -386,15 +388,17 @@ const NavBar = () => {
               </NavLink>
             )}
 
-            <NavLink
-              to={hasLeague ? `${lp}/insights` : "/insights"}
-              onClick={() => setMobileOpen(false)}
-              className={({ isActive }) =>
-                isActive ? activeLinkClass : inactiveLinkClass
-              }
-            >
-              Insights
-            </NavLink>
+            {hasLeague && (
+              <NavLink
+                to={`${lp}/insights`}
+                onClick={() => setMobileOpen(false)}
+                className={({ isActive }) =>
+                  isActive ? activeLinkClass : inactiveLinkClass
+                }
+              >
+                Insights
+              </NavLink>
+            )}
 
             <NavLink
               to={`/games/${getFixedAnalysisDateString()}`}
