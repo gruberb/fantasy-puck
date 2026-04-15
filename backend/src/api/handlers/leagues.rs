@@ -69,9 +69,10 @@ pub async fn create_league(
 /// DELETE /api/leagues/:league_id
 pub async fn delete_league(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(league_id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>> {
+    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
     state.db.delete_league(&league_id).await?;
     Ok(json_success(()))
 }
@@ -103,9 +104,12 @@ pub async fn join_league(
 /// DELETE /api/leagues/:league_id/members/:member_id
 pub async fn remove_member(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path((league_id, member_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<()>>> {
+    // Only the league owner can remove members
+    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
+
     // Validate the member belongs to the league
     state
         .db

@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { useNavigate, Link, useLocation } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { useLeague } from "@/contexts/LeagueContext";
 import PageHeader from "@/components/common/PageHeader";
 import { useAuth } from "@/contexts/AuthContext";
@@ -15,24 +16,56 @@ const LeaguePickerPage = () => {
   const { allLeagues, leaguesLoading, myLeagues, setActiveLeagueId } =
     useLeague();
 
+  const queryClient = useQueryClient();
+
+  // Create league state
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newLeagueName, setNewLeagueName] = useState("");
+  const [newTeamName, setNewTeamName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
+  // Join league state
+  const [joiningLeagueId, setJoiningLeagueId] = useState<string | null>(null);
+  const [joinTeamName, setJoinTeamName] = useState("");
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
+
   const handleCreateLeague = async () => {
-    if (!newLeagueName.trim() || !user) return;
+    if (!newLeagueName.trim() || !newTeamName.trim() || !user) return;
     setCreating(true);
     setCreateError(null);
     try {
-      await api.createLeague(newLeagueName.trim(), "20252026");
+      const league = await api.createLeague(newLeagueName.trim(), "20252026") as { id: string };
+      await api.joinLeague(league.id, newTeamName.trim());
+      await queryClient.invalidateQueries({ queryKey: ["leagues"] });
+      await queryClient.invalidateQueries({ queryKey: ["memberships"] });
       setNewLeagueName("");
+      setNewTeamName("");
       setShowCreateForm(false);
-      navigate("/admin");
+      navigate(`/league/${league.id}`);
     } catch (e: any) {
       setCreateError(e.message || "Failed to create league");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleJoinLeague = async (leagueId: string) => {
+    if (!joinTeamName.trim()) return;
+    setJoining(true);
+    setJoinError(null);
+    try {
+      await api.joinLeague(leagueId, joinTeamName.trim());
+      await queryClient.invalidateQueries({ queryKey: ["leagues"] });
+      await queryClient.invalidateQueries({ queryKey: ["memberships"] });
+      setJoiningLeagueId(null);
+      setJoinTeamName("");
+      navigate(`/league/${leagueId}`);
+    } catch (e: any) {
+      setJoinError(e.message || "Failed to join league");
+    } finally {
+      setJoining(false);
     }
   };
 
@@ -115,14 +148,16 @@ const LeaguePickerPage = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {allLeagues.map((league) => {
           const isMember = myLeagues.some((ml) => ml.id === league.id);
+          const isJoiningThis = joiningLeagueId === league.id;
+          const canJoin = user && !isMember && league.visibility === "public";
+
           return (
-            <Link
+            <div
               key={league.id}
-              to={`/league/${league.id}`}
-              className="group block bg-white border-2 border-[#1A1A1A] rounded-none p-6 shadow-[4px_4px_0px_0px_#1A1A1A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-all duration-100"
+              className="bg-white border-2 border-[#1A1A1A] rounded-none p-6 shadow-[4px_4px_0px_0px_#1A1A1A]"
             >
               <div className="flex items-start justify-between mb-4">
-                <h2 className="text-xl font-extrabold uppercase tracking-wider text-[#1A1A1A] group-hover:text-[#2563EB] transition-colors">
+                <h2 className="text-xl font-extrabold uppercase tracking-wider text-[#1A1A1A]">
                   {league.name}
                 </h2>
                 <span
@@ -138,32 +173,68 @@ const LeaguePickerPage = () => {
               <p className="text-sm text-gray-500 uppercase tracking-wide mb-4">
                 {formatSeason(league.season)}
               </p>
-              {isMember ? (
-                <span className="inline-block text-xs font-bold uppercase text-[#2563EB] border-2 border-[#2563EB] rounded-none px-2 py-1">
+              {isMember && (
+                <span className="inline-block text-xs font-bold uppercase text-[#2563EB] border-2 border-[#2563EB] rounded-none px-2 py-1 mb-4">
                   Your League
                 </span>
-              ) : user && league.visibility === "public" ? (
-                <span className="inline-block text-xs font-bold uppercase text-[#16A34A] border-2 border-[#16A34A] rounded-none px-2 py-1">
-                  Open to Join
-                </span>
-              ) : null}
-              <div className="mt-4 flex items-center text-sm font-bold uppercase text-[#1A1A1A] group-hover:text-[#2563EB] transition-colors">
-                {isMember ? "Enter League" : "View League"}
-                <svg
-                  className="w-4 h-4 ml-2 transform group-hover:translate-x-1 transition-transform"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M14 5l7 7m0 0l-7 7m7-7H3"
+              )}
+
+              {/* Join form (expanded) */}
+              {isJoiningThis && canJoin && (
+                <div className="border-t-2 border-[#1A1A1A]/10 pt-4 mb-4">
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
+                    Your team name
+                  </label>
+                  <input
+                    type="text"
+                    value={joinTeamName}
+                    onChange={(e) => setJoinTeamName(e.target.value)}
+                    placeholder="e.g. Icy Legends"
+                    className="w-full px-4 py-2 border-2 border-[#1A1A1A] rounded-none focus:ring-2 focus:ring-[#2563EB]/40 focus:border-[#2563EB] outline-none transition-all mb-3"
+                    onKeyDown={(e) => e.key === "Enter" && handleJoinLeague(league.id)}
+                    autoFocus
                   />
-                </svg>
+                  {joinError && (
+                    <p className="text-sm text-red-600 mb-3">{joinError}</p>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleJoinLeague(league.id)}
+                      disabled={joining || !joinTeamName.trim()}
+                      className="btn-gradient disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                    >
+                      {joining ? "Joining..." : "Join League"}
+                    </button>
+                    <button
+                      onClick={() => { setJoiningLeagueId(null); setJoinTeamName(""); setJoinError(null); }}
+                      className="text-sm text-gray-500 uppercase font-bold hover:text-[#1A1A1A] transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <Link
+                  to={`/league/${league.id}`}
+                  className="flex items-center text-sm font-bold uppercase text-[#1A1A1A] hover:text-[#2563EB] transition-colors"
+                >
+                  {isMember ? "Enter League" : "View League"}
+                  <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                  </svg>
+                </Link>
+                {canJoin && !isJoiningThis && (
+                  <button
+                    onClick={() => { setJoiningLeagueId(league.id); setJoinTeamName(""); setJoinError(null); }}
+                    className="btn-gradient text-sm"
+                  >
+                    Join
+                  </button>
+                )}
               </div>
-            </Link>
+            </div>
           );
         })}
 
@@ -181,8 +252,15 @@ const LeaguePickerPage = () => {
                   onChange={(e) => setNewLeagueName(e.target.value)}
                   placeholder="League name..."
                   className="w-full px-4 py-2 border-2 border-[#1A1A1A] rounded-none focus:ring-2 focus:ring-[#2563EB]/40 focus:border-[#2563EB] outline-none transition-all mb-3"
-                  onKeyDown={(e) => e.key === "Enter" && handleCreateLeague()}
                   autoFocus
+                />
+                <input
+                  type="text"
+                  value={newTeamName}
+                  onChange={(e) => setNewTeamName(e.target.value)}
+                  placeholder="Your team name..."
+                  className="w-full px-4 py-2 border-2 border-[#1A1A1A] rounded-none focus:ring-2 focus:ring-[#2563EB]/40 focus:border-[#2563EB] outline-none transition-all mb-3"
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateLeague()}
                 />
                 {createError && (
                   <p className="text-sm text-red-600 mb-3">{createError}</p>
@@ -190,15 +268,16 @@ const LeaguePickerPage = () => {
                 <div className="flex gap-2">
                   <button
                     onClick={handleCreateLeague}
-                    disabled={creating || !newLeagueName.trim()}
+                    disabled={creating || !newLeagueName.trim() || !newTeamName.trim()}
                     className="btn-gradient disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                   >
-                    {creating ? "Creating..." : "Create"}
+                    {creating ? "Creating..." : "Create & Join"}
                   </button>
                   <button
                     onClick={() => {
                       setShowCreateForm(false);
                       setNewLeagueName("");
+                      setNewTeamName("");
                       setCreateError(null);
                     }}
                     className="text-sm text-gray-500 uppercase font-bold hover:text-[#1A1A1A] transition-colors"

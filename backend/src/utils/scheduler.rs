@@ -176,7 +176,7 @@ async fn prewarm_insights_all_leagues(db: &FantasyDb, nhl_client: &NhlClient) {
     let state = Arc::new(AppState {
         db: db.clone(),
         nhl_client: nhl_client.clone(),
-        jwt_secret: String::new(),
+        config: Arc::new(crate::config::Config::from_env()),
         draft_hub: DraftHub::new(),
     });
 

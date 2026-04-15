@@ -22,6 +22,7 @@ const NavBar = () => {
   const isMember = myLeagues.some((l) => l.id === activeLeagueId);
   const activeMembership = myMemberships.find((m) => m.league_id === activeLeagueId);
   const hasTeam = !!activeMembership?.fantasy_teams;
+  const isLeagueOwner = activeLeague?.created_by === user?.id || !!profile?.isAdmin;
 
   const toggleMobileMenu = () => {
     setMobileOpen((prev) => !prev);
@@ -263,12 +264,21 @@ const NavBar = () => {
                     >
                       Browse Leagues
                     </button>
+                    {hasLeague && isLeagueOwner && (
+                      <NavLink
+                        to={`${lp}/settings`}
+                        onClick={() => setUserMenuOpen(false)}
+                        className="block px-4 py-2.5 text-sm text-[#1A1A1A] font-bold uppercase hover:bg-[#FACC15]/10 cursor-pointer"
+                      >
+                        League Settings
+                      </NavLink>
+                    )}
                     <NavLink
                       to="/admin"
                       onClick={() => setUserMenuOpen(false)}
                       className="block px-4 py-2.5 text-sm text-[#1A1A1A] font-bold uppercase hover:bg-[#FACC15]/10 cursor-pointer"
                     >
-                      Manage Leagues
+                      My Leagues
                     </NavLink>
                     <NavLink
                       to="/settings"
@@ -460,6 +470,17 @@ const NavBar = () => {
                     </div>
                   )}
 
+                  {hasLeague && isLeagueOwner && (
+                    <NavLink
+                      to={`${lp}/settings`}
+                      onClick={() => setMobileOpen(false)}
+                      className={({ isActive }) =>
+                        isActive ? activeLinkClass : inactiveLinkClass
+                      }
+                    >
+                      League Settings
+                    </NavLink>
+                  )}
                   <NavLink
                     to="/admin"
                     onClick={() => setMobileOpen(false)}

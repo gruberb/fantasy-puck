@@ -35,7 +35,7 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             .strip_prefix("Bearer ")
             .ok_or_else(|| Error::Unauthorized("Invalid authorization header format".into()))?;
 
-        let claims = jwt::validate_token(token, &state.jwt_secret)?;
+        let claims = jwt::validate_token(token, &state.config.jwt_secret)?;
 
         Ok(AuthUser {
             id: claims.sub,
@@ -67,7 +67,7 @@ impl FromRequestParts<Arc<AppState>> for OptionalAuth {
                 let token = h
                     .strip_prefix("Bearer ")
                     .ok_or_else(|| Error::Unauthorized("Invalid authorization header".into()))?;
-                let claims = jwt::validate_token(token, &state.jwt_secret)?;
+                let claims = jwt::validate_token(token, &state.config.jwt_secret)?;
                 Ok(OptionalAuth(Some(AuthUser {
                     id: claims.sub,
                     email: claims.email,

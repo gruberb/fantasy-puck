@@ -4,6 +4,34 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.4.0 — 2026-04-15
+
+### Added
+- **League-scoped settings page** — `/league/:id/settings` replaces the monolithic admin page for managing a single league's members, draft, and player pool
+- **Rich league preview for non-members** — visiting a league via invite link now shows members list, draft status, and a prominent join CTA
+- **Join from league picker** — non-member public leagues show a "Join" button directly on the card alongside "View League"
+- **League-specific invite links** — "Copy Invite Link" now copies `/league/:id` instead of a generic `/join-league` URL
+- **Login return-to support** — after signing in via an invite link, users are redirected back to the league page
+- **Health check endpoints** — `GET /health/live` and `GET /health/ready` (verifies DB connectivity)
+- **Typed config module** — `Config::from_env()` loads all settings eagerly at startup with clear panic messages for missing vars
+- **DB authorization helpers** — `verify_league_owner`, `verify_user_in_league`, `get_league_id_for_draft/team/player`
+
+### Changed
+- **Create league flow** — now prompts for team name alongside league name, auto-joins the creator, and navigates to the league dashboard
+- **Admin page simplified** — shows only "Create League" form and a grid of owned leagues linking to per-league settings
+- **NavBar** — "Manage Leagues" renamed to "My Leagues"; new "League Settings" link for league owners
+- **`/join-league` retired** — now redirects to `/league/:id` or `/` (old links still work)
+- **Backend authorization hardened** — all draft, league member, team, and player endpoints now verify the caller is a league member or owner (previously only checked authentication)
+- **JWT secret wrapped in `secrecy::SecretString`** — prevents accidental logging of the secret
+- **Password hashing moved to blocking threads** — `hash_password`/`verify_password` run on `spawn_blocking` to avoid stalling the async runtime
+- **HTTP middleware stack** — added gzip compression, 30s request timeout, 1MB body limit, configurable CORS origins
+- **Graceful shutdown** — server handles SIGTERM/Ctrl+C cleanly
+- **Structured logging** — JSON format via `LOG_JSON=true`, env-filter support via `RUST_LOG`
+- **Error handling** — new `Conflict` (409) variant; NHL API errors no longer leak internal details
+
+### Fixed
+- **Total picks display** — admin draft stats now show correct pick count (was off-by-one showing 0-based index) and includes sleeper picks in the total
+
 ## v1.3.1 — 2026-04-10
 
 ### Fixed

@@ -80,13 +80,13 @@ pub async fn login(
         .await?
         .ok_or_else(|| Error::Unauthorized("Invalid email or password".into()))?;
 
-    let valid = verify_password(&body.password, &user.password_hash)?;
+    let valid = verify_password(&body.password, &user.password_hash).await?;
     if !valid {
         return Err(Error::Unauthorized("Invalid email or password".into()));
     }
 
     let profile = state.db.get_profile(&user.id).await?;
-    let token = issue_token(&user.id, &user.email, profile.is_admin, &state.jwt_secret)?;
+    let token = issue_token(&user.id, &user.email, profile.is_admin, &state.config.jwt_secret)?;
 
     Ok(json_success(AuthResponse {
         token,
@@ -108,10 +108,10 @@ pub async fn register(
 ) -> Result<Json<ApiResponse<AuthResponse>>> {
     // Check if user already exists
     if state.db.get_user_by_email(&body.email).await?.is_some() {
-        return Err(Error::Validation("Email already registered".into()));
+        return Err(Error::Conflict("Email already registered".into()));
     }
 
-    let hashed = hash_password(&body.password)?;
+    let hashed = hash_password(&body.password).await?;
     let user = state.db.create_user(&body.email, &hashed).await?;
     state
         .db
@@ -119,7 +119,7 @@ pub async fn register(
         .await?;
 
     let profile = state.db.get_profile(&user.id).await?;
-    let token = issue_token(&user.id, &user.email, profile.is_admin, &state.jwt_secret)?;
+    let token = issue_token(&user.id, &user.email, profile.is_admin, &state.config.jwt_secret)?;
 
     Ok(json_success(AuthResponse {
         token,

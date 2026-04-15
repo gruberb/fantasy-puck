@@ -155,10 +155,12 @@ pub async fn get_team_bets(
 /// PUT /api/fantasy/teams/:team_id
 pub async fn update_team_name(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(team_id): Path<i64>,
     Json(body): Json<UpdateTeamRequest>,
 ) -> Result<Json<ApiResponse<()>>> {
+    let league_id = state.db.get_league_id_for_team(team_id).await?;
+    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
     state.db.update_team_name(team_id, &body.name).await?;
     Ok(json_success(()))
 }
@@ -166,10 +168,12 @@ pub async fn update_team_name(
 /// POST /api/fantasy/teams/:team_id/players
 pub async fn add_player_to_team(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(team_id): Path<i64>,
     Json(body): Json<AddPlayerRequest>,
 ) -> Result<Json<ApiResponse<FantasyPlayer>>> {
+    let league_id = state.db.get_league_id_for_team(team_id).await?;
+    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
     let player = state
         .db
         .add_player_to_team(team_id, body.nhl_id, &body.name, &body.position, &body.nhl_team)
@@ -180,9 +184,11 @@ pub async fn add_player_to_team(
 /// DELETE /api/fantasy/players/:player_id
 pub async fn remove_player(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(player_id): Path<i64>,
 ) -> Result<Json<ApiResponse<()>>> {
+    let league_id = state.db.get_league_id_for_player(player_id).await?;
+    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
     state.db.remove_player(player_id).await?;
     Ok(json_success(()))
 }

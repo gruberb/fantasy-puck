@@ -71,7 +71,7 @@ function LeagueMembersList({ leagueId }: { leagueId: string }) {
 
 // ── Join League Banner (for logged-in non-members) ────────────────────────
 
-function JoinLeagueBanner({ league, userId }: { league: League; userId: string }) {
+function JoinLeagueBanner({ league }: { league: League }) {
   const [teamName, setTeamName] = useState("");
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -184,6 +184,77 @@ const HomePage = () => {
     return <LoadingSpinner message="Loading your league..." />;
   }
 
+  // ── Non-member league preview (invite link destination) ────────────────
+
+  if (activeLeague && !isMember) {
+    const draftStatus = draftSession?.status;
+    const draftLabel = !draftSession ? "No draft yet" :
+      draftStatus === "completed" ? "Completed" :
+      draftStatus === "active" ? "In Progress" :
+      draftStatus === "paused" ? "Paused" :
+      draftStatus === "picks_done" ? "Picks Done" :
+      "Pending";
+    const draftColor = !draftSession ? "bg-gray-100 text-gray-600" :
+      draftStatus === "completed" ? "bg-blue-100 text-blue-700" :
+      draftStatus === "active" ? "bg-green-100 text-green-700" :
+      draftStatus === "paused" ? "bg-yellow-100 text-yellow-700" :
+      "bg-gray-100 text-gray-600";
+
+    return (
+      <div>
+        <PageHeader title={activeLeague.name} badge={formatSeason(activeLeague.season)} />
+
+        {/* Join CTA */}
+        {user ? (
+          <JoinLeagueBanner league={activeLeague} />
+        ) : (
+          <div className="bg-[#2563EB]/5 rounded-none border-2 border-[#2563EB] p-5 mb-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-[#1A1A1A] uppercase tracking-wider">Join {activeLeague.name}</h2>
+                <p className="text-sm text-gray-500 mt-0.5">Sign in to create a team and start playing.</p>
+              </div>
+              <Link
+                to={`/login?returnTo=/league/${activeLeague.id}`}
+                className="px-5 py-2 bg-[#2563EB] text-white font-bold uppercase text-sm border-2 border-[#1A1A1A] rounded-none shadow-[4px_4px_0px_0px_#1A1A1A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-all duration-100"
+              >
+                Sign In to Join
+              </Link>
+            </div>
+          </div>
+        )}
+
+        {/* League Info */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Members */}
+          <div className="bg-white rounded-none border-2 border-[#1A1A1A] p-6">
+            <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4">Members</h3>
+            <LeagueMembersList leagueId={activeLeague.id} />
+          </div>
+
+          {/* Draft Status */}
+          <div className="bg-white rounded-none border-2 border-[#1A1A1A] p-6">
+            <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4">Draft Status</h3>
+            <div className="space-y-3">
+              <span className={`inline-block text-xs font-bold uppercase px-3 py-1 border-2 border-[#1A1A1A] rounded-none ${draftColor}`}>
+                {draftLabel}
+              </span>
+              {draftSession && (
+                <div className="space-y-2 text-sm text-gray-600">
+                  <p>Rounds: <span className="font-bold text-[#1A1A1A]">{draftSession.currentRound} / {draftSession.totalRounds}</span></p>
+                  <p>Type: <span className="font-bold text-[#1A1A1A]">{draftSession.snakeDraft ? "Snake" : "Linear"}</span></p>
+                </div>
+              )}
+              {!draftSession && (
+                <p className="text-sm text-gray-500">The league admin hasn't set up the draft yet.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ── Pre-draft states (logged-in members only) ──────────────────────────
 
   if (user && activeLeague && isMember) {
@@ -283,10 +354,6 @@ const HomePage = () => {
         {activeLeague && (
           <PageHeader title={activeLeague.name} badge={formatSeason(activeLeague.season)} />
         )}
-        {user && activeLeague && !isMember && (
-          <JoinLeagueBanner league={activeLeague} userId={user.id} />
-        )}
-
         <div className="bg-white rounded-none border-2 border-[#1A1A1A] p-6 text-center">
           <p className="text-gray-500">
             Rankings and scores will appear once the season starts.
@@ -302,9 +369,6 @@ const HomePage = () => {
 
   return (
     <div>
-      {user && activeLeague && !isMember && (
-        <JoinLeagueBanner league={activeLeague} userId={user.id} />
-      )}
       <RankingsDashboard
         rankings={rankings}
         rankingsLoading={rankingsLoading}

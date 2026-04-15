@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 
 type Tab = "login" | "signup";
@@ -14,6 +14,7 @@ const LoginPage = () => {
 
   const { signIn, signUp } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,7 +27,8 @@ const LoginPage = () => {
       } else {
         await signUp(email, password, displayName);
       }
-      navigate("/");
+      const returnTo = searchParams.get("returnTo");
+      navigate(returnTo && returnTo.startsWith("/") ? returnTo : "/");
     } catch (err: unknown) {
       if (err instanceof Error) {
         setError(err.message);

@@ -38,6 +38,15 @@ impl FantasyDb {
         &self.pool
     }
 
+    /// Lightweight health check — verifies the pool can acquire a connection.
+    pub async fn ping(&self) -> Result<()> {
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(Error::Database)
+    }
+
     // Create a helper method to access the cache service
     pub fn cache(&self) -> cache::CacheService {
         cache::CacheService::new(&self.pool)
@@ -73,6 +82,48 @@ impl FantasyDb {
                 .await?;
 
         Ok(ids)
+    }
+
+    /// Get the league_id for a draft session. Useful for authorization checks.
+    pub async fn get_league_id_for_draft(&self, draft_id: &str) -> Result<String> {
+        let league_id: String = sqlx::query_scalar(
+            "SELECT league_id::text FROM draft_sessions WHERE id = $1::uuid",
+        )
+        .bind(draft_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(league_id)
+    }
+
+    /// Get the league_id that a fantasy team belongs to.
+    pub async fn get_league_id_for_team(&self, team_id: i64) -> Result<String> {
+        let league_id: String = sqlx::query_scalar(
+            "SELECT league_id::text FROM fantasy_teams WHERE id = $1",
+        )
+        .bind(team_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound("Team not found".into()))?;
+
+        Ok(league_id)
+    }
+
+    /// Get the league_id for the team that owns a given player.
+    pub async fn get_league_id_for_player(&self, player_id: i64) -> Result<String> {
+        let league_id: String = sqlx::query_scalar(
+            r#"
+            SELECT ft.league_id::text
+            FROM fantasy_players fp
+            JOIN fantasy_teams ft ON ft.id = fp.team_id
+            WHERE fp.id = $1
+            "#,
+        )
+        .bind(player_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound("Player not found".into()))?;
+
+        Ok(league_id)
     }
 
     // --- Team methods (delegate to TeamDbService) ---

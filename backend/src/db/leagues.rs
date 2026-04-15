@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 use crate::db::FantasyDb;
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct LeagueRow {
@@ -137,6 +137,36 @@ impl FantasyDb {
             .await?;
 
         Ok(())
+    }
+
+    /// Verify the user is the league owner. Returns Forbidden if not.
+    pub async fn verify_league_owner(&self, league_id: &str, user_id: &str) -> Result<()> {
+        let created_by: Option<String> = sqlx::query_scalar(
+            "SELECT created_by::text FROM leagues WHERE id = $1::uuid",
+        )
+        .bind(league_id)
+        .fetch_optional(self.pool())
+        .await?
+        .ok_or_else(|| Error::NotFound("League not found".into()))?;
+
+        match created_by {
+            Some(owner) if owner == user_id => Ok(()),
+            _ => Err(Error::Forbidden("Only the league owner can perform this action".into())),
+        }
+    }
+
+    /// Verify the user is a member of the league. Returns the league_member id.
+    pub async fn verify_user_in_league(&self, league_id: &str, user_id: &str) -> Result<String> {
+        let member_id: String = sqlx::query_scalar(
+            "SELECT id::text FROM league_members WHERE league_id = $1::uuid AND user_id = $2::uuid",
+        )
+        .bind(league_id)
+        .bind(user_id)
+        .fetch_optional(self.pool())
+        .await?
+        .ok_or_else(|| Error::Forbidden("You are not a member of this league".into()))?;
+
+        Ok(member_id)
     }
 
     /// Validate that a member belongs to a league. Returns the member id.

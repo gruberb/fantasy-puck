@@ -3,7 +3,9 @@ use std::sync::Arc;
 use clap::Parser;
 use dotenv::dotenv;
 use tracing::info;
+use tracing_subscriber::{fmt, EnvFilter};
 
+use fantasy_hockey::config::Config;
 use fantasy_hockey::utils::scheduler;
 use fantasy_hockey::utils::scheduler::{init_rankings_scheduler, populate_historical_rankings};
 use fantasy_hockey::FantasyDb;
@@ -18,7 +20,7 @@ struct App {
 
     /// Port to listen on
     #[arg(short, long, default_value = "3000")]
-    port: u16,
+    port: Option<u16>,
 }
 
 #[tokio::main]
@@ -26,25 +28,43 @@ async fn main() -> anyhow::Result<()> {
     // Load environment variables from .env file if present
     dotenv().ok();
 
-    // Initialize tracing - only once
-    tracing_subscriber::fmt::init();
+    // Load all configuration eagerly — panics immediately if anything required is missing
+    let config = Config::from_env();
+
+    // Initialize tracing with env-filter support (RUST_LOG=debug, etc.)
+    if config.log_json {
+        fmt::Subscriber::builder()
+            .with_env_filter(EnvFilter::from_default_env())
+            .json()
+            .init();
+    } else {
+        fmt::Subscriber::builder()
+            .with_env_filter(EnvFilter::from_default_env())
+            .init();
+    }
 
     // Parse command line arguments
     let args = App::parse();
 
     info!("Starting fantasy hockey application");
 
-    // Initialize season config from env vars (NHL_SEASON, NHL_GAME_TYPE, etc.)
-    api::init_season_config();
+    // Initialize season config from typed Config (populates OnceLock accessors)
+    api::init_season_config(&config);
     info!("Season config: {} game_type={} playoffs={} end={}",
         api::season(), api::game_type(), api::playoff_start(), api::season_end());
+
+    // Override port from CLI arg if provided
+    let config = if let Some(port) = args.port {
+        Config { port, ..config }
+    } else {
+        config
+    };
+    let config = Arc::new(config);
 
     // Initialize services
     let nhl_client = NhlClient::new();
     nhl_client.start_cache_cleanup(std::time::Duration::from_secs(300));
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set in environment");
-    let db = FantasyDb::new(&database_url).await?;
+    let db = FantasyDb::new(&config.database_url).await?;
 
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
@@ -70,8 +90,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Run the API server
-    let jwt_secret =
-        std::env::var("JWT_SECRET").expect("JWT_SECRET must be set in environment");
-    info!("Starting web server on port {}", args.port);
-    api::run_server(db, nhl_client, jwt_secret, args.port).await
+    info!("Starting web server on port {}", config.port);
+    api::run_server(db, nhl_client, config).await
 }

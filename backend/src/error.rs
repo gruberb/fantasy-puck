@@ -16,6 +16,7 @@ pub enum Error {
     Internal(String),
     Unauthorized(String),
     Forbidden(String),
+    Conflict(String),
 }
 
 // Implement std::error::Error
@@ -39,6 +40,7 @@ impl fmt::Display for Error {
             Error::Internal(msg) => write!(f, "Internal error: {}", msg),
             Error::Unauthorized(msg) => write!(f, "Unauthorized: {}", msg),
             Error::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
+            Error::Conflict(msg) => write!(f, "Conflict: {}", msg),
         }
     }
 }
@@ -60,12 +62,13 @@ impl IntoResponse for Error {
             }
             Error::NhlApi(msg) => {
                 error!("NHL API error: {}", msg);
-                (StatusCode::BAD_GATEWAY, msg.as_str())
+                (StatusCode::BAD_GATEWAY, "External service error")
             }
             Error::NotFound(msg) => (StatusCode::NOT_FOUND, msg.as_str()),
             Error::Validation(msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
             Error::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.as_str()),
             Error::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.as_str()),
+            Error::Conflict(msg) => (StatusCode::CONFLICT, msg.as_str()),
             Error::Internal(msg) => {
                 error!("Internal error: {}", msg);
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")

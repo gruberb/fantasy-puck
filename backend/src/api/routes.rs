@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
 use axum::{
+    extract::State,
+    http::StatusCode,
     routing::{delete, get, post, put},
     Router,
 };
 
 use crate::api::handlers;
+use crate::config::Config;
 use crate::nhl_api::nhl::NhlClient;
 use crate::ws::draft_hub::DraftHub;
 use crate::FantasyDb;
@@ -14,21 +17,26 @@ use crate::FantasyDb;
 pub struct AppState {
     pub db: FantasyDb,
     pub nhl_client: NhlClient,
-    pub jwt_secret: String,
+    pub config: Arc<Config>,
     pub draft_hub: DraftHub,
 }
 
 // Create the router
-pub fn create_router(db: FantasyDb, nhl_client: NhlClient, jwt_secret: String) -> Router {
+pub fn create_router(db: FantasyDb, nhl_client: NhlClient, config: Arc<Config>) -> Router {
     // Create shared application state
     let state = Arc::new(AppState {
         db,
         nhl_client,
-        jwt_secret,
+        config,
         draft_hub: DraftHub::new(),
     });
 
     Router::new()
+        // ---------------------------------------------------------------
+        // Health Checks
+        // ---------------------------------------------------------------
+        .route("/health/live", get(|| async { StatusCode::OK }))
+        .route("/health/ready", get(health_ready))
         // ---------------------------------------------------------------
         // Auth Routes
         // ---------------------------------------------------------------
@@ -220,4 +228,13 @@ pub fn create_router(db: FantasyDb, nhl_client: NhlClient, jwt_secret: String) -
             get(crate::ws::handler::ws_draft),
         )
         .with_state(state)
+}
+
+async fn health_ready(
+    State(state): State<Arc<AppState>>,
+) -> StatusCode {
+    match state.db.ping().await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
 }

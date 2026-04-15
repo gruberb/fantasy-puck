@@ -89,10 +89,11 @@ pub async fn get_draft_by_league(
 /// POST /api/leagues/:league_id/draft
 pub async fn create_draft_session(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(league_id): Path<String>,
     Json(body): Json<CreateDraftRequest>,
 ) -> Result<Json<ApiResponse<DraftSessionRow>>> {
+    state.db.verify_user_in_league(&league_id, &auth_user.id).await?;
     let session = state
         .db
         .create_draft_session(&league_id, body.total_rounds, body.snake_draft)
@@ -305,9 +306,11 @@ pub async fn resume_draft(
 /// DELETE /api/draft/:draft_id
 pub async fn delete_draft(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>> {
+    let league_id = state.db.get_league_id_for_draft(&draft_id).await?;
+    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
     state.db.delete_draft_session(&draft_id).await?;
     Ok(json_success(()))
 }
@@ -315,12 +318,13 @@ pub async fn delete_draft(
 /// POST /api/draft/:draft_id/pick
 pub async fn make_pick(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
     Json(body): Json<MakePickRequest>,
 ) -> Result<Json<ApiResponse<DraftPickRow>>> {
     // Get the current session
     let session = state.db.get_draft_session_by_id(&draft_id).await?;
+    state.db.verify_user_in_league(&session.league_id, &auth_user.id).await?;
 
     if session.status != "active" {
         return Err(Error::Validation("Draft is not active".into()));
@@ -428,9 +432,12 @@ pub async fn make_pick(
 /// POST /api/draft/:draft_id/finalize
 pub async fn finalize_draft(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>> {
+    let league_id = state.db.get_league_id_for_draft(&draft_id).await?;
+    state.db.verify_user_in_league(&league_id, &auth_user.id).await?;
+
     // Sync draft picks to fantasy_players table
     state.db.finalize_draft_to_players(&draft_id).await?;
 
@@ -457,9 +464,12 @@ pub async fn finalize_draft(
 /// POST /api/draft/:draft_id/complete — marks draft as fully completed
 pub async fn complete_draft(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>> {
+    let league_id = state.db.get_league_id_for_draft(&draft_id).await?;
+    state.db.verify_user_in_league(&league_id, &auth_user.id).await?;
+
     state
         .db
         .update_draft_status(
@@ -543,11 +553,12 @@ pub async fn get_sleeper_picks(
 /// POST /api/draft/:draft_id/sleeper/pick
 pub async fn make_sleeper_pick(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
     Json(body): Json<MakeSleeperPickRequest>,
 ) -> Result<Json<ApiResponse<()>>> {
     let session = state.db.get_draft_session_by_id(&draft_id).await?;
+    state.db.verify_user_in_league(&session.league_id, &auth_user.id).await?;
 
     if session.sleeper_status.as_deref() != Some("active") {
         return Err(Error::Validation("Sleeper round is not active".into()));

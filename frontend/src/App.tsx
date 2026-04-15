@@ -15,6 +15,7 @@ import LoginPage from "@/pages/LoginPage";
 import AdminPage from "@/pages/AdminPage";
 import DraftPage from "@/pages/DraftPage";
 import JoinLeaguePage from "@/pages/JoinLeaguePage";
+import LeagueSettingsPage from "@/pages/LeagueSettingsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import InsightsPage from "@/pages/InsightsPage";
 import PulsePage from "@/pages/PulsePage";
@@ -38,7 +39,7 @@ function App() {
 
             {/* Protected pages (not league-scoped) */}
             <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
-            <Route path="/join-league" element={<ProtectedRoute><JoinLeaguePage /></ProtectedRoute>} />
+            <Route path="/join-league" element={<JoinLeaguePage />} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
 
             {/* League-scoped routes */}
@@ -50,6 +51,7 @@ function App() {
               <Route path="insights" element={<InsightsPage />} />
               <Route path="pulse" element={<PulsePage />} />
               <Route path="draft" element={<ProtectedRoute><DraftPage /></ProtectedRoute>} />
+              <Route path="settings" element={<ProtectedRoute><LeagueSettingsPage /></ProtectedRoute>} />
             </Route>
           </Route>
         </Routes>
