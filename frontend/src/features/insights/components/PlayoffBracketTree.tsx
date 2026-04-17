@@ -4,6 +4,7 @@ import type {
   SeriesStateCode,
   TeamSeriesProjection,
 } from "@/features/insights";
+import { RosteredChips } from "./RosteredChips";
 
 interface PlayoffBracketTreeProps {
   projections: TeamSeriesProjection[];
@@ -136,7 +137,7 @@ function MatchupRow({
         <div className="flex items-center gap-2 mt-0.5 text-[10px] text-[var(--color-ink-muted)]">
           {rating != null && <StrengthBadge value={rating} />}
           {projection.rosteredTags.length > 0 && (
-            <RosteredPills tags={projection.rosteredTags} />
+            <RosteredChips tags={projection.rosteredTags} />
           )}
         </div>
       </div>
@@ -181,25 +182,6 @@ function strengthLabel(
         label: "Underdog",
         className: "bg-[var(--color-rival)] text-white",
       };
-}
-
-function RosteredPills({
-  tags,
-}: {
-  tags: TeamSeriesProjection["rosteredTags"];
-}) {
-  return (
-    <div className="flex flex-wrap gap-1">
-      {tags.map((tag) => (
-        <span
-          key={tag.fantasyTeamName}
-          className="inline-flex items-center gap-1 bg-[var(--color-you-tint)] text-[#1A1A1A] px-1 py-0 text-[9px] uppercase tracking-wider font-bold"
-        >
-          {tag.fantasyTeamName}: {tag.count}
-        </span>
-      ))}
-    </div>
-  );
 }
 
 /**

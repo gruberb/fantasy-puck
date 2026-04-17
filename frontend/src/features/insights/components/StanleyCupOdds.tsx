@@ -4,7 +4,8 @@ import {
   getNHLTeamShortName,
 } from "@/utils/nhlTeams";
 
-import type { RosteredPlayerTag, TeamSeriesProjection } from "@/features/insights";
+import type { TeamSeriesProjection } from "@/features/insights";
+import { RosteredChips } from "./RosteredChips";
 
 interface StanleyCupOddsProps {
   /**
@@ -112,7 +113,9 @@ function TeamCell({
           {getNHLTeamShortName(abbrev)}
         </p>
         {series && series.rosteredTags.length > 0 && (
-          <RosteredPills tags={series.rosteredTags} />
+          <div className="mt-0.5">
+            <RosteredChips tags={series.rosteredTags} />
+          </div>
         )}
       </div>
     </div>
@@ -142,17 +145,3 @@ function OddsCell({
   );
 }
 
-function RosteredPills({ tags }: { tags: RosteredPlayerTag[] }) {
-  return (
-    <div className="flex flex-wrap gap-1 mt-0.5">
-      {tags.map((tag) => (
-        <span
-          key={tag.fantasyTeamName}
-          className="inline-flex items-center gap-1 bg-[var(--color-you-tint)] text-[#1A1A1A] px-1 py-0 text-[9px] uppercase tracking-wider font-bold"
-        >
-          {tag.fantasyTeamName}: {tag.count}
-        </span>
-      ))}
-    </div>
-  );
-}

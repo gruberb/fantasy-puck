@@ -4,6 +4,11 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.7.1 — 2026-04-17
+
+### Changed
+- **Insights rostered-by chips collapse** — with 15-team leagues, the fantasy-ownership chip strip on `StanleyCupOdds` and `PlayoffBracketTree` wrapped 3–4 lines on desktop and stacked vertically on mobile, drowning the data in yellow pills. Now shows the top 3 teams by count inline with a `+N MORE` toggle that expands in place. Extracted a shared `RosteredChips` component (was duplicated across both files). Toggle uses an inverting hover/active state, `touch-manipulation` to kill tap delay, and `aria-expanded` for screen readers.
+
 ## v1.7.0 — 2026-04-17
 
 Headline change: Pulse is now the personal/league-race page (your standing, your projections, your rivalry, your NHL stakes) and Insights is the NHL-generic page (today's games, hot/cold skaters, bracket, Stanley Cup odds). A new Monte Carlo engine (`race_sim`) underpins every projection on both pages, re-running every morning at 10am UTC.
