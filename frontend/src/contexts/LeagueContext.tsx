@@ -74,7 +74,12 @@ import { useState } from "react";
 export const LeagueProvider = ({ children }: { children: ReactNode }) => {
   const { user } = useAuth();
 
-  const [activeLeagueId, setActiveLeagueIdState] = useState<string | null>(null);
+  // Rehydrate from localStorage on first mount so global routes like
+  // `/games/:date` (which don't run LeagueShell) still know the last-viewed
+  // league across a hard refresh.
+  const [activeLeagueId, setActiveLeagueIdState] = useState<string | null>(
+    () => (typeof window === "undefined" ? null : localStorage.getItem(STORAGE_KEY)),
+  );
 
   // Set active league ID and persist to localStorage
   const setActiveLeagueId = useCallback(

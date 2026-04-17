@@ -7,6 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/api/client";
 import LoadingSpinner from "@/components/common/LoadingSpinner";
 import { formatSeason } from "@/utils/format";
+import { APP_CONFIG } from "@/config";
 
 const STORAGE_KEY = "lastViewedLeagueId";
 
@@ -36,7 +37,7 @@ const LeaguePickerPage = () => {
     setCreating(true);
     setCreateError(null);
     try {
-      const league = await api.createLeague(newLeagueName.trim(), "20252026") as { id: string };
+      const league = await api.createLeague(newLeagueName.trim(), APP_CONFIG.DEFAULT_SEASON) as { id: string };
       await api.joinLeague(league.id, newTeamName.trim());
       await queryClient.invalidateQueries({ queryKey: ["leagues"] });
       await queryClient.invalidateQueries({ queryKey: ["memberships"] });
@@ -113,7 +114,7 @@ const LeaguePickerPage = () => {
       <div className="max-w-2xl mx-auto text-center py-16">
         <div className="bg-white border-2 border-[#1A1A1A] rounded-none p-12">
           <h1 className="text-3xl font-extrabold uppercase tracking-wider text-[#1A1A1A] mb-4">
-            Fantasy NHL 2026
+            Fantasy {APP_CONFIG.BRAND_LABEL}
           </h1>
           <p className="text-gray-500 text-lg mb-8">
             No leagues available yet.{" "}

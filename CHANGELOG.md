@@ -4,6 +4,24 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.5.0 — 2026-04-17
+
+### Added
+- **Playoff draft pool** — when `NHL_GAME_TYPE=3`, the draft player pool sources from the 16 playoff team rosters via `/playoff-series/carousel/{season}` + `/roster/{team}/current` instead of the `skater-stats-leaders` endpoint, which returns 0 players until playoff games have been played. Falls back to the top 16 teams from standings if the carousel hasn't been published yet. New helper module at `backend/src/utils/player_pool.rs` is shared with `/nhl/skaters/top`.
+- **`PlayerPoolUpdated` WebSocket event** — broadcast when an admin repopulates the pool; draft clients invalidate their player-pool query and see the fresh roster without a manual refresh.
+- **Config-derived UI labels** — `APP_CONFIG` exposes `SEASON_LABEL` ("2025/2026 Playoffs"), `GAME_TYPE_LABEL`, and `BRAND_LABEL` ("NHL 2026"), all computed from `VITE_NHL_SEASON` / `VITE_NHL_GAME_TYPE`. Flipping two env vars per side now retargets the whole app to any season or game type.
+- **Season/game-type flip workflow documented** in `CLAUDE.md`.
+
+### Fixed
+- **Games page missed fantasy overlay** — `useGamesData` was calling `api.getGames(date)` without forwarding `activeLeagueId`, so every game rendered "No fantasy team has players for this team" even when players were rostered. Now forwards the league id and keys the React Query cache by it.
+- **Hard refresh dropped the user out of their league** — `LeagueProvider` initialized `activeLeagueId` to `null` and never rehydrated from `localStorage.lastViewedLeagueId`. Global routes like `/games/:date` (which don't run `LeagueShell`) lost the active league on refresh. Lazy state initializer now reads the key on first mount.
+- **Hardcoded `game_type=2` in `create_draft_session`** removed — both draft-creation and populate-pool paths now honor the configured `game_type()`.
+
+### Changed
+- **Cache hygiene** — response-cache keys for `insights`, `games_extended`, and `match_day` now include `game_type()` so payloads don't collide across a regular-season → playoffs flip. Old keys age out via the existing 7-day cleanup.
+- **`/nhl/skaters/top`** — when `game_type=3`, serves from the playoff roster pool (same source as the draft) instead of the empty skater-stats-leaders endpoint.
+- **All hardcoded `"2025/2026 Playoffs"`, `"NHL 2026"`, and `"20252026"` literals** in the frontend now read from `APP_CONFIG` (HomePage, RankingsPage, DraftPage, AdminPage, LoginPage, LeaguePickerPage, LeagueSettingsPage, NavBar, TeamBetsTable, PlayerRoster, `api/client.ts`).
+
 ## v1.4.0 — 2026-04-15
 
 ### Added

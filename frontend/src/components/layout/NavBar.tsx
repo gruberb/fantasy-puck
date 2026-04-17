@@ -3,6 +3,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { getFixedAnalysisDateString } from "@/utils/timezone";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLeague } from "@/contexts/LeagueContext";
+import { APP_CONFIG } from "@/config";
 
 const NavBar = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -94,7 +95,7 @@ const NavBar = () => {
                   FANTASY
                 </span>
                 <span className="text-2xl font-extrabold text-[#2563EB] uppercase tracking-wider">
-                  NHL 2026
+                  {APP_CONFIG.BRAND_LABEL}
                 </span>
               </div>
               <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400 h-3.5 leading-tight">

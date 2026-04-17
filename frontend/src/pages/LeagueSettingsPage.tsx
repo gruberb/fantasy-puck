@@ -6,6 +6,7 @@ import { api } from "@/api/client";
 import LoadingSpinner from "@/components/common/LoadingSpinner";
 import PageHeader from "@/components/common/PageHeader";
 import { formatSeason } from "@/utils/format";
+import { APP_CONFIG } from "@/config";
 import {
   useLeagueMembers,
   useDraftSession,
@@ -161,7 +162,7 @@ const LeagueSettingsPage = () => {
     setNhlPlayersFetching(true);
     try {
       const API_URL = import.meta.env.VITE_API_URL || "https://api.fantasy-puck.ca/api";
-      const response = await fetch(`${API_URL}/nhl/skaters/top?limit=800&season=20252026&game_type=2&include_form=false&form_games=0`);
+      const response = await fetch(`${API_URL}/nhl/skaters/top?limit=800&season=${APP_CONFIG.DEFAULT_SEASON}&game_type=${APP_CONFIG.DEFAULT_GAME_TYPE}&include_form=false&form_games=0`);
       const data = await response.json();
       const players = (data.data ?? []).map((p: any) => ({
         id: p.id, firstName: { default: p.firstName }, lastName: { default: p.lastName },

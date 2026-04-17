@@ -8,6 +8,7 @@ export interface DraftEventHandlers {
   onSessionUpdated?: (session: Partial<DraftSession>) => void;
   onPickMade?: (pick: DraftPick) => void;
   onSleeperUpdated?: () => void;
+  onPlayerPoolUpdated?: () => void;
 }
 
 export interface RealtimeService {
@@ -67,6 +68,9 @@ class WebSocketRealtimeService implements RealtimeService {
               break;
             case "sleeperUpdated":
               handlers.onSleeperUpdated?.();
+              break;
+            case "playerPoolUpdated":
+              handlers.onPlayerPoolUpdated?.();
               break;
           }
         } catch {

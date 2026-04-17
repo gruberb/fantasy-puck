@@ -2,6 +2,7 @@ import { SkaterStats } from "@/types/skaters";
 import { usePlayoffsData } from "@/features/rankings";
 import RankingTable from "@/components/common/RankingTable";
 import { getNHLTeamUrlSlug } from "@/utils/nhlTeams";
+import { APP_CONFIG } from "@/config";
 
 interface PlayerRosterProps {
   players: SkaterStats[];
@@ -145,7 +146,7 @@ export default function PlayerRoster({ players }: PlayerRosterProps) {
           showRankColors={false} // Don't show rank colors
           className="bg-transparent shadow-none border-0"
           title="Fantasy Team Roster"
-          dateBadge="2025/2026 Playoffs"
+          dateBadge={APP_CONFIG.SEASON_LABEL}
         />
       </div>
     </section>

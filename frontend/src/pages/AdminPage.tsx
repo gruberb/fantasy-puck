@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/api/client";
 import LoadingSpinner from "@/components/common/LoadingSpinner";
 import { formatSeason } from "@/utils/format";
+import { APP_CONFIG } from "@/config";
 import PageHeader from "@/components/common/PageHeader";
 import { useLeagues } from "@/features/draft";
 
@@ -40,7 +41,7 @@ const AdminPage = () => {
     if (!newTeamName.trim()) { flashError("Please enter your team name"); return; }
     setCreating(true);
     try {
-      const league = await createLeague(newLeagueName.trim(), "20252026", user.id);
+      const league = await createLeague(newLeagueName.trim(), APP_CONFIG.DEFAULT_SEASON, user.id);
       await api.joinLeague(league.id, newTeamName.trim());
       await queryClient.invalidateQueries({ queryKey: ["leagues"] });
       await queryClient.invalidateQueries({ queryKey: ["memberships"] });

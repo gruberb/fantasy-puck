@@ -7,6 +7,7 @@ import { getNHLTeamFullName, getNHLTeamLogoUrl } from "@/utils/nhlTeams";
 import LoadingSpinner from "@/components/common/LoadingSpinner";
 import ErrorMessage from "@/components/common/ErrorMessage";
 import PageHeader from "@/components/common/PageHeader";
+import { APP_CONFIG } from "@/config";
 import {
   useLeagueMembers,
   useDraftSession,
@@ -491,7 +492,7 @@ const DraftPage = () => {
   if (sleeperRoundComplete) {
     return (
       <div className="max-w-2xl mx-auto space-y-6">
-        <PageHeader title="Draft & Sleeper Selection Complete!" subtitle="All teams are ready for the 2025/2026 Playoffs" />
+        <PageHeader title="Draft & Sleeper Selection Complete!" subtitle={`All teams are ready for the ${APP_CONFIG.SEASON_LABEL}`} />
 
         <div className="bg-white rounded-none border-2 border-[#1A1A1A] p-6 text-center space-y-4">
           <p className="text-gray-600">Every team has drafted their roster and picked a sleeper.</p>

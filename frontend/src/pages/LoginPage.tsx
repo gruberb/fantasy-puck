@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { APP_CONFIG } from "@/config";
 
 type Tab = "login" | "signup";
 
@@ -60,7 +61,7 @@ const LoginPage = () => {
         <div className="text-center mb-8">
           <h1 className="text-3xl font-extrabold uppercase tracking-wider">
             <span className="text-white">FANTASY</span>{" "}
-            <span className="text-[#FACC15]">NHL 2026</span>
+            <span className="text-[#FACC15]">{APP_CONFIG.BRAND_LABEL}</span>
           </h1>
         </div>
 

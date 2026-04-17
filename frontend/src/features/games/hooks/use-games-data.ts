@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api/client";
+import { useLeague } from "@/contexts/LeagueContext";
 import {
   getFixedAnalysisDateString,
   dateStringToLocalDate,
@@ -11,6 +12,7 @@ import { getTeamPrimaryColor } from "@/utils/teamStyles";
 
 export function useGamesData(dateParam?: string) {
   const navigate = useNavigate();
+  const { activeLeagueId } = useLeague();
 
   const isValidDate = (dateString: string): boolean => {
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
@@ -46,8 +48,8 @@ export function useGamesData(dateParam?: string) {
     error: gamesError,
     refetch: refetchGames,
   } = useQuery({
-    queryKey: ["games", selectedDate],
-    queryFn: () => api.getGames(selectedDate),
+    queryKey: ["games", selectedDate, activeLeagueId],
+    queryFn: () => api.getGames(selectedDate, activeLeagueId ?? undefined),
     retry: 1,
   });
 

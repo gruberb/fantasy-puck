@@ -12,6 +12,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useLeague } from "@/contexts/LeagueContext";
 import { api } from "@/api/client";
 import { formatSeason } from "@/utils/format";
+import { APP_CONFIG } from "@/config";
 import PageHeader from "@/components/common/PageHeader";
 import type { League } from "@/types/league";
 
@@ -434,7 +435,7 @@ function RankingsDashboard({
               rankField="rank"
               title="Overall Rankings"
               limit={7}
-              dateBadge="2025/2026 Playoffs"
+              dateBadge={APP_CONFIG.SEASON_LABEL}
               viewAllLink={`${leaguePrefix}/rankings`}
               initialSortKey="totalPoints"
               initialSortDirection="desc"
@@ -473,7 +474,7 @@ function RankingsDashboard({
             keyField="id"
             rankField="rank"
             title="Sleepers"
-            dateBadge="2025/2026 Playoffs"
+            dateBadge={APP_CONFIG.SEASON_LABEL}
             isLoading={sleepersLoading}
             emptyMessage="No sleeper players available"
             initialSortKey="totalPoints"

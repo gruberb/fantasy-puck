@@ -19,6 +19,7 @@ pub enum DraftEvent {
         pick: serde_json::Value,
     },
     SleeperUpdated,
+    PlayerPoolUpdated,
 }
 
 pub struct DraftHub {

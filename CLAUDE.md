@@ -52,3 +52,26 @@ cargo run -- serve --port 3000
 - Draft system uses WebSocket (`DraftHub`) for real-time updates.
 - Scheduled background tasks in `backend/src/utils/scheduler.rs` (daily rankings, playoff info, insights).
 - AI insights use the Anthropic API; generated narratives are cached per hockey-date in the `response_cache` table.
+
+## Switching season / game type
+
+Season and game-type flow from two env vars on each side. All visible labels and API calls derive from these.
+
+Backend (`backend/.env`):
+- `NHL_SEASON` (u32, default `20252026`) — 8-digit YYYYYYYY
+- `NHL_GAME_TYPE` (u8, default `3`) — `2` = Regular Season, `3` = Playoffs
+
+Frontend (`frontend/.env`):
+- `VITE_NHL_SEASON` (string, default `20252026`)
+- `VITE_NHL_GAME_TYPE` (number, default `3`)
+
+Flip workflow:
+1. Update both envs, restart (`make run`).
+2. For drafts started under the old game type, admin hits "Repopulate Player Pool" → `POST /api/draft/:id/populate`. The backend emits a WS `playerPoolUpdated` event and connected clients refresh.
+3. Existing leagues keep their own `season` column (set at creation). Only the global default changes.
+
+Player-pool sourcing (`backend/src/utils/player_pool.rs`):
+- `game_type == 3`: 16 playoff team rosters via `/playoff-series/carousel/{season}` (falls back to top 16 from standings if the carousel isn't published yet).
+- Otherwise: skater-stats leaders across 9 categories.
+
+Cache keys in `insights.rs` and `games.rs` include `game_type()` so regular-season and playoff payloads cannot collide across a flip.

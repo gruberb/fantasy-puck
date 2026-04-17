@@ -28,7 +28,7 @@ pub async fn generate_and_cache_insights(
     league_id: &str,
 ) -> Result<InsightsResponse> {
     let today = hockey_today();
-    let cache_key = format!("insights:{}:{}", league_id, today);
+    let cache_key = format!("insights:{}:{}:{}:{}", league_id, season(), game_type(), today);
 
     // Check cache
     if let Some(cached) = state

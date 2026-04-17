@@ -265,8 +265,14 @@ async fn process_games_extended(
     let hockey_today = now_et.format("%Y-%m-%d").to_string();
     let is_today = date == hockey_today;
 
-    // Cache key for extended games (separate from match_day cache)
-    let cache_key = format!("games_extended:{}:{}", league_id, date);
+    // Cache key for extended games (separate from match_day cache).
+    // Includes game_type() so regular-season and playoff payloads don't collide.
+    let cache_key = format!(
+        "games_extended:{}:{}:{}",
+        league_id,
+        crate::api::game_type(),
+        date
+    );
 
     // Check cache
     if let Some(cached) = state.db.cache().get_cached_response::<TodaysGamesResponse>(&cache_key).await? {
@@ -515,8 +521,13 @@ pub async fn get_match_day(
     let now = now_utc.with_timezone(&chrono_tz::America::New_York);
     let hockey_today = now.format("%Y-%m-%d").to_string();
 
-    // Create cache key for today's match day (scoped by league)
-    let cache_key = format!("match_day:{}:{}", league_id, hockey_today);
+    // Create cache key for today's match day (scoped by league and game_type)
+    let cache_key = format!(
+        "match_day:{}:{}:{}",
+        league_id,
+        crate::api::game_type(),
+        hockey_today
+    );
 
     // Check if we have a valid cached response
     if let Some(cached_response) = state.db.cache().get_cached_response::<MatchDayResponse>(&cache_key).await? {

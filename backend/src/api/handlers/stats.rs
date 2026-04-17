@@ -42,6 +42,44 @@ pub async fn get_top_skaters(
         }
     }
 
+    // Playoffs: skater-stats-leaders is empty until games are played, so source
+    // the pool from the 16 playoff team rosters instead. Stats fields are zero
+    // (callers search by name/team/position, not by stat values).
+    if game_type == 3 {
+        let pool = crate::utils::player_pool::fetch_playoff_roster_pool(
+            &state.nhl_client,
+            *season,
+        )
+        .await?;
+        let players = pool
+            .into_iter()
+            .map(|(id, (name, position, team_abbrev, headshot))| {
+                let (first_name, last_name) = split_name(&name);
+                let mut stats = HashMap::new();
+                stats.insert("points".to_string(), 0);
+                ConsolidatedPlayerStats {
+                    id,
+                    first_name,
+                    last_name,
+                    sweater_number: None,
+                    headshot,
+                    team_abbrev: team_abbrev.clone(),
+                    team_name: team_abbrev.clone(),
+                    team_logo: format!(
+                        "https://assets.nhle.com/logos/nhl/svg/{}_light.svg",
+                        team_abbrev
+                    ),
+                    position,
+                    stats,
+                    fantasy_team: fantasy_mapping.get(&id).cloned(),
+                    form: None,
+                }
+            })
+            .take(limit)
+            .collect::<Vec<_>>();
+        return Ok(json_success(players));
+    }
+
     match state.nhl_client.get_skater_stats(season, game_type).await {
         Ok(stats) => {
             // Create a HashMap to store unique players with their stats
@@ -124,6 +162,15 @@ pub async fn get_top_skaters(
             "Failed to fetch skater stats: {}",
             e
         ))),
+    }
+}
+
+/// Split a "First Last" (or "First Middle Last") name into (first, last).
+fn split_name(full: &str) -> (String, String) {
+    let trimmed = full.trim();
+    match trimmed.rsplit_once(' ') {
+        Some((first, last)) => (first.to_string(), last.to_string()),
+        None => (trimmed.to_string(), String::new()),
     }
 }
 

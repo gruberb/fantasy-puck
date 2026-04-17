@@ -1,6 +1,7 @@
 import RankingTable from "@/components/common/RankingTable";
 import { useRankingsData } from "@/features/rankings";
 import { useLeague } from "@/contexts/LeagueContext";
+import { APP_CONFIG } from "@/config";
 
 import { useDailyRankingsColumns } from "@/components/rankingsPageTableColumns/dailysColumns";
 import { usePlayoffRankingsColumns } from "@/components/rankingsPageTableColumns/playoffColumns";
@@ -36,7 +37,7 @@ const RankingsPage = () => {
           keyField="teamId"
           rankField="rank"
           title="Season Overview"
-          dateBadge="2025/2026 Playoffs"
+          dateBadge={APP_CONFIG.SEASON_LABEL}
           onRowClick={null}
           isLoading={teamStatsLoading}
           emptyMessage={
@@ -56,7 +57,7 @@ const RankingsPage = () => {
           data={playoffRankings}
           keyField="teamId"
           rankField="rank"
-          dateBadge="2025/2026 Playoffs"
+          dateBadge={APP_CONFIG.SEASON_LABEL}
           title="Playoff Stats"
           isLoading={playoffRankingsLoading}
           emptyMessage="No playoff rankings data available"

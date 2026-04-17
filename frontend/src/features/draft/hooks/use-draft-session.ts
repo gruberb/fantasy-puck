@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { draftApi } from '../api/draft-api';
 import { realtimeService } from '@/lib/realtime';
 import { draftPicksQueryKey } from './use-draft-picks';
+import { playerPoolQueryKey } from './use-player-pool';
 import type { DraftSession, DraftPick } from '../types';
 
 export const draftSessionQueryKey = (leagueId: string | null) =>
@@ -58,6 +59,9 @@ export function useDraftSession(leagueId: string | null) {
         if (leagueId) {
           queryClient.invalidateQueries({ queryKey: draftSessionQueryKey(leagueId) });
         }
+      },
+      onPlayerPoolUpdated: () => {
+        queryClient.invalidateQueries({ queryKey: playerPoolQueryKey(sessionId) });
       },
     });
 

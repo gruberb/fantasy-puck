@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
@@ -6,7 +5,6 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use tracing::error;
 
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
@@ -14,7 +12,36 @@ use crate::api::{game_type, season};
 use crate::auth::middleware::AuthUser;
 use crate::db::draft::{DraftPickRow, DraftSessionRow, PlayerPoolRow};
 use crate::error::{Error, Result};
+use crate::utils::player_pool::{fetch_playoff_roster_pool, fetch_stats_leader_pool, PoolMap};
 use crate::ws::draft_hub::DraftEvent;
+
+/// Branch on configured game_type to build the pool.
+/// Playoffs (3) use the 16-team rosters; everything else uses the stats-leader endpoint.
+async fn build_player_pool(state: &AppState) -> Result<PoolMap> {
+    if game_type() == 3 {
+        fetch_playoff_roster_pool(&state.nhl_client, season()).await
+    } else {
+        fetch_stats_leader_pool(&state.nhl_client, season(), game_type()).await
+    }
+}
+
+fn pool_to_inserts(
+    session_id: &str,
+    map: PoolMap,
+) -> Vec<crate::db::draft::PlayerPoolInsert> {
+    map.into_iter()
+        .map(|(nhl_id, (name, position, nhl_team, headshot_url))| {
+            crate::db::draft::PlayerPoolInsert {
+                draft_session_id: session_id.to_string(),
+                nhl_id,
+                name,
+                position,
+                nhl_team,
+                headshot_url,
+            }
+        })
+        .collect()
+}
 
 fn session_updated_event(s: &DraftSessionRow) -> DraftEvent {
     DraftEvent::SessionUpdated {
@@ -99,50 +126,11 @@ pub async fn create_draft_session(
         .create_draft_session(&league_id, body.total_rounds, body.snake_draft)
         .await?;
 
-    // Auto-populate the player pool with regular season stats (game_type=2)
-    let stats = state
-        .nhl_client
-        .get_skater_stats(&season(), 2) // regular season for broader player pool
-        .await
-        .map_err(|e| {
-            error!("Failed to fetch skater stats for player pool: {}", e);
-            Error::NhlApi(format!("Failed to fetch skater stats: {}", e))
-        })?;
-
-    let mut players_map: HashMap<i64, (String, String, String, String)> = HashMap::new();
-    let all_players = [
-        &stats.goals, &stats.assists, &stats.points, &stats.goals_pp,
-        &stats.goals_sh, &stats.plus_minus, &stats.faceoff_leaders,
-        &stats.penalty_mins, &stats.toi,
-    ];
-    for category in all_players {
-        for player in category {
-            let player_id = player.id as i64;
-            players_map.entry(player_id).or_insert_with(|| {
-                let first = player.first_name.get("default").cloned().unwrap_or_default();
-                let last = player.last_name.get("default").cloned().unwrap_or_default();
-                let name = format!("{} {}", first, last);
-                let headshot = format!("https://assets.nhle.com/mugs/nhl/latest/{}.png", player_id);
-                (name, player.position.clone(), player.team_abbrev.clone(), headshot)
-            });
-        }
-    }
-
-    let pool_inserts: Vec<crate::db::draft::PlayerPoolInsert> = players_map
-        .into_iter()
-        .map(|(nhl_id, (name, position, nhl_team, headshot_url))| {
-            crate::db::draft::PlayerPoolInsert {
-                draft_session_id: session.id.clone(),
-                nhl_id,
-                name,
-                position,
-                nhl_team,
-                headshot_url,
-            }
-        })
-        .collect();
-
-    state.db.insert_player_pool(&session.id, pool_inserts).await?;
+    let pool = build_player_pool(&state).await?;
+    state
+        .db
+        .insert_player_pool(&session.id, pool_to_inserts(&session.id, pool))
+        .await?;
 
     Ok(json_success(session))
 }
@@ -170,70 +158,24 @@ pub async fn populate_player_pool(
     _auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<Vec<PlayerPoolRow>>>> {
-    // Verify session exists
     let _session = state.db.get_draft_session_by_id(&draft_id).await?;
 
-    // Fetch skater stats from the NHL API
-    let stats = state
-        .nhl_client
-        .get_skater_stats(&season(), game_type())
-        .await
-        .map_err(|e| {
-            error!("Failed to fetch skater stats for player pool: {}", e);
-            Error::NhlApi(format!("Failed to fetch skater stats: {}", e))
-        })?;
+    let pool = build_player_pool(&state).await?;
 
-    // Collect unique players from all stat categories
-    let mut players_map: HashMap<i64, (String, String, String, String)> = HashMap::new();
-
-    let all_players = [
-        &stats.goals,
-        &stats.assists,
-        &stats.points,
-        &stats.goals_pp,
-        &stats.goals_sh,
-        &stats.plus_minus,
-        &stats.faceoff_leaders,
-        &stats.penalty_mins,
-        &stats.toi,
-    ];
-
-    for category in all_players {
-        for player in category {
-            let player_id = player.id as i64;
-            players_map.entry(player_id).or_insert_with(|| {
-                let first = player
-                    .first_name
-                    .get("default")
-                    .cloned()
-                    .unwrap_or_default();
-                let last = player
-                    .last_name
-                    .get("default")
-                    .cloned()
-                    .unwrap_or_default();
-                let name = format!("{} {}", first, last);
-                let headshot =
-                    format!("https://assets.nhle.com/mugs/nhl/latest/{}.png", player_id);
-                (name, player.position.clone(), player.team_abbrev.clone(), headshot)
-            });
-        }
-    }
-
-    // Clear existing pool for this session and insert fresh
     state.db.delete_player_pool(&draft_id).await?;
+    state
+        .db
+        .insert_player_pool(&draft_id, pool_to_inserts(&draft_id, pool))
+        .await?;
 
-    for (nhl_id, (name, position, nhl_team, headshot_url)) in &players_map {
-        state
-            .db
-            .insert_single_pool_player(&draft_id, *nhl_id, name, position, nhl_team, headshot_url)
-            .await?;
-    }
+    let rows = state.db.get_player_pool(&draft_id).await?;
 
-    // Return the populated pool
-    let pool = state.db.get_player_pool(&draft_id).await?;
+    state
+        .draft_hub
+        .broadcast(&draft_id, DraftEvent::PlayerPoolUpdated)
+        .await;
 
-    Ok(json_success(pool))
+    Ok(json_success(rows))
 }
 
 /// POST /api/leagues/:league_id/draft/randomize-order

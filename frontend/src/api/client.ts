@@ -11,6 +11,7 @@ import { TopSkater, Skater } from '@/types/skaters';
 import { PlayoffsResponse } from '@/types/playoffs';
 import { TeamStats } from '@/types/teamStats';
 import { League } from '@/types/league';
+import { APP_CONFIG } from '@/config';
 
 // API client functions
 export const api = {
@@ -156,7 +157,7 @@ export const api = {
     );
   },
 
-  async getPlayoffs(season: string = "20252026"): Promise<PlayoffsResponse> {
+  async getPlayoffs(season: string = APP_CONFIG.DEFAULT_SEASON): Promise<PlayoffsResponse> {
     return fetchApi<PlayoffsResponse>(`nhl/playoffs?season=${season}`, {
       fallback: {
         currentRound: 0,
