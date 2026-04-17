@@ -7,8 +7,6 @@ export type SeriesStateCode =
   | "aboutToAdvance"
   | "advanced";
 
-export type GoalieStartStatus = "confirmed" | "probable" | "backup" | "unknown";
-
 export interface PlayerForecastCell {
   playerName: string;
   position: string;
@@ -45,22 +43,6 @@ export interface MyTeamStatus {
   pointsToday: number;
   playersActiveToday: number;
   totalRosterSize: number;
-}
-
-export interface MyGoalieSignal {
-  playerName: string;
-  nhlTeam: string;
-  nhlTeamLogo: string;
-  opponentAbbrev: string;
-  opponentLogo: string;
-  gameStartUtc: string | null;
-  venue: string | null;
-  nhlId: number;
-  headshotUrl: string;
-  startStatus: GoalieStartStatus;
-  playoffRecord: string | null;
-  playoffGaa: number | null;
-  playoffSavePctg: number | null;
 }
 
 export interface MyPlayerInGame {
@@ -108,7 +90,6 @@ export interface PulseResponse {
   generatedAt: string;
   myTeam: MyTeamStatus | null;
   seriesForecast: FantasyTeamForecast[];
-  myGoaliesTonight: MyGoalieSignal[];
   myGamesTonight: MyGameTonight[];
   leagueBoard: LeagueBoardEntry[];
   hasGamesToday: boolean;

@@ -3,7 +3,6 @@ import LoadingSpinner from "@/components/common/LoadingSpinner";
 import ErrorMessage from "@/components/common/ErrorMessage";
 import Sparkbars from "@/components/common/Sparkbars";
 import SeriesForecastHero from "@/components/pulse/SeriesForecastHero";
-import MyGoalieCard from "@/components/pulse/MyGoalieCard";
 import { usePulse } from "@/features/pulse";
 import { useLeague } from "@/contexts/LeagueContext";
 import { getNHLTeamLogoUrl, getNHLTeamShortName } from "@/utils/nhlTeams";
@@ -21,14 +20,8 @@ const PulsePage = () => {
     return <ErrorMessage message="Failed to load pulse data." />;
   }
 
-  const {
-    myTeam,
-    seriesForecast,
-    myGoaliesTonight,
-    myGamesTonight,
-    leagueBoard,
-    hasGamesToday,
-  } = pulse;
+  const { myTeam, seriesForecast, myGamesTonight, leagueBoard, hasGamesToday } =
+    pulse;
 
   return (
     <div className="space-y-6">
@@ -73,22 +66,6 @@ const PulsePage = () => {
                 accent
               />
             </div>
-          </div>
-        </section>
-      )}
-
-      {/* My Goalies */}
-      {myGoaliesTonight.length > 0 && (
-        <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-          <header className="bg-white px-6 py-3 border-b-2 border-[#1A1A1A]">
-            <h2 className="font-extrabold uppercase tracking-wider text-sm">
-              My Goalies Tonight
-            </h2>
-          </header>
-          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {myGoaliesTonight.map((g) => (
-              <MyGoalieCard key={g.nhlId} goalie={g} />
-            ))}
           </div>
         </section>
       )}

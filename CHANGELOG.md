@@ -4,6 +4,11 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.6.1 — 2026-04-17
+
+### Removed
+- **My Goalies Tonight section** on Pulse — this league doesn't draft or score goalies, so the widget was always empty. Removed the section, the `MyGoalieCard` component, and the backend `compute_my_goalies_tonight` / `derive_start_status` helpers + associated DTOs. `PulseResponse.myGoaliesTonight` is gone; remaining top-down order on Pulse: Series Forecast → Today's Pulse → My Players In Action → League Live Board.
+
 ## v1.6.0 — 2026-04-17
 
 ### Added

@@ -5,8 +5,6 @@ export type {
   FantasyTeamForecast,
   PlayerForecastCell,
   SeriesStateCode,
-  MyGoalieSignal,
-  GoalieStartStatus,
   MyGameTonight,
   MyPlayerInGame,
   LeagueBoardEntry,

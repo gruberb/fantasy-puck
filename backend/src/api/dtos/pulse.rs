@@ -14,7 +14,6 @@ pub struct PulseResponse {
     pub my_team: Option<MyTeamStatus>,
     /// Per-fantasy-team roster × series grid. One entry per fantasy team in the league.
     pub series_forecast: Vec<FantasyTeamForecast>,
-    pub my_goalies_tonight: Vec<MyGoalieSignal>,
     pub my_games_tonight: Vec<MyGameTonight>,
     pub league_board: Vec<LeagueBoardEntry>,
     pub has_games_today: bool,
@@ -79,39 +78,6 @@ pub struct PlayerForecastCell {
     /// Max games remaining in the current series.
     pub games_remaining: u32,
     pub headshot_url: String,
-}
-
-// ---------------------------------------------------------------------------
-// My Goalies Tonight
-// ---------------------------------------------------------------------------
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MyGoalieSignal {
-    pub player_name: String,
-    pub nhl_team: String,
-    pub nhl_team_logo: String,
-    pub opponent_abbrev: String,
-    pub opponent_logo: String,
-    pub game_start_utc: Option<String>,
-    pub venue: Option<String>,
-    pub nhl_id: i64,
-    pub headshot_url: String,
-    /// "Probable", "Confirmed", "Backup", "Unknown" — derived from NHL
-    /// `game-landing.probableGoalies` when available.
-    pub start_status: GoalieStartStatus,
-    pub playoff_record: Option<String>,
-    pub playoff_gaa: Option<f64>,
-    pub playoff_save_pctg: Option<f64>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum GoalieStartStatus {
-    Confirmed,
-    Probable,
-    Backup,
-    Unknown,
 }
 
 // ---------------------------------------------------------------------------

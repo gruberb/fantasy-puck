@@ -6,7 +6,6 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use serde_json::Value;
 use tracing::warn;
 
 use crate::api::dtos::pulse::*;
@@ -110,11 +109,6 @@ async fn generate_pulse(
     let series_forecast = build_series_forecast(&teams_with_players, carousel.as_ref());
     let league_board = build_league_board(state, league_id, &teams_with_players, today, my_team_id, &games_today).await?;
     let my_team = my_team_id.and_then(|id| compose_my_team(&league_board, &teams_with_players, id));
-    let my_goalies_tonight = if let Some(id) = my_team_id {
-        compute_my_goalies_tonight(state, &teams_with_players, id, &games_today).await
-    } else {
-        Vec::new()
-    };
     let my_games_tonight = if let Some(id) = my_team_id {
         compute_my_games_tonight(state, &teams_with_players, id, &games_today).await
     } else {
@@ -127,7 +121,6 @@ async fn generate_pulse(
         generated_at: Utc::now().to_rfc3339(),
         my_team,
         series_forecast,
-        my_goalies_tonight,
         my_games_tonight,
         league_board,
         has_games_today,
@@ -372,133 +365,6 @@ fn compose_my_team(
         players_active_today: entry.players_active_today,
         total_roster_size: roster_size,
     })
-}
-
-// ---------------------------------------------------------------------------
-// My Goalies Tonight
-// ---------------------------------------------------------------------------
-
-async fn compute_my_goalies_tonight(
-    state: &Arc<AppState>,
-    teams: &[FantasyTeamInGame],
-    my_team_id: i64,
-    games_today: &[crate::models::nhl::TodayGame],
-) -> Vec<MyGoalieSignal> {
-    let my_team = match teams.iter().find(|t| t.team_id == my_team_id) {
-        Some(t) => t,
-        None => return Vec::new(),
-    };
-
-    let my_goalies: Vec<&PlayerInGame> = my_team
-        .players
-        .iter()
-        .filter(|p| p.position.eq_ignore_ascii_case("G"))
-        .collect();
-
-    let mut signals = Vec::new();
-    for goalie in my_goalies {
-        // Find today's game for this goalie's team
-        let game = games_today.iter().find(|g| {
-            g.home_team.abbrev == goalie.nhl_team || g.away_team.abbrev == goalie.nhl_team
-        });
-
-        let (opponent_abbrev, venue, start_time, game_id) = match game {
-            Some(g) => {
-                let opp = if g.home_team.abbrev == goalie.nhl_team {
-                    g.away_team.abbrev.clone()
-                } else {
-                    g.home_team.abbrev.clone()
-                };
-                (
-                    opp,
-                    Some(g.venue.default.clone()),
-                    Some(g.start_time_utc.clone()),
-                    Some(g.id),
-                )
-            }
-            None => (String::new(), None, None, None),
-        };
-
-        // Pull probableGoalies from game-landing when we have a game id.
-        let start_status = match game_id {
-            Some(gid) => derive_start_status(state, gid, goalie.nhl_id).await,
-            None => GoalieStartStatus::Unknown,
-        };
-
-        signals.push(MyGoalieSignal {
-            player_name: goalie.player_name.clone(),
-            nhl_team: goalie.nhl_team.clone(),
-            nhl_team_logo: state.nhl_client.get_team_logo_url(&goalie.nhl_team),
-            opponent_abbrev: opponent_abbrev.clone(),
-            opponent_logo: if opponent_abbrev.is_empty() {
-                String::new()
-            } else {
-                state.nhl_client.get_team_logo_url(&opponent_abbrev)
-            },
-            game_start_utc: start_time,
-            venue,
-            nhl_id: goalie.nhl_id,
-            headshot_url: format!(
-                "https://assets.nhle.com/mugs/nhl/latest/{}.png",
-                goalie.nhl_id
-            ),
-            start_status,
-            playoff_record: None,
-            playoff_gaa: None,
-            playoff_save_pctg: None,
-        });
-    }
-    signals
-}
-
-async fn derive_start_status(
-    state: &Arc<AppState>,
-    game_id: u32,
-    player_id: i64,
-) -> GoalieStartStatus {
-    let landing = match state.nhl_client.get_game_landing_raw(game_id).await {
-        Ok(v) => v,
-        Err(_) => return GoalieStartStatus::Unknown,
-    };
-
-    // `matchup.goalieComparison` exposes homeTeam/awayTeam -> players[] with
-    // a `starter: true` flag on game day. Fallback: `matchup.probableGoalies`.
-    if let Some(matchup) = landing.get("matchup") {
-        if let Some(gc) = matchup.get("goalieComparison") {
-            for side in ["homeTeam", "awayTeam"] {
-                if let Some(entry) = gc.get(side) {
-                    if let Some(players) = entry.get("players").and_then(Value::as_array) {
-                        for p in players {
-                            let pid = p.get("playerId").and_then(Value::as_i64).unwrap_or(0);
-                            if pid == player_id {
-                                let is_starter = p
-                                    .get("starter")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false);
-                                return if is_starter {
-                                    GoalieStartStatus::Confirmed
-                                } else {
-                                    GoalieStartStatus::Backup
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(probs) = matchup.get("probableGoalies") {
-            for side in ["home", "away"] {
-                if let Some(g) = probs.get(side) {
-                    let pid = g.get("playerId").and_then(Value::as_i64).unwrap_or(0);
-                    if pid == player_id {
-                        return GoalieStartStatus::Probable;
-                    }
-                }
-            }
-        }
-    }
-
-    GoalieStartStatus::Unknown
 }
 
 // ---------------------------------------------------------------------------
