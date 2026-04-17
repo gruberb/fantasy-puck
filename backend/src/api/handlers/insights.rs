@@ -14,7 +14,6 @@ use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
 use crate::error::Result;
-use crate::models::fantasy::PlayerStats;
 
 /// Calculate the current NHL "hockey date" in Eastern Time (proper DST handling)
 pub fn hockey_today() -> String {
@@ -80,60 +79,151 @@ async fn compute_signals(
     league_id: &str,
     hockey_today: &str,
 ) -> Result<InsightsSignals> {
-    // Run independent signal computations concurrently
-    let hot_fut = compute_hot_players(state, league_id);
-    let cold_fut = compute_cold_hands(state, league_id);
-    let contenders_fut = compute_cup_contenders(state);
-    let projections_fut = compute_series_projections(state);
-    let games_fut = compute_todays_games(state, hockey_today);
-    let fantasy_fut = compute_fantasy_race(state, league_id, hockey_today);
-    let sleepers_fut = compute_sleeper_alerts(state, league_id);
-    let news_fut = scrape_headlines();
-
-    let (hot, cold, contenders, projections, games, fantasy, sleepers, news) = tokio::join!(
-        hot_fut,
-        cold_fut,
-        contenders_fut,
-        projections_fut,
-        games_fut,
-        fantasy_fut,
-        sleepers_fut,
-        news_fut
+    // Run independent signal computations concurrently. Personal surfaces
+    // (fantasy race, rivalry, sleeper watch) live on Pulse / race-odds now;
+    // this signal set is strictly NHL-centric.
+    let (hot, cold, projections, games, news) = tokio::join!(
+        compute_hot_players(state, league_id),
+        compute_cold_hands(state, league_id),
+        compute_series_projections(state),
+        compute_todays_games(state, hockey_today),
+        scrape_headlines(),
     );
-
-    let news_headlines_all = news.unwrap_or_default();
-    let (plain_news, injury_report) = split_headlines_and_injuries(news_headlines_all, state, league_id).await;
 
     let mut todays_games = games.unwrap_or_default();
     enrich_games_with_ownership(state, league_id, &mut todays_games).await;
 
+    let mut series_projections = projections.unwrap_or_default();
+    enrich_projections(state, league_id, &mut series_projections).await;
+
+    let (hot_players, hot_cold_is_regular_season) = match hot {
+        Ok(result) => (result.signals, result.is_regular_season),
+        Err(_) => (Vec::new(), false),
+    };
+
     Ok(InsightsSignals {
-        hot_players: hot.unwrap_or_default(),
+        hot_players,
         cold_hands: cold.unwrap_or_default(),
-        cup_contenders: contenders.unwrap_or_default(),
-        series_projections: projections.unwrap_or_default(),
+        series_projections,
         todays_games,
-        fantasy_race: fantasy.unwrap_or_default(),
-        sleeper_alerts: sleepers.unwrap_or_default(),
-        news_headlines: plain_news,
-        injury_report,
+        news_headlines: news.unwrap_or_default(),
+        hot_cold_is_regular_season,
     })
+}
+
+/// Fill in team strength (standings points) and fantasy ownership tags on
+/// each series projection. Two NHL API hits (standings + roster mapping);
+/// failures degrade gracefully to a bare projection.
+async fn enrich_projections(
+    state: &Arc<AppState>,
+    league_id: &str,
+    projections: &mut [TeamSeriesProjection],
+) {
+    if projections.is_empty() {
+        return;
+    }
+
+    // Team ratings blend season points with L10 form (shared helper).
+    let ratings: HashMap<String, f32> = match state.nhl_client.get_standings_raw().await {
+        Ok(json) => crate::utils::team_ratings::from_standings(&json),
+        Err(_) => HashMap::new(),
+    };
+
+    // Fantasy ownership map: nhl_team_abbrev -> [{fantasy_team_name, count}].
+    let ownership: HashMap<String, Vec<crate::api::dtos::insights::RosteredPlayerTag>> =
+        if league_id.is_empty() {
+            HashMap::new()
+        } else {
+            let abbrevs: HashSet<&str> = projections.iter().map(|p| p.team_abbrev.as_str()).collect();
+            let abbrev_vec: Vec<&str> = abbrevs.into_iter().collect();
+            match state
+                .db
+                .get_fantasy_teams_for_nhl_teams(&abbrev_vec, league_id)
+                .await
+            {
+                Ok(teams) => {
+                    let mut by_abbrev: HashMap<String, HashMap<String, usize>> = HashMap::new();
+                    for team in &teams {
+                        for player in &team.players {
+                            *by_abbrev
+                                .entry(player.nhl_team.clone())
+                                .or_default()
+                                .entry(team.team_name.clone())
+                                .or_insert(0) += 1;
+                        }
+                    }
+                    by_abbrev
+                        .into_iter()
+                        .map(|(abbrev, counts)| {
+                            let mut tags: Vec<_> = counts
+                                .into_iter()
+                                .map(|(fantasy_team_name, count)| {
+                                    crate::api::dtos::insights::RosteredPlayerTag {
+                                        fantasy_team_name,
+                                        count,
+                                    }
+                                })
+                                .collect();
+                            tags.sort_by(|a, b| b.count.cmp(&a.count));
+                            (abbrev, tags)
+                        })
+                        .collect()
+                }
+                Err(_) => HashMap::new(),
+            }
+        };
+
+    for p in projections.iter_mut() {
+        p.team_rating = ratings.get(&p.team_abbrev).copied();
+        p.opponent_rating = ratings.get(&p.opponent_abbrev).copied();
+        p.rostered_tags = ownership.get(&p.team_abbrev).cloned().unwrap_or_default();
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Hot players (top 5 by recent form)
 // ---------------------------------------------------------------------------
 
+/// Return value from [`compute_hot_players`] carrying both the ranked
+/// signals and a flag indicating whether the data came from regular-season
+/// leaders (pre-playoff fallback). The flag bubbles up to `InsightsSignals`
+/// so the UI and Claude narrative can use the correct "season pts" vs
+/// "playoff pts" label.
+struct HotPlayersResult {
+    signals: Vec<HotPlayerSignal>,
+    is_regular_season: bool,
+}
+
 async fn compute_hot_players(
     state: &Arc<AppState>,
     league_id: &str,
-) -> Result<Vec<HotPlayerSignal>> {
-    let stats = state
+) -> Result<HotPlayersResult> {
+    let playoff_stats = state
         .nhl_client
         .get_skater_stats(&season(), game_type())
         .await?;
 
-    // Take top 20 by playoff points
+    // Playoffs haven't produced any point totals yet — fall back to
+    // regular-season leaders so the Hot card isn't empty the night before
+    // Game 1. We also drop the "form L5" fetch in that case because playoff
+    // game logs are empty; regular-season L5 comes instead.
+    let playoff_has_data = playoff_stats
+        .points
+        .iter()
+        .any(|p| (p.value as i32) > 0);
+    let use_rs_fallback = !playoff_has_data;
+
+    let (stats, fallback_game_type) = if use_rs_fallback {
+        let rs = state
+            .nhl_client
+            .get_skater_stats(&season(), 2)
+            .await?;
+        (rs, 2u8)
+    } else {
+        (playoff_stats, game_type())
+    };
+
+    // Take top 20 by the relevant season's points.
     let mut top_players = stats.points.clone();
     top_players.sort_by(|a, b| (b.value as i32).cmp(&(a.value as i32)));
     top_players.truncate(20);
@@ -154,7 +244,7 @@ async fn compute_hot_players(
             async move {
                 match state
                     .nhl_client
-                    .get_player_form(player_id, &season(), game_type(), 5)
+                    .get_player_form(player_id, &season(), fallback_game_type, 5)
                     .await
                 {
                     Ok((goals, assists, points)) => Some((player_id, goals, assists, points, 5usize)),
@@ -187,6 +277,7 @@ async fn compute_hot_players(
         signals.push((
             player_id,
             HotPlayerSignal {
+                nhl_id: player_id,
                 name,
                 nhl_team: player.team_abbrev.clone(),
                 position: player.position.clone(),
@@ -247,80 +338,10 @@ async fn compute_hot_players(
         })
         .collect();
 
-    Ok(signals)
-}
-
-// ---------------------------------------------------------------------------
-// Cup contenders (teams leading their series or with most wins)
-// ---------------------------------------------------------------------------
-
-async fn compute_cup_contenders(state: &Arc<AppState>) -> Result<Vec<ContenderSignal>> {
-    let carousel = state
-        .nhl_client
-        .get_playoff_carousel(format!("{}", season()))
-        .await?;
-
-    let carousel = match carousel {
-        Some(c) => c,
-        None => return Ok(Vec::new()),
-    };
-
-    // Find the latest round with active series
-    let current_round = carousel.current_round as u32;
-    let active_round = carousel
-        .rounds
-        .iter()
-        .find(|r| r.round_number == current_round as i64);
-
-    let round = match active_round {
-        Some(r) => r,
-        None => return Ok(Vec::new()),
-    };
-
-    let mut contenders: Vec<ContenderSignal> = Vec::new();
-
-    for series in &round.series {
-        let top_wins = series.top_seed.wins as u32;
-        let bot_wins = series.bottom_seed.wins as u32;
-
-        // Report the team that is leading (or both if tied)
-        if top_wins >= bot_wins {
-            let state = crate::utils::series_projection::classify(top_wins, bot_wins);
-            contenders.push(ContenderSignal {
-                team_abbrev: series.top_seed.abbrev.clone(),
-                series_title: series.series_label.clone(),
-                wins: top_wins,
-                opponent_abbrev: series.bottom_seed.abbrev.clone(),
-                opponent_wins: bot_wins,
-                round: current_round,
-                series_state: state,
-                series_label: state.label(top_wins, bot_wins),
-                odds_to_advance: crate::utils::series_projection::probability_to_advance(top_wins, bot_wins),
-                games_remaining: crate::utils::series_projection::games_remaining(top_wins, bot_wins),
-            });
-        }
-        if bot_wins > top_wins {
-            let state = crate::utils::series_projection::classify(bot_wins, top_wins);
-            contenders.push(ContenderSignal {
-                team_abbrev: series.bottom_seed.abbrev.clone(),
-                series_title: series.series_label.clone(),
-                wins: bot_wins,
-                opponent_abbrev: series.top_seed.abbrev.clone(),
-                opponent_wins: top_wins,
-                round: current_round,
-                series_state: state,
-                series_label: state.label(bot_wins, top_wins),
-                odds_to_advance: crate::utils::series_projection::probability_to_advance(bot_wins, top_wins),
-                games_remaining: crate::utils::series_projection::games_remaining(bot_wins, top_wins),
-            });
-        }
-    }
-
-    // Sort by wins descending, take top 3
-    contenders.sort_by(|a, b| b.wins.cmp(&a.wins));
-    contenders.truncate(3);
-
-    Ok(contenders)
+    Ok(HotPlayersResult {
+        signals,
+        is_regular_season: use_rs_fallback,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -604,159 +625,6 @@ fn extract_goalie_stats(gc: &serde_json::Value, side: &str) -> Option<GoalieStat
 }
 
 // ---------------------------------------------------------------------------
-// Fantasy race (only when league_id present)
-// ---------------------------------------------------------------------------
-
-async fn compute_fantasy_race(
-    state: &Arc<AppState>,
-    league_id: &str,
-    hockey_today: &str,
-) -> Result<Vec<FantasyRaceSignal>> {
-    if league_id.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let teams = state.db.get_all_teams(league_id).await?;
-    let stats = state
-        .nhl_client
-        .get_skater_stats(&season(), game_type())
-        .await?;
-
-    // Determine which NHL teams play today
-    let schedule = state
-        .nhl_client
-        .get_schedule_by_date(hockey_today)
-        .await
-        .ok();
-    let today_nhl_teams: HashSet<String> = schedule
-        .as_ref()
-        .map(|s| {
-            s.games_for_date(hockey_today)
-                .iter()
-                .flat_map(|g| {
-                    vec![
-                        g.home_team.abbrev.clone(),
-                        g.away_team.abbrev.clone(),
-                    ]
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let mut race: Vec<FantasyRaceSignal> = Vec::new();
-
-    for team in &teams {
-        let players = match state.db.get_team_players(team.id).await {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-
-        // Calculate total points from playoff stats
-        let mut total_points = 0i32;
-        let mut active_today = 0usize;
-
-        for player in &players {
-            // Calculate points
-            let mut ps = PlayerStats::default();
-            let calculated = ps.calculate_player_points(player.nhl_id, &stats);
-            total_points += calculated.total_points;
-
-            // Check if player's NHL team plays today
-            if today_nhl_teams.contains(&player.nhl_team) {
-                active_today += 1;
-            }
-        }
-
-        race.push(FantasyRaceSignal {
-            team_name: team.name.clone(),
-            total_points,
-            rank: 0, // assigned after sorting
-            players_active_today: active_today,
-            sparkline: Vec::new(),
-            delta_yesterday: 0,
-        });
-    }
-
-    // Sort by total_points descending and assign ranks
-    race.sort_by(|a, b| b.total_points.cmp(&a.total_points));
-    for (i, entry) in race.iter_mut().enumerate() {
-        entry.rank = i + 1;
-    }
-
-    // Enrich with 5-day sparkline + yesterday delta from daily_rankings.
-    let sparklines = state.db.get_team_sparklines(league_id, 5).await.unwrap_or_default();
-    let team_id_by_name: HashMap<String, i64> = teams.iter().map(|t| (t.name.clone(), t.id)).collect();
-    for entry in race.iter_mut() {
-        if let Some(id) = team_id_by_name.get(&entry.team_name) {
-            if let Some(vals) = sparklines.get(id) {
-                entry.sparkline = vals.clone();
-                entry.delta_yesterday = vals.last().copied().unwrap_or(0);
-            }
-        }
-    }
-
-    Ok(race)
-}
-
-// ---------------------------------------------------------------------------
-// Sleeper alerts (only when league_id present)
-// ---------------------------------------------------------------------------
-
-async fn compute_sleeper_alerts(
-    state: &Arc<AppState>,
-    league_id: &str,
-) -> Result<Vec<SleeperAlertSignal>> {
-    if league_id.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let sleepers = state.db.get_all_sleepers(league_id).await?;
-    let stats = state
-        .nhl_client
-        .get_skater_stats(&season(), game_type())
-        .await?;
-
-    // Build fantasy team name map
-    let fantasy_teams = state.db.get_all_teams(league_id).await?;
-    let team_name_map: HashMap<i64, String> = fantasy_teams
-        .into_iter()
-        .map(|t| (t.id, t.name))
-        .collect();
-
-    let mut alerts: Vec<SleeperAlertSignal> = Vec::new();
-
-    for sleeper in &sleepers {
-        let mut goals = 0i32;
-        let mut assists = 0i32;
-
-        if let Some(p) = stats.goals.iter().find(|p| p.id as i64 == sleeper.nhl_id) {
-            goals = p.value as i32;
-        }
-        if let Some(p) = stats.assists.iter().find(|p| p.id as i64 == sleeper.nhl_id) {
-            assists = p.value as i32;
-        }
-
-        let fantasy_team = sleeper
-            .team_id
-            .and_then(|tid| team_name_map.get(&tid).cloned());
-
-        alerts.push(SleeperAlertSignal {
-            name: sleeper.name.clone(),
-            nhl_team: sleeper.nhl_team.clone(),
-            fantasy_team,
-            points: goals + assists,
-            goals,
-            assists,
-        });
-    }
-
-    // Sort by points descending
-    alerts.sort_by(|a, b| b.points.cmp(&a.points));
-
-    Ok(alerts)
-}
-
-// ---------------------------------------------------------------------------
 // News headlines from Daily Faceoff
 // ---------------------------------------------------------------------------
 
@@ -792,41 +660,7 @@ async fn scrape_headlines() -> Result<Vec<String>> {
         }
     }
 
-    // 2. Scrape injury report
-    if let Ok(resp) = client
-        .get("https://www.dailyfaceoff.com/nhl-injury-report")
-        .header("User-Agent", "Mozilla/5.0 (compatible; FantasyHockeyBot/1.0)")
-        .send()
-        .await
-    {
-        if let Ok(html) = resp.text().await {
-            let document = scraper::Html::parse_document(&html);
-            // Try to get injury entries — format varies but typically has player name + status
-            let selectors = [
-                ".injury-table tr",
-                ".player-injury-item",
-                "table.injuries tr",
-                ".injury-report-card",
-            ];
-            for sel_str in &selectors {
-                if let Ok(selector) = scraper::Selector::parse(sel_str) {
-                    for element in document.select(&selector) {
-                        let text: String = element.text().collect::<Vec<_>>().join(" ");
-                        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-                        if text.len() > 15 && (text.contains("Injured") || text.contains("Day-to-Day") || text.contains("IR") || text.contains("Out") || text.contains("Game Time Decision") || text.contains("GTD")) {
-                            let injury_note = format!("[INJURY] {}", text.trim());
-                            if !all_headlines.contains(&injury_note) {
-                                all_headlines.push(injury_note);
-                            }
-                        }
-                    }
-                }
-                if all_headlines.len() >= 15 { break; }
-            }
-        }
-    }
-
-    all_headlines.truncate(15);
+    all_headlines.truncate(10);
     if all_headlines.is_empty() {
         warn!("Headline scraper returned 0 results — DailyFaceoff selectors may be broken");
     }
@@ -869,9 +703,7 @@ fn fallback_narratives() -> InsightsNarratives {
         todays_watch: msg.clone(),
         game_narratives: Vec::new(),
         hot_players: msg.clone(),
-        cup_contenders: msg.clone(),
-        fantasy_race: msg.clone(),
-        sleeper_watch: msg,
+        bracket: msg,
     }
 }
 
@@ -920,27 +752,26 @@ async fn call_claude_api(signals: &InsightsSignals) -> std::result::Result<Insig
     let request_body = serde_json::json!({
         "model": "claude-haiku-4-5-20251001",
         "max_tokens": 3072,
-        "system": format!(r#"You're a veteran hockey analyst writing for a small friend-group fantasy league newsletter. Your style is knowledgeable, engaging, and opinionated — like a bar conversation with a hockey encyclopedia.
+        "system": format!(r#"You are a veteran hockey columnist — think The Athletic, or a barstool analyst who actually watches every game. Dry, specific, opinionated, grounded in the numbers provided. You do NOT write like a marketing bot: no "dive in", "unleash", "game-changer", "exciting journey", hype adjectives, or bulleted listicles. Short punchy sentences mixed with longer analytical ones. Opinions should follow from the data — state them flatly, not breathlessly.
 
-CRITICAL RULES:
-- ONLY reference stats, player names, records, and facts from the data provided below
-- NEVER make up or hallucinate any statistics, records, or player information
-- If data is missing or empty, say "stats aren't available yet" rather than inventing numbers
-- Wrap ALL player names in **double asterisks** for bold formatting (e.g. **Connor McDavid**)
+HARD RULES:
+- Only reference stats, player names, records, and facts from the data provided below.
+- Never make up or hallucinate statistics, records, or player information.
+- If data is missing, say "stats aren't available yet" rather than inventing.
+- Wrap player names in **double asterisks** for bold (e.g. **Connor McDavid**).
+- The `hotColdIsRegularSeason` flag in the signals tells you whether hot/cold totals are playoff points or regular-season points. If it's `true`, say "regular-season points" — NEVER "playoff points" — because the playoffs haven't produced data yet.
 
-Return JSON with these exact fields:
+This page is NHL-centric — the league-race narrative lives elsewhere. Stay out of fantasy-standings talk here; only note ownership tags when they sharpen an NHL story.
 
-- **todays_watch**: A brief 1-2 sentence overview of today's slate — the big picture.
+Return JSON with exactly these fields:
 
-- **game_narratives**: An array of exactly {num_games} strings, one per game IN THE SAME ORDER as the games listed below. Each string should be 2-3 punchy sentences previewing that specific matchup: key players, goalie edge, series stakes, streaks, and last game results. Do NOT start with the team matchup (e.g. "CBJ @ BUF:") — the matchup is already shown in the UI header. Jump straight into the analysis.
+- **todays_watch**: 1–2 sentences on the slate's big picture. No preamble.
 
-- **hot_players**: 3-4 sentences analyzing the hottest players. Reference actual form stats and NHL Edge data (skating speed, shot speed) when available. Mention fantasy team owners.
+- **game_narratives**: an array of exactly {num_games} strings, one per game in the same order. 2–3 sentences previewing each matchup — who's hot, where the edge is, what's at stake. Do NOT repeat the team names in the prefix; the header shows them.
 
-- **cup_contenders**: 3-4 sentences on playoff series using actual records and goalie stats.
+- **hot_players**: 3–4 sentences on the hottest skaters. Cite form numbers and NHL Edge data when present. Respect the `hotColdIsRegularSeason` flag: call it "regular-season points" when true.
 
-- **fantasy_race**: 3-4 sentences on the fantasy race using actual point totals.
-
-- **sleeper_watch**: 3-4 sentences on sleeper picks using actual stats."#),
+- **bracket**: 3–4 sentences on the playoff picture — who's favored, where the upsets could come from, which team's Stanley Cup path looks easiest or hardest. Lean on series state + team ratings from the data."#),
         "messages": [
             {
                 "role": "user",
@@ -1015,18 +846,8 @@ Return JSON with these exact fields:
             .and_then(|v| v.as_str())
             .unwrap_or("No update available.")
             .to_string(),
-        cup_contenders: parsed
-            .get("cup_contenders")
-            .and_then(|v| v.as_str())
-            .unwrap_or("No update available.")
-            .to_string(),
-        fantasy_race: parsed
-            .get("fantasy_race")
-            .and_then(|v| v.as_str())
-            .unwrap_or("No update available.")
-            .to_string(),
-        sleeper_watch: parsed
-            .get("sleeper_watch")
+        bracket: parsed
+            .get("bracket")
             .and_then(|v| v.as_str())
             .unwrap_or("No update available.")
             .to_string(),
@@ -1093,6 +914,22 @@ async fn compute_cold_hands(
         }
     }
 
+    // Probe one rostered player's playoff game log to decide whether
+    // playoff data exists; if it's empty for the pilot we fall back to
+    // regular-season game logs so the card isn't silent pre-playoffs.
+    let playoff_has_data = if let Some((pid, _, _, _, _)) = rostered.first() {
+        matches!(
+            state
+                .nhl_client
+                .get_player_game_log(*pid, &season(), game_type())
+                .await,
+            Ok(log) if !log.game_log.is_empty()
+        )
+    } else {
+        false
+    };
+    let log_game_type = if playoff_has_data { game_type() } else { 2u8 };
+
     // Fetch form (L5) for each rostered player, keep those with games>=3 and points<=1.
     let form_futures: Vec<_> = rostered
         .iter()
@@ -1102,7 +939,7 @@ async fn compute_cold_hands(
             async move {
                 match state
                     .nhl_client
-                    .get_player_game_log(pid, &season(), game_type())
+                    .get_player_game_log(pid, &season(), log_game_type)
                     .await
                 {
                     Ok(log) => {
@@ -1135,6 +972,7 @@ async fn compute_cold_hands(
             continue;
         }
         cold.push(HotPlayerSignal {
+            nhl_id: *nhl_id,
             name: name.clone(),
             nhl_team: team.clone(),
             position: position.clone(),
@@ -1205,6 +1043,9 @@ async fn compute_series_projections(
                 series_label: state_code.label(wins, opp_wins),
                 odds_to_advance: sp::probability_to_advance(wins, opp_wins),
                 games_remaining: sp::games_remaining(wins, opp_wins),
+                team_rating: None,     // populated by enrich_projections
+                opponent_rating: None, // populated by enrich_projections
+                rostered_tags: Vec::new(),
             });
         }
     }
@@ -1224,73 +1065,3 @@ async fn compute_series_projections(
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
-// Split scraped headlines into plain news + structured injuries
-// ---------------------------------------------------------------------------
-
-async fn split_headlines_and_injuries(
-    raw: Vec<String>,
-    state: &Arc<AppState>,
-    league_id: &str,
-) -> (Vec<String>, Vec<InjuryEntry>) {
-    let mut news = Vec::new();
-    let mut injuries = Vec::new();
-
-    // Ownership map: nhl_name -> fantasy team name (keyed loosely by player name
-    // because the scraper gives us raw text, not a player id).
-    let mut owned_names: HashMap<String, String> = HashMap::new();
-    if !league_id.is_empty() {
-        if let Ok(groups) = state.db.get_nhl_teams_and_players(league_id).await {
-            for g in groups {
-                for p in g.players {
-                    owned_names.insert(p.name.to_lowercase(), p.fantasy_team_name);
-                }
-            }
-        }
-    }
-
-    for line in raw {
-        if let Some(stripped) = line.strip_prefix("[INJURY] ") {
-            // Heuristic extraction: first two words are usually the player name;
-            // look for a status keyword after that.
-            let status_keywords = ["Out", "IR", "Day-to-Day", "DTD", "GTD", "Game Time Decision"];
-            let status = status_keywords
-                .iter()
-                .find(|k| stripped.contains(*k))
-                .map(|s| s.to_string());
-            let lower = stripped.to_lowercase();
-            let matched_owner = owned_names
-                .iter()
-                .find_map(|(name, team)| {
-                    if lower.contains(name) {
-                        Some((name.clone(), team.clone()))
-                    } else {
-                        None
-                    }
-                });
-            let (player_name, fantasy_team) = match matched_owner {
-                Some((pn, ft)) => (Some(pn), Some(ft)),
-                None => {
-                    // Fallback: grab first two words as a guess at the player name.
-                    let parts: Vec<&str> = stripped.split_whitespace().take(2).collect();
-                    let guess = if parts.len() == 2 {
-                        Some(format!("{} {}", parts[0], parts[1]))
-                    } else {
-                        None
-                    };
-                    (guess, None)
-                }
-            };
-            injuries.push(InjuryEntry {
-                raw: stripped.to_string(),
-                player_name,
-                status,
-                fantasy_team,
-            });
-        } else {
-            news.push(line);
-        }
-    }
-
-    (news, injuries)
-}

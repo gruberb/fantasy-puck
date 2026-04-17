@@ -8,6 +8,7 @@ export type SeriesStateCode =
   | "advanced";
 
 export interface PlayerForecastCell {
+  nhlId: number;
   playerName: string;
   position: string;
   nhlTeam: string;
@@ -30,6 +31,8 @@ export interface FantasyTeamForecast {
   playersEliminated: number;
   playersFacingElimination: number;
   playersTrailing: number;
+  /** Players whose series is currently tied. Separate from `playersTrailing`. */
+  playersTied: number;
   playersLeading: number;
   playersAdvanced: number;
   cells: PlayerForecastCell[];
@@ -94,4 +97,6 @@ export interface PulseResponse {
   leagueBoard: LeagueBoardEntry[];
   hasGamesToday: boolean;
   hasLiveGames: boolean;
+  /** Personal narrative from Claude Sonnet 4.6, or null if unavailable. */
+  narrative: string | null;
 }

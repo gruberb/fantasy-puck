@@ -3,6 +3,7 @@ import { API_URL } from "@/config";
 import { useLeague } from "@/contexts/LeagueContext";
 
 export interface HotPlayerSignal {
+  nhlId: number;
   name: string;
   nhlTeam: string;
   position: string;
@@ -26,19 +27,6 @@ export type SeriesStateCode =
   | "aboutToAdvance"
   | "advanced";
 
-export interface ContenderSignal {
-  teamAbbrev: string;
-  seriesTitle: string;
-  wins: number;
-  opponentAbbrev: string;
-  opponentWins: number;
-  round: number;
-  seriesState: SeriesStateCode;
-  seriesLabel: string;
-  oddsToAdvance: number;
-  gamesRemaining: number;
-}
-
 export interface TeamSeriesProjection {
   teamAbbrev: string;
   teamName: string;
@@ -51,13 +39,9 @@ export interface TeamSeriesProjection {
   seriesLabel: string;
   oddsToAdvance: number;
   gamesRemaining: number;
-}
-
-export interface InjuryEntry {
-  raw: string;
-  playerName: string | null;
-  status: string | null;
-  fantasyTeam: string | null;
+  teamRating: number | null;
+  opponentRating: number | null;
+  rosteredTags: RosteredPlayerTag[];
 }
 
 export interface RosteredPlayerTag {
@@ -103,43 +87,21 @@ export interface TodaysGameSignal {
   rosteredPlayerTags: RosteredPlayerTag[];
 }
 
-export interface FantasyRaceSignal {
-  teamName: string;
-  totalPoints: number;
-  rank: number;
-  playersActiveToday: number;
-  sparkline: number[];
-  deltaYesterday: number;
-}
-
-export interface SleeperAlertSignal {
-  name: string;
-  nhlTeam: string;
-  fantasyTeam: string | null;
-  points: number;
-  goals: number;
-  assists: number;
-}
-
 export interface InsightsNarratives {
   todaysWatch: string;
   gameNarratives: string[];
   hotPlayers: string;
-  cupContenders: string;
-  fantasyRace: string;
-  sleeperWatch: string;
+  bracket: string;
 }
 
 export interface InsightsSignals {
   hotPlayers: HotPlayerSignal[];
   coldHands: HotPlayerSignal[];
-  cupContenders: ContenderSignal[];
   seriesProjections: TeamSeriesProjection[];
   todaysGames: TodaysGameSignal[];
-  fantasyRace: FantasyRaceSignal[];
-  sleeperAlerts: SleeperAlertSignal[];
   newsHeadlines: string[];
-  injuryReport: InjuryEntry[];
+  /** True when Hot/Cold points are from the regular season (pre-playoff fallback). */
+  hotColdIsRegularSeason: boolean;
 }
 
 export interface InsightsResponse {

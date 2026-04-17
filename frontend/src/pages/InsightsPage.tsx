@@ -1,31 +1,28 @@
 import LoadingSpinner from "@/components/common/LoadingSpinner";
 import ErrorMessage from "@/components/common/ErrorMessage";
-import Sparkbars from "@/components/common/Sparkbars";
 import { useInsights } from "@/features/insights";
-import { getNHLTeamFullName, getNHLTeamShortName, getNHLTeamLogoUrl } from "@/utils/nhlTeams";
+// RaceOddsSection is a Pulse surface (personal/league projections); Insights
+// stays NHL-centric. The Fantasy Champion leaderboard (no-league view) lives
+// alongside the Stanley Cup view instead.
+import { FantasyChampionBoard } from "@/features/race-odds/components/FantasyChampionBoard";
+import { useRaceOdds } from "@/features/race-odds/hooks/use-race-odds";
+import { PlayoffBracketTree } from "@/features/insights/components/PlayoffBracketTree";
+import { StanleyCupOdds } from "@/features/insights/components/StanleyCupOdds";
+import {
+  getNHLTeamShortName,
+  getNHLTeamLogoUrl,
+  nhlPlayerProfileUrl,
+} from "@/utils/nhlTeams";
 import type {
   HotPlayerSignal,
-  ContenderSignal,
   TodaysGameSignal,
-  FantasyRaceSignal,
-  SleeperAlertSignal,
-  InjuryEntry,
-  TeamSeriesProjection,
-  SeriesStateCode,
 } from "@/features/insights";
-
-const SERIES_STATE_STYLES: Record<SeriesStateCode, string> = {
-  eliminated: "bg-[#7F1D1D] text-white",
-  facingElim: "bg-[#DC2626] text-white",
-  trailing: "bg-[#FB923C] text-[#1A1A1A]",
-  tied: "bg-[#E5E7EB] text-[#1A1A1A]",
-  leading: "bg-[#86EFAC] text-[#1A1A1A]",
-  aboutToAdvance: "bg-[#16A34A] text-white",
-  advanced: "bg-[#14532D] text-white",
-};
 
 const InsightsPage = () => {
   const { insights, isLoading, error, refetch } = useInsights();
+  // Pull the global Fantasy Champion leaderboard — Insights shows this when
+  // there's no active league; personal race/rivalry content lives on Pulse.
+  const { data: raceOdds } = useRaceOdds();
 
   if (isLoading) {
     return <LoadingSpinner size="large" message="Generating insights..." />;
@@ -63,13 +60,20 @@ const InsightsPage = () => {
         </InsightCard>
       )}
 
-      {/* Hot Hands + Cold Hands split */}
+      {/* Hot Hands + Cold Hands — stacked rows so each gets full width and
+          cards don't clip against a half-width column. */}
       {(narratives.hotPlayers ||
         signals.hotPlayers.length > 0 ||
         signals.coldHands.length > 0) && (
         <InsightCard accent="#EF4444" title="Hot + Cold">
           <Narrative text={narratives.hotPlayers} />
-          <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {signals.hotColdIsRegularSeason && (
+            <p className="text-[11px] text-[var(--color-ink-muted)] mt-1 italic">
+              Playoff data isn't live yet — points below reflect the regular
+              season.
+            </p>
+          )}
+          <div className="mt-4 space-y-5">
             <div>
               <p className="text-[10px] uppercase tracking-widest text-[#DC2626] font-bold mb-2">
                 Hot
@@ -79,9 +83,15 @@ const InsightsPage = () => {
                   No hot hands yet — check back after tonight's games.
                 </p>
               ) : (
-                <div className="flex gap-3 overflow-x-auto pb-2">
+                <div className="flex gap-3 overflow-x-auto pb-2 items-stretch">
                   {signals.hotPlayers.map((p, i) => (
-                    <HotPlayerCard key={i} player={p} rank={i + 1} tone="hot" />
+                    <HotPlayerCard
+                      key={i}
+                      player={p}
+                      rank={i + 1}
+                      tone="hot"
+                      isRegularSeason={signals.hotColdIsRegularSeason}
+                    />
                   ))}
                 </div>
               )}
@@ -95,13 +105,14 @@ const InsightsPage = () => {
                   No one slumping yet — everyone's earning their keep.
                 </p>
               ) : (
-                <div className="flex gap-3 overflow-x-auto pb-2">
+                <div className="flex gap-3 overflow-x-auto pb-2 items-stretch">
                   {signals.coldHands.map((p, i) => (
                     <HotPlayerCard
                       key={i}
                       player={p}
                       rank={i + 1}
                       tone="cold"
+                      isRegularSeason={signals.hotColdIsRegularSeason}
                     />
                   ))}
                 </div>
@@ -111,97 +122,35 @@ const InsightsPage = () => {
         </InsightCard>
       )}
 
-      {/* Cup Contenders */}
-      {(narratives.cupContenders || signals.cupContenders.length > 0) && (
-        <InsightCard accent="#16A34A" title="Cup Contenders">
-          <Narrative text={narratives.cupContenders} />
-          {signals.cupContenders.length > 0 && (
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {signals.cupContenders.map((team, i) => (
-                <ContenderCard key={i} contender={team} />
-              ))}
-            </div>
-          )}
-        </InsightCard>
-      )}
 
-      {/* Series Projections — all 16 teams, with heuristic odds */}
+      {/* Bracket — matchup-focused view of the active round. */}
       {signals.seriesProjections.length > 0 && (
-        <InsightCard accent="#1A1A1A" title="Series Projections">
-          <p className="text-[11px] text-gray-500 mb-3">
-            Historical odds based on series state — down 0-3 ≈ 5%, tied ≈ 50%,
-            up 3-0 ≈ 95%. Honest approximation, not a simulation.
+        <InsightCard accent="#1A1A1A" title="Bracket">
+          <p className="text-[11px] text-[var(--color-ink-muted)] mb-3">
+            Score + historical odds · team strength from regular-season
+            standings · fantasy-team ownership on each side.
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {signals.seriesProjections.map((p) => (
-              <SeriesProjectionCard key={p.teamAbbrev} projection={p} />
-            ))}
-          </div>
+          <PlayoffBracketTree projections={signals.seriesProjections} />
         </InsightCard>
       )}
 
-      {/* Fantasy Race with sparkbars */}
-      {(narratives.fantasyRace || signals.fantasyRace.length > 0) && (
-        <InsightCard accent="#FACC15" title="Fantasy Race">
-          <Narrative text={narratives.fantasyRace} />
-          {signals.fantasyRace.length > 0 && (
-            <div className="mt-4">
-              <div className="divide-y divide-gray-100 border border-gray-200">
-                {signals.fantasyRace.map((team) => (
-                  <div
-                    key={team.teamName}
-                    className="flex items-center gap-3 px-3 py-2 text-sm"
-                  >
-                    <span className="w-6 h-6 flex items-center justify-center bg-gray-100 font-bold text-xs">
-                      {team.rank}
-                    </span>
-                    <span className="font-bold text-[#1A1A1A] flex-1 uppercase tracking-wider text-xs truncate">
-                      {team.teamName}
-                    </span>
-                    <span className="font-mono text-sm font-bold tabular-nums">
-                      {team.totalPoints} pts
-                    </span>
-                    {team.deltaYesterday > 0 && (
-                      <span className="text-[10px] text-green-700 tabular-nums font-bold">
-                        +{team.deltaYesterday} yd
-                      </span>
-                    )}
-                    <Sparkbars values={team.sparkline} width={48} height={14} />
-                    {team.playersActiveToday > 0 && (
-                      <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 font-medium">
-                        {team.playersActiveToday} active
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+      {/* Stanley Cup Odds — championship-focused ranked list driven by the
+          same Monte Carlo that powers Pulse's race odds. Re-runs daily. */}
+      {signals.seriesProjections.length > 0 && (
+        <InsightCard accent="#1A1A1A" title="Stanley Cup Odds">
+          <StanleyCupOdds projections={signals.seriesProjections} />
         </InsightCard>
       )}
 
-      {/* Injury Intel — split from news */}
-      {signals.injuryReport.length > 0 && (
-        <InsightCard accent="#DC2626" title="Injury Intel">
-          <ul className="space-y-2">
-            {signals.injuryReport.map((inj, i) => (
-              <InjuryRow key={i} entry={inj} />
-            ))}
-          </ul>
-        </InsightCard>
-      )}
-
-      {/* Sleeper Watch */}
-      {(narratives.sleeperWatch || signals.sleeperAlerts.length > 0) && (
-        <InsightCard accent="#8B5CF6" title="Sleeper Watch">
-          <Narrative text={narratives.sleeperWatch} />
-          {signals.sleeperAlerts.length > 0 && (
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {signals.sleeperAlerts.map((sleeper, i) => (
-                <SleeperCard key={i} sleeper={sleeper} />
-              ))}
-            </div>
-          )}
+      {/* Fantasy Champion — top NHL skaters by projected playoff points;
+          only rendered when there's no active league (global view). */}
+      {raceOdds?.mode === "champion" && raceOdds.championLeaderboard.length > 0 && (
+        <InsightCard accent="#1A1A1A" title="Fantasy Champion">
+          <p className="text-[11px] text-[var(--color-ink-muted)] mb-3">
+            Top skaters by projected playoff fantasy points across{" "}
+            {raceOdds.trials.toLocaleString()} bracket simulations.
+          </p>
+          <FantasyChampionBoard players={raceOdds.championLeaderboard} />
         </InsightCard>
       )}
 
@@ -411,19 +360,27 @@ function HotPlayerCard({
   player,
   rank,
   tone = "hot",
+  isRegularSeason = false,
 }: {
   player: HotPlayerSignal;
   rank: number;
   tone?: "hot" | "cold";
+  /** When true, the "playoffPoints" value is actually regular-season points
+      (pre-playoff fallback) and the label needs to reflect that. */
+  isRegularSeason?: boolean;
 }) {
   const badgeClass =
     tone === "hot"
       ? "bg-red-100 text-red-700"
       : "bg-gray-200 text-gray-600";
   const borderClass = tone === "hot" ? "border-gray-200" : "border-gray-300";
+  const hasEdge = player.topSpeed != null || player.topShotSpeed != null;
   return (
     <div
-      className={`flex-shrink-0 w-40 p-3 border-2 ${borderClass} rounded-none bg-white`}
+      // flex-col + min-h locks every card to the same height regardless of
+      // whether edge data or a fantasy-team footer is present; mt-auto on
+      // the footer pushes it to the bottom so cards line up across the row.
+      className={`flex-shrink-0 w-40 min-h-[230px] p-3 border-2 ${borderClass} rounded-none bg-white flex flex-col`}
     >
       <div className="flex items-center gap-2 mb-2">
         <span
@@ -432,14 +389,28 @@ function HotPlayerCard({
           {rank}
         </span>
         {player.imageUrl && (
-          <img
-            src={player.imageUrl}
-            alt={player.name}
-            className="w-8 h-8 rounded-none bg-gray-200"
-          />
+          <a
+            href={nhlPlayerProfileUrl(player.nhlId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`${player.name} — NHL profile`}
+          >
+            <img
+              src={player.imageUrl}
+              alt={player.name}
+              className="w-8 h-8 rounded-none bg-gray-200"
+            />
+          </a>
         )}
       </div>
-      <p className="font-bold text-sm truncate">{player.name}</p>
+      <a
+        href={nhlPlayerProfileUrl(player.nhlId)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="font-bold text-sm truncate block hover:underline"
+      >
+        {player.name}
+      </a>
       <div className="flex items-center gap-1 text-xs text-gray-500">
         <span>{player.position}</span>
         <span>&bull;</span>
@@ -460,142 +431,49 @@ function HotPlayerCard({
           <div className="font-bold text-xs">{player.formPoints}</div>
         </div>
       </div>
-      {(player.topSpeed || player.topShotSpeed) && (
-        <div className="mt-1.5 flex gap-1 text-center">
-          {player.topSpeed && (
-            <div className="flex-1 bg-blue-50 p-1">
-              <div className="text-[10px] text-blue-400">SKATE</div>
-              <div className="font-bold text-[10px] text-blue-700">{player.topSpeed.toFixed(1)}<span className="text-blue-400 font-normal"> mph</span></div>
-            </div>
-          )}
-          {player.topShotSpeed && (
-            <div className="flex-1 bg-blue-50 p-1">
-              <div className="text-[10px] text-blue-400">SHOT</div>
-              <div className="font-bold text-[10px] text-blue-700">{player.topShotSpeed.toFixed(1)}<span className="text-blue-400 font-normal"> mph</span></div>
-            </div>
-          )}
-        </div>
+      {player.playoffPoints > 0 && (
+        <p className="mt-1.5 text-[10px] text-gray-500 tabular-nums">
+          <span className="font-bold text-[#1A1A1A]">{player.playoffPoints}</span>{" "}
+          {isRegularSeason ? "season pts" : "playoff pts"}
+        </p>
       )}
-      {player.fantasyTeam && (
-        <p className="text-[10px] text-[#2563EB] font-bold uppercase mt-2 truncate">{player.fantasyTeam}</p>
-      )}
-    </div>
-  );
-}
 
-function ContenderCard({ contender }: { contender: ContenderSignal }) {
-  const pct = Math.round(contender.oddsToAdvance * 100);
-  return (
-    <div className="p-3 border-2 border-gray-200 rounded-none">
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-2">
-          <img
-            src={getNHLTeamLogoUrl(contender.teamAbbrev)}
-            alt={contender.teamAbbrev}
-            className="w-8 h-8"
-          />
-          <span className="font-extrabold text-sm uppercase">
-            {getNHLTeamFullName(contender.teamAbbrev)}
-          </span>
+      {/* Footer block pushed to the bottom with mt-auto. Both the edge-data
+          row and the fantasy-team line are always rendered so the card
+          height is stable; missing values fall back to an invisible
+          placeholder. */}
+      <div className="mt-auto pt-2">
+        {hasEdge ? (
+          <div className="flex gap-1 text-center">
+            {player.topSpeed != null && (
+              <div className="flex-1 bg-blue-50 p-1">
+                <div className="text-[10px] text-blue-400">SKATE</div>
+                <div className="font-bold text-[10px] text-blue-700">
+                  {player.topSpeed.toFixed(1)}
+                  <span className="text-blue-400 font-normal"> mph</span>
+                </div>
+              </div>
+            )}
+            {player.topShotSpeed != null && (
+              <div className="flex-1 bg-blue-50 p-1">
+                <div className="text-[10px] text-blue-400">SHOT</div>
+                <div className="font-bold text-[10px] text-blue-700">
+                  {player.topShotSpeed.toFixed(1)}
+                  <span className="text-blue-400 font-normal"> mph</span>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="h-[1.75rem]" aria-hidden />
+        )}
+        <div className="mt-2 min-h-[1.25rem]">
+          {player.fantasyTeam && (
+            <span className="inline-flex items-center gap-1 bg-[var(--color-you-tint)] text-[#1A1A1A] px-1.5 py-0.5 text-[9px] uppercase tracking-widest font-bold">
+              Roster · {player.fantasyTeam}
+            </span>
+          )}
         </div>
-        <span className="text-xs text-gray-400">R{contender.round}</span>
-      </div>
-      <p className="text-xs text-gray-500 mb-2">{contender.seriesTitle}</p>
-      <div className="flex items-center gap-1">
-        <span className="font-bold text-lg text-green-700">{contender.wins}</span>
-        <span className="text-gray-400">-</span>
-        <span className="font-bold text-lg text-gray-500">
-          {contender.opponentWins}
-        </span>
-        <span className="text-xs text-gray-400 ml-1 truncate">
-          vs {getNHLTeamFullName(contender.opponentAbbrev)}
-        </span>
-      </div>
-      <div className="flex items-center justify-between mt-2 gap-2">
-        <span
-          className={`text-[10px] uppercase tracking-wider font-bold px-1.5 py-0.5 ${SERIES_STATE_STYLES[contender.seriesState]}`}
-        >
-          {contender.seriesLabel}
-        </span>
-        <span className="text-[10px] text-gray-500 tabular-nums">
-          {pct}% · {contender.gamesRemaining} left
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function SeriesProjectionCard({
-  projection,
-}: {
-  projection: TeamSeriesProjection;
-}) {
-  const pct = Math.round(projection.oddsToAdvance * 100);
-  return (
-    <div className="border-2 border-gray-200">
-      <div
-        className={`px-2 py-1 text-[10px] uppercase tracking-wider font-bold ${SERIES_STATE_STYLES[projection.seriesState]}`}
-      >
-        {projection.seriesLabel}
-      </div>
-      <div className="p-2 flex items-center gap-2">
-        <img
-          src={getNHLTeamLogoUrl(projection.teamAbbrev)}
-          alt=""
-          className="w-6 h-6 flex-shrink-0"
-        />
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold truncate">{projection.teamName}</p>
-          <p className="text-[10px] text-gray-500 truncate">
-            vs {projection.opponentName}
-          </p>
-          <p className="text-[10px] text-gray-700 tabular-nums mt-0.5">
-            {pct}% to advance · {projection.gamesRemaining} left
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function InjuryRow({ entry }: { entry: InjuryEntry }) {
-  return (
-    <li className="flex items-start gap-2 text-sm">
-      <span className="text-red-600 mt-0.5 flex-shrink-0">&#9679;</span>
-      <div className="flex-1 min-w-0">
-        {entry.playerName && (
-          <span className="font-bold mr-1">{entry.playerName}</span>
-        )}
-        {entry.status && (
-          <span className="inline-block text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 uppercase tracking-wider font-bold mr-1.5">
-            {entry.status}
-          </span>
-        )}
-        <span className="text-gray-700">{entry.raw}</span>
-        {entry.fantasyTeam && (
-          <span className="ml-2 text-[10px] text-[#2563EB] font-bold uppercase">
-            {entry.fantasyTeam}
-          </span>
-        )}
-      </div>
-    </li>
-  );
-}
-
-function SleeperCard({ sleeper }: { sleeper: SleeperAlertSignal }) {
-  return (
-    <div className="flex items-center gap-3 p-3 border-2 border-gray-200 rounded-none">
-      <img src={getNHLTeamLogoUrl(sleeper.nhlTeam)} alt={sleeper.nhlTeam} className="w-6 h-6 flex-shrink-0" />
-      <div className="flex-1 min-w-0">
-        <p className="font-bold text-sm">{sleeper.name}</p>
-        <p className="text-xs text-gray-500">{getNHLTeamShortName(sleeper.nhlTeam)}</p>
-        {sleeper.fantasyTeam && (
-          <p className="text-[10px] text-[#8B5CF6] font-bold uppercase mt-0.5">{sleeper.fantasyTeam}</p>
-        )}
-      </div>
-      <div className="text-right">
-        <p className="font-bold text-lg">{sleeper.points}</p>
-        <p className="text-[10px] text-gray-400">{sleeper.goals}G {sleeper.assists}A</p>
       </div>
     </div>
   );

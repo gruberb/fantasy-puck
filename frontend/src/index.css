@@ -13,6 +13,42 @@
     --brutal-orange: #F97316;
     --brutal-purple: #8B5CF6;
     --brutal-gray: #6B7280;
+
+    /* ═══════════════════════════════════════════════════════════════════
+       Analytical palette — formalized in the /color walkthrough. Used for
+       Race Odds, Rivalry, and other "you vs rival" analytical surfaces.
+       Warm yellow advances; cool slate recedes. Functional red is reserved
+       for errors + eliminated states — never for "rival is winning".
+       ═══════════════════════════════════════════════════════════════════ */
+    /* Identity — you vs rival axis (warm/cool depth pair) */
+    --color-you:           #FACC15; /* Brand yellow (= --brutal-yellow) */
+    --color-you-tint:      #FEF9C3;
+    --color-you-ink:       #713F12;
+    --color-rival:         #475569; /* Slate 600 — cool, analytical, recedes */
+    --color-rival-tint:    #E2E8F0;
+    --color-rival-ink:     #F8FAFC;
+    /* Structure */
+    --color-ink:           #1A1A1A;
+    --color-ink-muted:     #475569; /* Same hex as --color-rival by design */
+    --color-surface:       #FFFFFF;
+    --color-surface-sunk:  #F8FAFC;
+    --color-divider:       #E5E7EB;
+    /* Action */
+    --color-action:        #2563EB;
+    --color-action-tint:   #DBEAFE;
+    /* Functional — reserved */
+    --color-error:         #DC2626;
+    --color-error-tint:    #FEE2E2;
+    --color-success:       #16A34A;
+    --color-success-tint:  #DCFCE7;
+    /* Series-state legend — scoped to Series Forecast / Projections only */
+    --state-eliminated:       #7F1D1D;
+    --state-facing-elim:      #DC2626;
+    --state-trailing:         #FB923C;
+    --state-tied:             #E5E7EB;
+    --state-leading:          #86EFAC;
+    --state-about-to-advance: #16A34A;
+    --state-advanced:         #14532D;
 }
 
 /* Custom cursor - arrow only, browser native hand for clickable */

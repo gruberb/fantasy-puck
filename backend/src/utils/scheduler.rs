@@ -7,6 +7,7 @@ use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info};
 
 use crate::api::handlers::insights::generate_and_cache_insights;
+use crate::api::handlers::race_odds::generate_and_cache_race_odds;
 use crate::api::routes::AppState;
 use crate::db::FantasyDb;
 use crate::error::Result;
@@ -171,8 +172,9 @@ async fn process_daily_rankings_all_leagues(
     }
 }
 
-/// Pre-generate insights for all leagues so they're cached when users visit
-async fn prewarm_insights_all_leagues(db: &FantasyDb, nhl_client: &NhlClient) {
+/// Pre-generate insights and race-odds for all leagues so they're cached
+/// when users visit. Runs once per day from the 10am-UTC scheduler job.
+async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
     let state = Arc::new(AppState {
         db: db.clone(),
         nhl_client: nhl_client.clone(),
@@ -180,23 +182,39 @@ async fn prewarm_insights_all_leagues(db: &FantasyDb, nhl_client: &NhlClient) {
         draft_hub: DraftHub::new(),
     });
 
-    // Generate for the "no league" case (global insights)
+    // Global (no-league) payloads.
     match generate_and_cache_insights(&state, "").await {
         Ok(_) => info!("Pre-warmed global insights"),
         Err(e) => error!("Failed to pre-warm global insights: {}", e),
     }
+    match generate_and_cache_race_odds(&state, "", None).await {
+        Ok(_) => info!("Pre-warmed global race-odds (Fantasy Champion)"),
+        Err(e) => error!("Failed to pre-warm global race-odds: {}", e),
+    }
 
-    // Generate for each league
-    match db.get_all_league_ids().await {
-        Ok(league_ids) => {
-            for league_id in &league_ids {
-                match generate_and_cache_insights(&state, league_id).await {
-                    Ok(_) => info!("Pre-warmed insights for league {}", league_id),
-                    Err(e) => error!("Failed to pre-warm insights for league {}: {}", league_id, e),
-                }
-            }
+    // Per-league payloads.
+    let league_ids = match db.get_all_league_ids().await {
+        Ok(ids) => ids,
+        Err(e) => {
+            error!("Failed to fetch league IDs for pre-warming: {}", e);
+            return;
         }
-        Err(e) => error!("Failed to fetch league IDs for insights pre-warming: {}", e),
+    };
+    for league_id in &league_ids {
+        match generate_and_cache_insights(&state, league_id).await {
+            Ok(_) => info!("Pre-warmed insights for league {}", league_id),
+            Err(e) => error!(
+                "Failed to pre-warm insights for league {}: {}",
+                league_id, e
+            ),
+        }
+        match generate_and_cache_race_odds(&state, league_id, None).await {
+            Ok(_) => info!("Pre-warmed race-odds for league {}", league_id),
+            Err(e) => error!(
+                "Failed to pre-warm race-odds for league {}: {}",
+                league_id, e
+            ),
+        }
     }
 }
 
@@ -265,16 +283,16 @@ pub async fn init_rankings_scheduler(
     })
     .map_err(|e| Error::Internal(format!("Failed to create afternoon job: {}", e)))?;
 
-    // Schedule insights pre-warming at 10am UTC daily
+    // Schedule derived-payload pre-warming at 10am UTC daily (insights + race-odds).
     let insights_job = Job::new_async("0 10 * * * *", move |_, _| {
         let db = db_clone_insights.clone();
         let nhl_client = nhl_client_clone_insights.clone();
         Box::pin(async move {
-            info!("Running daily insights pre-warming job");
-            prewarm_insights_all_leagues(&db, &nhl_client).await;
+            info!("Running daily pre-warming job (insights + race-odds)");
+            prewarm_derived_payloads(&db, &nhl_client).await;
         })
     })
-    .map_err(|e| Error::Internal(format!("Failed to create insights job: {}", e)))?;
+    .map_err(|e| Error::Internal(format!("Failed to create pre-warming job: {}", e)))?;
 
     // Add jobs to the scheduler
     scheduler
@@ -298,7 +316,7 @@ pub async fn init_rankings_scheduler(
         .await
         .map_err(|e| Error::Internal(format!("Failed to start scheduler: {}", e)))?;
 
-    info!("Scheduler initialized: rankings at 9am/3pm UTC, insights at 10am UTC");
+    info!("Scheduler initialized: rankings at 9am/3pm UTC, insights + race-odds at 10am UTC");
     Ok(scheduler)
 }
 

@@ -20,6 +20,7 @@ pub mod params;
 mod players;
 mod playoffs;
 pub mod pulse;
+pub mod race_odds;
 mod rankings;
 mod sleepers;
 mod stats;

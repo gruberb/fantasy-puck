@@ -5,6 +5,11 @@ export interface NHLTeamInfo {
   abbreviation: string; // Official abbreviation
 }
 
+/** Build a link to an NHL player's public profile page. */
+export function nhlPlayerProfileUrl(nhlId: number | string): string {
+  return `https://www.nhl.com/player/${nhlId}`;
+}
+
 // Map from team abbreviation to team information
 export const NHL_TEAMS_BY_ABBREV: Record<string, NHLTeamInfo> = {
   ANA: {

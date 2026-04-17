@@ -4,6 +4,53 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.7.0 — 2026-04-17
+
+Headline change: Pulse is now the personal/league-race page (your standing, your projections, your rivalry, your NHL stakes) and Insights is the NHL-generic page (today's games, hot/cold skaters, bracket, Stanley Cup odds). A new Monte Carlo engine (`race_sim`) underpins every projection on both pages, re-running every morning at 10am UTC.
+
+### Added
+- **`backend/src/utils/race_sim.rs`** — team-correlated Monte Carlo, 5,000 bracket trials per run. Per-game win probability = `sigmoid(k · (rating_top − rating_bottom))` with `k = 0.010` (calibrated against HockeyStats.com round-1 reference odds). Outputs per-fantasy-team `projected_final_mean / p10 / p90 / win_prob / top3_prob`, exact pairwise `head_to_head[opponent_id]` from per-trial score comparisons, per-NHL-team `advance_round1_prob / conference_finals_prob / cup_finals_prob / cup_win_prob / expected_games`, and per-player `projected_final_mean / p10 / p90`. Deterministic via `simulate_with_seed` in tests.
+- **`/api/race-odds`** (new endpoint) — League mode returns fantasy-team odds + rivalry card + NHL cup odds. Champion mode returns the top-20 skater leaderboard by projected playoff fantasy points for the no-league/global Insights view. Cached per `(league_id, season, game_type, date)` and pre-warmed at 10am UTC alongside Insights.
+- **`backend/src/utils/team_ratings.rs`** — shared blended team-strength rating: `0.7 × season_points + 0.3 × (L10_points_per_game × 82)`. Hot teams rise a few points above their season mark, cold teams drop. Used by both the race-odds engine and the Insights bracket enrichment.
+- **Race Odds section on Pulse** — horizontal per-team win-probability bars + a columnar `LeagueRaceTable` (rank · team · current pts · projected · likely range · win% · "you beat X%"). Top-3 column auto-hides in leagues of ≤ 3 teams.
+- **Rivalry / Head-to-Head card** — divergent bar (yellow = you, slate = rival) showing `P(you finish ahead of closest rival)` computed from exact MC pairwise samples. Hidden in 2-team leagues (the race board covers the same ground). Compact variant lives on Pulse as a hero line; full card on Insights for ≥3-team leagues.
+- **My Stakes section on Pulse** — every NHL team the caller rosters, sorted by impact (`player_count × expected_games`). Per row: series context, `win R1 / reach Final / win Cup`, `expected_games`, linked player chips.
+- **Stanley Cup Odds table on Insights** — championship-focused ranked list of every still-alive NHL playoff team. Columns: team · series · `win R1` · `reach Final` · **`win Cup`** · `expected games` · fantasy ownership pills. Methodology footnote ("Monte Carlo · 5,000 trials · team strength from regular-season standings points · current series state as the starting condition · re-run every morning · calibrated against HockeyStats.com round-1 reference odds within ~3pp") so users understand the inputs and the limitations.
+- **PlayoffBracketTree on Insights** — replaces the old 16-card per-team grid. Per matchup: two team rows with score, strength-tag (Favored / Even / Underdog), blended team strength shown as `STRENGTH {n}` with an `ⓘ` tooltip explaining the blend, fantasy-team ownership pills, historical % to advance.
+- **Pulse Claude narrative** — Sonnet 4.6, 1,500 max tokens, personal second-person voice, strict no-generic-AI-voice prompt (banned phrases: "dive in", "unleash", "game-changer", "buckle up", bulleted listicles). Hero position on Pulse, keyed by the caller's team so each user gets their own narrative. Falls through gracefully to no-narrative when `ANTHROPIC_API_KEY` is unset.
+- **Fantasy Champion leaderboard** — global/no-league Insights view ranks the top 20 NHL skaters by `PPG × E[games_remaining]` from the same MC sweep. Useful primer for unauthenticated visitors.
+- **Player headshots & NHL profile links** — every player name on Pulse's Series Rosters (regular + condensed), Insights Hot+Cold cards, and Pulse MyStakes links out to `nhl.com/player/{id}` in a new tab. Shared helper: `nhlPlayerProfileUrl`.
+- **Analytical color tokens** — formalised palette in `index.css`: `--color-you` (warm yellow identity), `--color-rival` (cool slate, replaces the red that used to imply "danger" in rivalry views), `--color-ink-muted` (secondary text, same hex as rival by design). Rival is never red — red is reserved for elimination/error states only.
+- **Hot/Cold regular-season fallback** — pre-playoffs, Hot/Cold sources from regular-season leader data instead of empty playoff stats. Cards render with "N season pts" instead of "N playoff pts"; an italic disclaimer sits above the section; Claude is prompted to use "regular-season points" in its narrative. Driven by a new `hotColdIsRegularSeason` flag on `InsightsSignals`.
+- **Feature folder `features/race-odds/`** — new folder with `types.ts`, `hooks/use-race-odds.ts`, and six components (`RaceOddsSection`, `LeagueRaceBoard`, `LeagueRaceTable`, `FantasyChampionBoard`, `RivalryCard`, `MyStakes`). No cross-feature imports, no barrel re-exports (per Bulletproof React).
+
+### Changed
+- **`DEFAULT_K_FACTOR: 0.03 → 0.010`** — calibrated against HockeyStats.com round-1 reference odds. The prior value over-concentrated Cup probability on the top standings seed (Colorado came out at ~39% Cup where HockeyStats had them at ~13%). At `k = 0.010` our Cup distributions land within ~3pp of the reference.
+- **Exact pairwise head-to-head** — `compute_rivalry` now reads directly from `TeamOdds.head_to_head[opponent_id]` (MC-counted per-trial comparisons) instead of a Welch-style normal approximation over `(p10, p90)`. Resolves a visible inconsistency where Insights showed 12% win-race while Pulse showed 10% finish-ahead for the same 2-team league; both surfaces now report identical numbers.
+- **Pulse layout** — new top-down order: Claude narrative → head-to-head hero line → Race Odds → My Stakes → Series Rosters (renamed from "Series Forecast" — the old name implied prediction where the box actually shows ownership × series state) → Today's Pulse → My Players In Action → League Live Board.
+- **Insights layout** — What to Watch Today → Hot + Cold → Bracket → Stanley Cup Odds → Fantasy Champion (global only) → Around the League.
+- **Hot + Cold cards** — stacked rows (not side-by-side columns) so cards don't clip at a half-column width. Each card: `flex-col min-h-[230px]` with `mt-auto` footer block. Optional edge-data and fantasy-team-roster rows reserve their space even when empty so cards line up across the row. Stats grid now includes `{playoff_points} playoff pts` secondary line (or `season pts` during the pre-playoff fallback) to match what Claude's narrative references.
+- **Series Rosters (Pulse) off-day condensation** — when every cell is a tied 0-0 series the 20-card grid collapses to a per-NHL-team row with linked avatar chips. Counting logic now separates `players_tied` from `players_trailing` (a tied series isn't losing).
+- **`FantasyTeamForecast.players_tied`** — new field on the Pulse DTO; the old backend lumped tied into trailing and rendered "10 players — 10 trailing" even when every series was 0-0. Pre-bracket edge-case: headline collapses to "awaiting puck drop".
+- **`PlayerForecastCell.nhl_id`** — new field so the frontend can build NHL profile links.
+- **`HotPlayerSignal.nhl_id`** — ditto for Hot/Cold cards.
+- **Scheduler pre-warm** — the 10am UTC job now warms both insights and race-odds caches for every league + the global view.
+- **Claude Insights prompt** — rewritten to banish generic-AI voice, made NHL-centric (league-race framing lives on Pulse now), reduced to four content fields (`todays_watch`, `game_narratives`, `hot_players`, `bracket`). Respects the `hot_cold_is_regular_season` flag.
+- **Bracket / Stanley Cup labels** — "RS pts" → "STRENGTH {n} ⓘ" with a tooltip explaining the blended rating so the number isn't mistaken for fantasy or playoff points.
+
+### Fixed
+- **Pulse per-team cache** — cache key now includes `my_team_id`. Previously every teammate in a league got Team A's personal view, including Team A's Claude narrative, because the cache key was league-scoped. Now each team generates and caches its own Pulse payload (`pulse:{league}:{team}:{season}:{gt}:{date}`).
+- **"Playoff points" label pre-playoffs** — when Hot/Cold fell back to regular-season leaders, the card still labelled the totals as "playoff pts" and the narrative cited "90 playoff points" for players who had never played a playoff game. Backend now carries a `hotColdIsRegularSeason` flag through to the UI and the prompt.
+- **`rand` crate's `gen` method name** — `gen` is a reserved keyword in recent Rust editions. Calls switched to `r#gen::<f32>()` raw-identifier form. Also enabled the `small_rng` feature for `SmallRng`.
+
+### Removed
+- **Cup Contenders card on Insights** — redundant with the rebuilt Bracket and Stanley Cup Odds views. Associated `ContenderSignal` DTO and `compute_cup_contenders` handler deleted.
+- **Sleeper Watch card on Insights** — overlapped with Hot/Cold. `SleeperAlertSignal` DTO and `compute_sleeper_alerts` handler deleted.
+- **Injury Intel card on Insights** — low-signal Daily Faceoff scrape with heuristic name matching. `InjuryEntry` DTO and `split_headlines_and_injuries` helper deleted.
+- **Fantasy Race sparklines on Insights** — moved to Pulse (League Live Board already carries this).
+- **Old Series Projections grid** — 16 cards of identical "0-0 TIED · 50%" during tied rounds, no new info over the scoreboard. Replaced by `PlayoffBracketTree`.
+- **Normal-approximation rivalry math** — `compute_rivalry`'s Welch-style fallback and the Abramowitz & Stegun `erf` / `normal_cdf` helpers are gone. The exact MC pairwise value is always available.
+
 ## v1.6.1 — 2026-04-17
 
 ### Removed

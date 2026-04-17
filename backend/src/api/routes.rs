@@ -217,6 +217,13 @@ pub fn create_router(db: FantasyDb, nhl_client: NhlClient, config: Arc<Config>) 
             get(handlers::pulse::get_pulse),
         )
         // ---------------------------------------------------------------
+        // Race Odds (Monte Carlo fantasy-race simulator)
+        // ---------------------------------------------------------------
+        .route(
+            "/api/race-odds",
+            get(handlers::race_odds::get_race_odds),
+        )
+        // ---------------------------------------------------------------
         // Admin
         // ---------------------------------------------------------------
         .route(

@@ -4,6 +4,10 @@ import ErrorMessage from "@/components/common/ErrorMessage";
 import Sparkbars from "@/components/common/Sparkbars";
 import SeriesForecastHero from "@/components/pulse/SeriesForecastHero";
 import { usePulse } from "@/features/pulse";
+import { useRaceOdds } from "@/features/race-odds/hooks/use-race-odds";
+import { RivalryCard } from "@/features/race-odds/components/RivalryCard";
+import { RaceOddsSection } from "@/features/race-odds/components/RaceOddsSection";
+import { MyStakes } from "@/features/race-odds/components/MyStakes";
 import { useLeague } from "@/contexts/LeagueContext";
 import { getNHLTeamLogoUrl, getNHLTeamShortName } from "@/utils/nhlTeams";
 import type { MyGameTonight } from "@/features/pulse";
@@ -12,6 +16,9 @@ const PulsePage = () => {
   const { pulse, isLoading, error, hasLive } = usePulse();
   const { activeLeagueId } = useLeague();
   const lp = activeLeagueId ? `/league/${activeLeagueId}` : "";
+  // Wire the rivalry hero line: runs a cheap cached query keyed by league +
+  // my_team_id so the backend can surface the closest-rival h2h matchup.
+  const { data: raceOdds } = useRaceOdds({ myTeamId: pulse?.myTeam?.teamId });
 
   if (isLoading) {
     return <LoadingSpinner size="large" message="Loading pulse..." />;
@@ -20,7 +27,7 @@ const PulsePage = () => {
     return <ErrorMessage message="Failed to load pulse data." />;
   }
 
-  const { myTeam, seriesForecast, myGamesTonight, leagueBoard, hasGamesToday } =
+  const { myTeam, seriesForecast, myGamesTonight, leagueBoard, hasGamesToday, narrative } =
     pulse;
 
   return (
@@ -31,7 +38,60 @@ const PulsePage = () => {
         </div>
       )}
 
-      {/* Flagship: Series Forecast */}
+      {/* Personal Pulse narrative from Claude Sonnet 4.6. Hero position —
+          frames the rest of the page. Hidden if the LLM call failed. */}
+      {narrative && (
+        <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
+          <header className="bg-[var(--color-you)] px-6 py-2">
+            <span className="text-[10px] uppercase tracking-widest text-[#1A1A1A] font-bold">
+              Where You Stand
+            </span>
+          </header>
+          <div className="p-6">
+            <PulseNarrative text={narrative} />
+          </div>
+        </section>
+      )}
+
+      {/* Rivalry hero line: compact head-to-head framing against the closest
+          rival by projected mean. Uses the same yellow/slate divergent bar as
+          the full Insights card so the two surfaces read as continuous, not
+          competing, framings of the same data. */}
+      {raceOdds?.rivalry && (
+        <div className="bg-white border-2 border-[#1A1A1A] px-6 py-4">
+          <p className="text-[10px] uppercase tracking-widest text-[var(--color-ink-muted)] font-bold mb-2">
+            Head-to-Head
+          </p>
+          <RivalryCard rivalry={raceOdds.rivalry} variant="compact" />
+        </div>
+      )}
+
+      {/* Race Odds — per-league Monte Carlo projections (moved from Insights
+          because fantasy-race content is personal, not NHL-generic). */}
+      <RaceOddsSection myTeamId={myTeam?.teamId ?? null} />
+
+      {/* My Stakes — "which NHL series am I rooting for?" — every NHL team
+          the caller rosters, sorted by impact on their race. */}
+      {myTeam && (
+        <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
+          <header className="bg-[#1A1A1A] text-white px-6 py-3">
+            <h2 className="font-extrabold uppercase tracking-wider text-sm">
+              My Stakes
+            </h2>
+          </header>
+          <div className="p-6">
+            <MyStakes
+              myTeam={
+                seriesForecast.find((f) => f.teamId === myTeam.teamId) ?? null
+              }
+            />
+          </div>
+        </section>
+      )}
+
+      {/* Series Rosters — each fantasy team's players grouped by NHL series.
+          The component file keeps its legacy name (SeriesForecastHero) for
+          internal API stability; the user-facing header is "Series Rosters". */}
       <SeriesForecastHero
         forecasts={seriesForecast}
         myTeamId={myTeam?.teamId ?? null}
@@ -159,6 +219,32 @@ const PulsePage = () => {
     </div>
   );
 };
+
+/** Render a Claude narrative with **bold** markers rewritten as <strong>. */
+function PulseNarrative({ text }: { text: string }) {
+  const paragraphs = text.split(/\n{2,}/).filter((p) => p.trim().length > 0);
+  return (
+    <div className="space-y-3 text-sm leading-relaxed text-[#1A1A1A]">
+      {paragraphs.map((p, i) => (
+        <p key={i}>{renderBoldSegments(p)}</p>
+      ))}
+    </div>
+  );
+}
+
+function renderBoldSegments(text: string): React.ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return (
+        <strong key={i} className="font-bold">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
+}
 
 function StatCol({
   label,

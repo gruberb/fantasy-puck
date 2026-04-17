@@ -2,36 +2,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::utils::series_projection::SeriesStateCode;
 
-/// Raw signal data computed from existing stats
+/// Raw signal data computed from existing stats. Pulse-facing personal
+/// surfaces (Race Odds, Rivalry, Fantasy Race sparklines) are NOT in here —
+/// they live on `/api/pulse` and `/api/race-odds`. Insights is NHL-centric:
+/// today's games, hot/cold skaters, the bracket, and news.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InsightsSignals {
     pub hot_players: Vec<HotPlayerSignal>,
     #[serde(default)]
     pub cold_hands: Vec<HotPlayerSignal>,
-    pub cup_contenders: Vec<ContenderSignal>,
     pub todays_games: Vec<TodaysGameSignal>,
-    pub fantasy_race: Vec<FantasyRaceSignal>,
-    pub sleeper_alerts: Vec<SleeperAlertSignal>,
     pub news_headlines: Vec<String>,
-    /// NHL news scraper rows tagged as injuries — split out from `news_headlines`.
-    #[serde(default)]
-    pub injury_report: Vec<InjuryEntry>,
     /// Per-team series state + odds across every active playoff series.
     #[serde(default)]
     pub series_projections: Vec<TeamSeriesProjection>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct InjuryEntry {
-    pub raw: String,
-    /// Best-effort extraction of the player name, when parseable.
-    pub player_name: Option<String>,
-    /// e.g. "Out", "IR", "Day-to-Day", "GTD".
-    pub status: Option<String>,
-    /// Only set when the injured player is on a fantasy team in this league.
-    pub fantasy_team: Option<String>,
+    /// True when Hot/Cold data was sourced from regular-season leaders
+    /// (pre-playoff fallback). Drives the UI's "season pts" vs "playoff
+    /// pts" label and keeps Claude from claiming playoff stats that don't
+    /// exist yet.
+    #[serde(default)]
+    pub hot_cold_is_regular_season: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -48,6 +39,18 @@ pub struct TeamSeriesProjection {
     pub series_label: String,
     pub odds_to_advance: f32,
     pub games_remaining: u32,
+    /// Regular-season standings points for this team, used as a strength
+    /// proxy so the bracket can show who's the favorite beyond the raw W-L.
+    #[serde(default)]
+    pub team_rating: Option<f32>,
+    /// Regular-season standings points for the opponent — same source as
+    /// `team_rating`, exposed for convenient frontend diffing.
+    #[serde(default)]
+    pub opponent_rating: Option<f32>,
+    /// Fantasy teams that own players on this NHL team in the active
+    /// league (empty in the global/no-league view).
+    #[serde(default)]
+    pub rostered_tags: Vec<RosteredPlayerTag>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -60,6 +63,9 @@ pub struct RosteredPlayerTag {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HotPlayerSignal {
+    /// NHL player id — enables the frontend to link the card to the public
+    /// player profile at `nhl.com/player/{id}`.
+    pub nhl_id: i64,
     pub name: String,
     pub nhl_team: String,
     pub position: String,
@@ -75,29 +81,6 @@ pub struct HotPlayerSignal {
     pub top_speed: Option<f64>,
     #[serde(default)]
     pub top_shot_speed: Option<f64>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContenderSignal {
-    pub team_abbrev: String,
-    pub series_title: String,
-    pub wins: u32,
-    pub opponent_abbrev: String,
-    pub opponent_wins: u32,
-    pub round: u32,
-    #[serde(default = "default_series_state")]
-    pub series_state: SeriesStateCode,
-    #[serde(default)]
-    pub series_label: String,
-    #[serde(default)]
-    pub odds_to_advance: f32,
-    #[serde(default)]
-    pub games_remaining: u32,
-}
-
-fn default_series_state() -> SeriesStateCode {
-    SeriesStateCode::Tied
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -156,32 +139,6 @@ pub struct TodaysGameSignal {
     pub rostered_player_tags: Vec<RosteredPlayerTag>,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FantasyRaceSignal {
-    pub team_name: String,
-    pub total_points: i32,
-    pub rank: usize,
-    pub players_active_today: usize,
-    /// Last-5-days of daily points (may be shorter early in the playoffs).
-    #[serde(default)]
-    pub sparkline: Vec<i32>,
-    /// Most recent day's points from daily_rankings, for the delta arrow.
-    #[serde(default)]
-    pub delta_yesterday: i32,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SleeperAlertSignal {
-    pub name: String,
-    pub nhl_team: String,
-    pub fantasy_team: Option<String>,
-    pub points: i32,
-    pub goals: i32,
-    pub assists: i32,
-}
-
 /// Final response with LLM narratives + raw signal data
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -198,7 +155,7 @@ pub struct InsightsNarratives {
     #[serde(default)]
     pub game_narratives: Vec<String>,
     pub hot_players: String,
-    pub cup_contenders: String,
-    pub fantasy_race: String,
-    pub sleeper_watch: String,
+    /// Narrative for the Bracket / Stanley Cup Odds section.
+    #[serde(default)]
+    pub bracket: String,
 }

@@ -8,6 +8,7 @@ pub mod nhl_rosters;
 pub mod players;
 pub mod playoffs;
 pub mod pulse;
+pub mod race_odds;
 pub mod rankings;
 pub mod sleepers;
 pub mod stats;

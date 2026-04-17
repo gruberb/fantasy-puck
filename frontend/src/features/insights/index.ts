@@ -1,10 +1,12 @@
 export { useInsights } from './hooks/use-insights';
 export type {
   HotPlayerSignal,
-  ContenderSignal,
   TodaysGameSignal,
-  FantasyRaceSignal,
-  SleeperAlertSignal,
+  TeamSeriesProjection,
+  SeriesStateCode,
+  RosteredPlayerTag,
+  PlayerLeader,
+  GoalieStatsSignal,
   InsightsNarratives,
   InsightsSignals,
   InsightsResponse,

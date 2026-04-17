@@ -18,6 +18,10 @@ pub struct PulseResponse {
     pub league_board: Vec<LeagueBoardEntry>,
     pub has_games_today: bool,
     pub has_live_games: bool,
+    /// Optional Claude-generated personal narrative. Empty when the LLM call
+    /// fails or no `my_team` is resolved (nothing personal to say).
+    #[serde(default)]
+    pub narrative: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -51,7 +55,13 @@ pub struct FantasyTeamForecast {
     /// Sum: players on teams trailing 0-3 or 1-3 (one loss from elimination).
     pub players_facing_elimination: usize,
     /// Sum: players on teams trailing but not yet facing elimination.
+    /// Excludes tied series — those roll up to [`players_tied`].
     pub players_trailing: usize,
+    /// Sum: players on teams whose series is currently tied. Kept separate
+    /// from `players_trailing` because a 0-0 / 1-1 / 2-2 tie isn't losing —
+    /// counting it as "trailing" read as a bug to users.
+    #[serde(default)]
+    pub players_tied: usize,
     /// Sum: players on teams currently ahead or about to advance.
     pub players_leading: usize,
     /// Sum: players on teams that have advanced to the next round.
@@ -63,6 +73,9 @@ pub struct FantasyTeamForecast {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerForecastCell {
+    /// NHL player id — required for linking to the public player profile
+    /// page (`nhl.com/player/{id}`).
+    pub nhl_id: i64,
     pub player_name: String,
     pub position: String,
     pub nhl_team: String,

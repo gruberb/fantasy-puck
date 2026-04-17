@@ -1,6 +1,6 @@
 [package]
 name = "fantasy-hockey"
-version = "1.6.1"
+version = "1.7.0"
 edition = "2021"
 
 [dependencies]
@@ -30,6 +30,6 @@ tokio-cron-scheduler = "0.13"
 scraper = "0.22"
 argon2 = "0.5"
 jsonwebtoken = "9"
-rand = "0.8"
+rand = { version = "0.8", features = ["small_rng"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 secrecy = "0.10"

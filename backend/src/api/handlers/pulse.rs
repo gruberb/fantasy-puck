@@ -6,7 +6,7 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::api::dtos::pulse::*;
 use crate::api::response::{json_success, ApiResponse};
@@ -44,9 +44,16 @@ pub async fn get_pulse(
     let my_team_id = resolve_my_team_id(&state, &league_id, &auth_user.id).await;
 
     let today = hockey_today();
+    // The Pulse response is personalised — `my_team`, `my_games_tonight`,
+    // and the Claude narrative all point at the calling team. Keying the
+    // cache by league alone would serve Team A's personal view to Team B.
+    // Fall back to `0` when the caller has no resolvable team (global
+    // visitor hitting an authenticated endpoint is itself a bug, but at
+    // least caches consistently).
     let cache_key = format!(
-        "pulse:{}:{}:{}:{}",
+        "pulse:{}:{}:{}:{}:{}",
         league_id,
+        my_team_id.unwrap_or(0),
         season(),
         game_type(),
         today
@@ -117,7 +124,7 @@ async fn generate_pulse(
     let has_games_today = !games_today.is_empty();
     let has_live_games = games_today.iter().any(|g| g.game_state.is_live());
 
-    Ok(PulseResponse {
+    let mut response = PulseResponse {
         generated_at: Utc::now().to_rfc3339(),
         my_team,
         series_forecast,
@@ -125,7 +132,140 @@ async fn generate_pulse(
         league_board,
         has_games_today,
         has_live_games,
-    })
+        narrative: None,
+    };
+
+    // Personal narrative — only meaningful when we've resolved a "my team".
+    // Claude Sonnet 4.6 with a longer budget and a strict anti-AI-voice prompt.
+    if response.my_team.is_some() {
+        response.narrative = generate_pulse_narrative(&response).await;
+    }
+
+    Ok(response)
+}
+
+/// Call Claude Sonnet 4.6 for a personal Pulse blurb. Returns `None` on
+/// failure — the frontend just hides the block and the rest of the page is
+/// unaffected. We hand Claude the actual numbers (rank, totals, rival,
+/// today's active roster) and demand a columnist's voice: specific,
+/// opinionated, no generic hype.
+async fn generate_pulse_narrative(response: &PulseResponse) -> Option<String> {
+    let api_key = match std::env::var("ANTHROPIC_API_KEY") {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+
+    // Serialise the Pulse payload so Claude can reference anything it wants,
+    // but hand-feed the headline numbers in natural language so short outputs
+    // don't miss them.
+    let payload = match serde_json::to_string(response) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    let mut headline = String::new();
+    if let Some(t) = &response.my_team {
+        headline.push_str(&format!(
+            "Caller's team: {} · Rank #{} · {} total pts · {} today · {}/{} active today.\n",
+            t.team_name,
+            t.rank,
+            t.total_points,
+            t.points_today,
+            t.players_active_today,
+            t.total_roster_size,
+        ));
+    }
+    headline.push_str(&format!(
+        "League has {} teams. {}.\n",
+        response.league_board.len(),
+        if response.has_live_games {
+            "Games live right now"
+        } else if response.has_games_today {
+            "Games scheduled today"
+        } else {
+            "Off-day"
+        }
+    ));
+    for entry in response.league_board.iter().take(3) {
+        headline.push_str(&format!(
+            "  #{} {} · {} pts\n",
+            entry.rank, entry.team_name, entry.total_points
+        ));
+    }
+
+    let request_body = serde_json::json!({
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 1500,
+        "system": r#"You are a veteran hockey columnist writing one personal dispatch for a friend in their fantasy league. Not a newsletter, not a pep talk — a direct read of where they stand and what matters. Think The Athletic beat column: dry, specific, opinionated, grounded in the numbers. Mix short punchy sentences with longer analytical ones.
+
+Do not write like a marketing bot. Banned phrases and styles: "dive in", "unleash", "game-changer", "exciting journey", "let's break it down", "buckle up", "here's the scoop", bulleted listicles, exclamation points, hype adjectives. No section headers.
+
+Rules:
+- Only reference stats, names, records, and facts from the data provided.
+- Never invent numbers.
+- Wrap player names and fantasy-team names in **double asterisks** for bold.
+- 4–7 sentences. Start on the verdict, not the weather.
+
+The frame: speak TO the caller (second person — "you", "your team"). This is their Pulse page, not a broadcast. Anchor on their rank, their gap to first, their closest threat, what today's slate means for them specifically, and any obvious read on which of their rostered NHL teams is carrying them. Be honest if the verdict isn't good."#,
+        "messages": [
+            {
+                "role": "user",
+                "content": format!(
+                    "=== HEADLINE NUMBERS ===\n{}\n\n=== FULL PAYLOAD ===\n{}",
+                    headline, payload
+                )
+            }
+        ]
+    });
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Pulse narrative: failed to build HTTP client: {}", e);
+            return None;
+        }
+    };
+
+    let http_response = match client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&request_body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Pulse narrative: Claude API call failed: {}", e);
+            return None;
+        }
+    };
+
+    if !http_response.status().is_success() {
+        let status = http_response.status();
+        let body = http_response.text().await.unwrap_or_default();
+        warn!("Pulse narrative: Claude returned {}: {}", status, body);
+        return None;
+    }
+
+    let body: serde_json::Value = match http_response.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Pulse narrative: failed to parse Claude response: {}", e);
+            return None;
+        }
+    };
+
+    body.get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|block| block.get("text"))
+        .and_then(|t| t.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +323,7 @@ fn build_series_forecast(
             let mut eliminated = 0usize;
             let mut facing_elim = 0usize;
             let mut trailing = 0usize;
+            let mut tied = 0usize;
             let mut leading = 0usize;
             let mut advanced = 0usize;
 
@@ -193,17 +334,21 @@ fn build_series_forecast(
                     .unwrap_or((0, 0, None));
 
                 let state = classify(wins, opp_wins);
+                // Tied is kept separate from Trailing — a 0-0 series isn't
+                // "losing", so collapsing it into `players_trailing` read as
+                // a bug on the UI.
                 match state {
                     SeriesStateCode::Eliminated => eliminated += 1,
                     SeriesStateCode::FacingElim => facing_elim += 1,
                     SeriesStateCode::Trailing => trailing += 1,
-                    SeriesStateCode::Tied => trailing += 1,
+                    SeriesStateCode::Tied => tied += 1,
                     SeriesStateCode::Leading => leading += 1,
                     SeriesStateCode::AboutToAdvance => leading += 1,
                     SeriesStateCode::Advanced => advanced += 1,
                 }
 
                 cells.push(PlayerForecastCell {
+                    nhl_id: p.nhl_id,
                     player_name: p.player_name.clone(),
                     position: p.position.clone(),
                     nhl_team: p.nhl_team.clone(),
@@ -232,6 +377,7 @@ fn build_series_forecast(
                 players_eliminated: eliminated,
                 players_facing_elimination: facing_elim,
                 players_trailing: trailing,
+                players_tied: tied,
                 players_leading: leading,
                 players_advanced: advanced,
                 cells,
