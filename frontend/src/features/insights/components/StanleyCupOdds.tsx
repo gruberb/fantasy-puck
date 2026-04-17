@@ -57,7 +57,7 @@ export function StanleyCupOdds({ projections }: StanleyCupOddsProps) {
       </p>
       <div className="border border-[var(--color-divider)] overflow-hidden">
         {/* Header */}
-        <div className="grid grid-cols-[minmax(0,1fr)_4.5rem_3.5rem_3.5rem_3.5rem_3rem] md:grid-cols-[minmax(0,1fr)_6rem_4rem_4rem_4rem_4rem] items-center gap-2 px-3 py-2 bg-[var(--color-surface-sunk)] text-[10px] uppercase tracking-widest text-[var(--color-ink-muted)] font-bold border-b border-[var(--color-divider)]">
+        <div className="grid grid-cols-[minmax(0,1fr)_4.5rem_3.5rem_3.5rem_3rem] md:grid-cols-[minmax(0,1fr)_6rem_4rem_4rem_4rem_4rem] items-center gap-2 px-3 py-2 bg-[var(--color-surface-sunk)] text-[10px] uppercase tracking-widest text-[var(--color-ink-muted)] font-bold border-b border-[var(--color-divider)]">
           <span>Team</span>
           <span className="text-right">Series</span>
           <span className="text-right">Win R1</span>
@@ -71,7 +71,7 @@ export function StanleyCupOdds({ projections }: StanleyCupOddsProps) {
             return (
               <li
                 key={team.abbrev}
-                className="grid grid-cols-[minmax(0,1fr)_4.5rem_3.5rem_3.5rem_3.5rem_3rem] md:grid-cols-[minmax(0,1fr)_6rem_4rem_4rem_4rem_4rem] items-center gap-2 px-3 py-2 border-b border-[var(--color-divider)] last:border-b-0"
+                className="grid grid-cols-[minmax(0,1fr)_4.5rem_3.5rem_3.5rem_3rem] md:grid-cols-[minmax(0,1fr)_6rem_4rem_4rem_4rem_4rem] items-center gap-2 px-3 py-2 border-b border-[var(--color-divider)] last:border-b-0"
               >
                 <TeamCell abbrev={team.abbrev} series={series} />
                 <span className="text-right text-xs text-[var(--color-ink-muted)] tabular-nums">

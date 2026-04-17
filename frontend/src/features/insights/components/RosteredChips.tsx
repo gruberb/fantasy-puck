@@ -1,55 +1,34 @@
-import { useState } from "react";
+import { useLeague } from "@/contexts/LeagueContext";
 
 import type { RosteredPlayerTag } from "@/features/insights";
 
 interface RosteredChipsProps {
   tags: RosteredPlayerTag[];
-  /** How many chips to show before collapsing the rest. Defaults to 3. */
-  limit?: number;
 }
 
 /**
- * Collapsed roster-ownership chips. Shows the top `limit` fantasy teams by
- * count; any remaining teams are hidden behind a "+N MORE" toggle that
- * expands the list in place.
+ * Shows only the caller's fantasy-team exposure on this NHL team. In small
+ * leagues listing every owner is useful; in 15-team leagues it floods the
+ * layout. The signal most users scan for is "do I have skin in this game?" —
+ * so that's all we render. Nothing shows when the caller isn't in the league
+ * or doesn't own any players on this NHL team.
  */
-export function RosteredChips({ tags, limit = 3 }: RosteredChipsProps) {
-  const [expanded, setExpanded] = useState(false);
-  if (tags.length === 0) return null;
+export function RosteredChips({ tags }: RosteredChipsProps) {
+  const { activeLeagueId, myMemberships } = useLeague();
 
-  const sorted = [...tags].sort((a, b) => b.count - a.count);
-  const visible = expanded ? sorted : sorted.slice(0, limit);
-  const hiddenCount = sorted.length - limit;
-  const showToggle = hiddenCount > 0;
+  if (!activeLeagueId || tags.length === 0) return null;
+
+  const myTeamName = myMemberships.find(
+    (m) => m.league_id === activeLeagueId,
+  )?.fantasy_teams?.name;
+  if (!myTeamName) return null;
+
+  const myTag = tags.find((t) => t.fantasyTeamName === myTeamName);
+  if (!myTag) return null;
 
   return (
-    <div className="flex flex-wrap gap-1 items-center">
-      {visible.map((tag) => (
-        <span
-          key={tag.fantasyTeamName}
-          className="inline-flex items-center gap-1 bg-[var(--color-you-tint)] text-[#1A1A1A] px-1 py-0 text-[9px] uppercase tracking-wider font-bold"
-        >
-          {tag.fantasyTeamName}: {tag.count}
-        </span>
-      ))}
-      {showToggle && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setExpanded((v) => !v);
-          }}
-          aria-expanded={expanded}
-          aria-label={
-            expanded
-              ? "Collapse rostered teams"
-              : `Show ${hiddenCount} more rostered team${hiddenCount === 1 ? "" : "s"}`
-          }
-          className="inline-flex items-center gap-1 border border-[#1A1A1A] bg-white text-[#1A1A1A] hover:bg-[#1A1A1A] hover:text-white active:bg-[#1A1A1A] active:text-white px-1.5 py-0.5 text-[9px] uppercase tracking-wider font-bold transition-colors cursor-pointer touch-manipulation select-none"
-        >
-          {expanded ? "Collapse" : `+${hiddenCount} More`}
-        </button>
-      )}
-    </div>
+    <span className="inline-flex items-center gap-1 bg-[var(--color-you-tint)] text-[#1A1A1A] px-1 py-0 text-[9px] uppercase tracking-wider font-bold">
+      You: {myTag.count}
+    </span>
   );
 }

@@ -4,6 +4,12 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.7.2 — 2026-04-17
+
+### Changed
+- **Insights ownership pills now you-only** — v1.7.1's +N MORE toggle helped on desktop but still looked horrible on mobile in `StanleyCupOdds`, where the Team column is ~80px wide and each chip stacked vertically. In 15-team leagues the cross-league ownership list was noise anyway — the signal you scan for during a game is "do I have skin in this?". `RosteredChips` now renders a single `YOU: {count}` pill when the caller owns players on that NHL team, and nothing otherwise. Matching is done via `useLeague()` + active-league membership, so no backend changes.
+- **StanleyCupOdds mobile grid** — dropped the phantom 6th grid column on mobile (the "Final" column was hidden but the track still reserved 3rem, truncating team names to "AVA…"). Mobile now has 5 tracks matching the 5 visible cells; desktop keeps the full 6.
+
 ## v1.7.1 — 2026-04-17
 
 ### Changed
