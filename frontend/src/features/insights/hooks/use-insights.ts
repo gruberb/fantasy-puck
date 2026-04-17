@@ -17,6 +17,15 @@ export interface HotPlayerSignal {
   topShotSpeed: number | null;
 }
 
+export type SeriesStateCode =
+  | "eliminated"
+  | "facingElim"
+  | "trailing"
+  | "tied"
+  | "leading"
+  | "aboutToAdvance"
+  | "advanced";
+
 export interface ContenderSignal {
   teamAbbrev: string;
   seriesTitle: string;
@@ -24,6 +33,36 @@ export interface ContenderSignal {
   opponentAbbrev: string;
   opponentWins: number;
   round: number;
+  seriesState: SeriesStateCode;
+  seriesLabel: string;
+  oddsToAdvance: number;
+  gamesRemaining: number;
+}
+
+export interface TeamSeriesProjection {
+  teamAbbrev: string;
+  teamName: string;
+  opponentAbbrev: string;
+  opponentName: string;
+  round: number;
+  wins: number;
+  opponentWins: number;
+  seriesState: SeriesStateCode;
+  seriesLabel: string;
+  oddsToAdvance: number;
+  gamesRemaining: number;
+}
+
+export interface InjuryEntry {
+  raw: string;
+  playerName: string | null;
+  status: string | null;
+  fantasyTeam: string | null;
+}
+
+export interface RosteredPlayerTag {
+  fantasyTeamName: string;
+  count: number;
 }
 
 export interface PlayerLeader {
@@ -61,6 +100,7 @@ export interface TodaysGameSignal {
   awayL10: string | null;
   homeLastResult: string | null;
   awayLastResult: string | null;
+  rosteredPlayerTags: RosteredPlayerTag[];
 }
 
 export interface FantasyRaceSignal {
@@ -68,6 +108,8 @@ export interface FantasyRaceSignal {
   totalPoints: number;
   rank: number;
   playersActiveToday: number;
+  sparkline: number[];
+  deltaYesterday: number;
 }
 
 export interface SleeperAlertSignal {
@@ -90,11 +132,14 @@ export interface InsightsNarratives {
 
 export interface InsightsSignals {
   hotPlayers: HotPlayerSignal[];
+  coldHands: HotPlayerSignal[];
   cupContenders: ContenderSignal[];
+  seriesProjections: TeamSeriesProjection[];
   todaysGames: TodaysGameSignal[];
   fantasyRace: FantasyRaceSignal[];
   sleeperAlerts: SleeperAlertSignal[];
   newsHeadlines: string[];
+  injuryReport: InjuryEntry[];
 }
 
 export interface InsightsResponse {

@@ -210,6 +210,13 @@ pub fn create_router(db: FantasyDb, nhl_client: NhlClient, config: Arc<Config>) 
             get(handlers::insights::get_insights),
         )
         // ---------------------------------------------------------------
+        // Pulse (me-focused live dashboard)
+        // ---------------------------------------------------------------
+        .route(
+            "/api/pulse",
+            get(handlers::pulse::get_pulse),
+        )
+        // ---------------------------------------------------------------
         // Admin
         // ---------------------------------------------------------------
         .route(

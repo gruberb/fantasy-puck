@@ -203,6 +203,108 @@ impl<'a> TeamDbService<'a> {
         Ok(result)
     }
 
+    /// Return last-N-days of team points for every team in the league.
+    /// Result: team_id -> Vec<i32> in chronological order (oldest first).
+    /// Missing days are simply absent from each vec (not padded with zeros),
+    /// so callers can decide how to render short histories.
+    pub async fn get_team_sparklines(
+        &self,
+        league_id: &str,
+        days: i32,
+    ) -> Result<HashMap<i64, Vec<i32>>> {
+        let since = chrono::Utc::now()
+            - chrono::Duration::days(days as i64);
+        let since_str = since.format("%Y-%m-%d").to_string();
+
+        let rows = sqlx::query(
+            r#"
+            SELECT team_id, date, points
+            FROM daily_rankings
+            WHERE league_id = $1::uuid
+              AND date >= $2
+            ORDER BY team_id, date
+            "#,
+        )
+        .bind(league_id)
+        .bind(&since_str)
+        .map(|row: sqlx::postgres::PgRow| {
+            (
+                row.get::<i64, _>("team_id"),
+                row.get::<i32, _>("points"),
+            )
+        })
+        .fetch_all(self.pool)
+        .await?;
+
+        let mut map: HashMap<i64, Vec<i32>> = HashMap::new();
+        for (team_id, points) in rows {
+            map.entry(team_id).or_default().push(points);
+        }
+        Ok(map)
+    }
+
+    /// For each fantasy team in the league, return the list of rostered players
+    /// in a simple flat structure. Used by the Series Forecast on Pulse.
+    pub async fn get_all_teams_with_players(
+        &self,
+        league_id: &str,
+    ) -> Result<Vec<FantasyTeamInGame>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                t.id          AS team_id,
+                t.name        AS team_name,
+                p.id          AS player_id,
+                p.nhl_id      AS nhl_id,
+                p.name        AS player_name,
+                p.nhl_team    AS nhl_team,
+                p.position    AS position
+            FROM fantasy_teams t
+            INNER JOIN league_members lm ON lm.fantasy_team_id = t.id
+            LEFT JOIN fantasy_players p ON p.team_id = t.id
+            WHERE lm.league_id = $1::uuid
+            ORDER BY t.id, p.id
+            "#,
+        )
+        .bind(league_id)
+        .map(|row: sqlx::postgres::PgRow| {
+            let team_id: i64 = row.get("team_id");
+            let team_name: String = row.get("team_name");
+            let player_id: Option<i64> = row.try_get("player_id").ok();
+            let nhl_id: Option<i64> = row.try_get("nhl_id").ok();
+            let player_name: Option<String> = row.try_get("player_name").ok();
+            let nhl_team: Option<String> = row.try_get("nhl_team").ok();
+            let position: Option<String> = row.try_get("position").ok();
+            (team_id, team_name, player_id, nhl_id, player_name, nhl_team, position)
+        })
+        .fetch_all(self.pool)
+        .await?;
+
+        let mut map: HashMap<i64, FantasyTeamInGame> = HashMap::new();
+        for (team_id, team_name, player_id, nhl_id, player_name, nhl_team, position) in rows {
+            let entry = map.entry(team_id).or_insert_with(|| FantasyTeamInGame {
+                team_id,
+                team_name: team_name.clone(),
+                players: Vec::new(),
+            });
+            if let (Some(player_id), Some(nhl_id), Some(player_name), Some(nhl_team), Some(position)) =
+                (player_id, nhl_id, player_name, nhl_team, position)
+            {
+                entry.players.push(PlayerInGame {
+                    player_id,
+                    nhl_id,
+                    player_name,
+                    nhl_team,
+                    position,
+                });
+            }
+        }
+
+        let mut result: Vec<FantasyTeamInGame> = map.into_values().collect();
+        result.sort_by_key(|t| t.team_id);
+        Ok(result)
+    }
+
     /// Update a fantasy team's name.
     pub async fn update_team_name(&self, team_id: i64, name: &str) -> Result<()> {
         sqlx::query("UPDATE fantasy_teams SET name = $1 WHERE id = $2")

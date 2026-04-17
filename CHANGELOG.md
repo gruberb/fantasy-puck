@@ -4,6 +4,32 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.6.0 — 2026-04-17
+
+### Added
+- **Series Forecast hero on Pulse** — per-fantasy-team roster × series grid, each cell color-coded by leverage state (eliminated / facing elim / trailing / tied / leading / closing in / advanced). Headline per team: "N players — X facing elim, Y trailing, Z leading." Heuristic win probability and games-remaining rendered inline. Your team is pinned first with a yellow accent.
+- **My Goalies Tonight card on Pulse** — per rostered goalie, shows confirmed/probable/backup status from NHL `gamecenter/{id}/landing` `probableGoalies` / `goalieComparison`, opponent, game start time. "TBD" when NHL hasn't posted goalies yet.
+- **League Live Board sparkbars** — 5-day daily-points sparkline per team next to today's delta; my team highlighted. Sourced from `daily_rankings` history, brutalist inline SVG (`<Sparkbars>` component — 15 LOC, zero chart-library dependency).
+- **Pulse auto-refresh** — 30s polling when games are live, matching the existing `useGamesData` pattern.
+- **Hot + Cold Hands split on Insights** — cold = rostered players with ≤1 point across last-5 games AND ≥3 games played floor (prevents missed-game noise). Grouped by fantasy-team owner.
+- **Series Projections card on Insights** — every active playoff team with heuristic "% to advance" and games-remaining. Honest labeling: "historical odds based on series state" (down 0-3 ≈ 5%, tied ≈ 50%, up 3-0 ≈ 95%). No external scraping, no broken-scraper risk.
+- **Injury Intel card on Insights** — rostered-player injuries split out of the general news scrape into their own widget. Fantasy-team ownership overlaid when the scraped player name matches a rostered player.
+- **Ownership tags on game cards** — "Your team has 3 players in this game" yellow badges on `Today's Watch` game cards.
+- **Fantasy Race sparkbars + yesterday delta** — 5-day trend chart and "+N yd" arrow per team row.
+- **Series-state badges on Cup Contenders** — "3-1 closing in", "2-2 tied", "1-3 facing elim" labels with color-coded backgrounds and `N% · M left` probability/games-remaining.
+- **New `/api/pulse` endpoint** — single-call Pulse data with `tokio::join!` parallel signal computation, cached per `pulse:{league}:{season}:{game_type}:{date}` key.
+- **`backend/src/utils/series_projection.rs`** — `classify`, `probability_to_advance`, `games_remaining`, `SeriesStateCode` — reusable across Pulse and Insights.
+- **Index migration** — `idx_daily_rankings_team_league_date` speeds up per-team sparkline queries.
+
+### Changed
+- **Pulse page rewrite** — top-down layout: Series Forecast → Today's Pulse → My Goalies → My Players In Action → League Live Board. Legacy `hooks/use-pulse-data.ts` replaced by `features/pulse/hooks/use-pulse.ts`.
+- **Insights signals** — `InsightsSignals` extended with `coldHands`, `injuryReport`, `seriesProjections`; `ContenderSignal` carries series-state / games-remaining / odds; `FantasyRaceSignal` carries sparkline + yesterday delta; `TodaysGameSignal` carries ownership tags.
+- **`/nhl/skaters/top` and draft pool helpers** unchanged from v1.5.0 — series projection logic is additive and isolated.
+
+### Dropped (from original v1.6 scope)
+- **MoneyPuck integration** — MoneyPuck's data endpoints require a commercial license and their predictions page is JS-rendered. Replaced with an honest in-house heuristic using historical best-of-7 outcome probabilities. No scraper to break.
+- **Daily Faceoff starting-goalies scrape** — NHL `probableGoalies` via `gamecenter/{id}/landing` is the canonical source 24h out; the scrape would add ~2 days of infra for a 6-hour earlier signal. Deferred to v1.6.1 if real-world usage shows users need earlier confirmation.
+
 ## v1.5.0 — 2026-04-17
 
 ### Added

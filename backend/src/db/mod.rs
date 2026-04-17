@@ -172,6 +172,25 @@ impl FantasyDb {
             .await
     }
 
+    pub async fn get_team_sparklines(
+        &self,
+        league_id: &str,
+        days: i32,
+    ) -> Result<std::collections::HashMap<i64, Vec<i32>>> {
+        teams::TeamDbService::new(&self.pool)
+            .get_team_sparklines(league_id, days)
+            .await
+    }
+
+    pub async fn get_all_teams_with_players(
+        &self,
+        league_id: &str,
+    ) -> Result<Vec<crate::models::fantasy::FantasyTeamInGame>> {
+        teams::TeamDbService::new(&self.pool)
+            .get_all_teams_with_players(league_id)
+            .await
+    }
+
     // --- Player methods (delegate to PlayerDbService) ---
 
     pub async fn add_player_to_team(
