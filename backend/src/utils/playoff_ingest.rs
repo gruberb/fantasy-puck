@@ -132,15 +132,13 @@ pub async fn is_playoff_skater_game_stats_empty(db: &FantasyDb) -> Result<bool> 
 /// calibration ground truth. Running this on a season that already has
 /// data is safe (upserts are idempotent).
 ///
-/// `season` is the 8-digit season string (e.g. `20222023`), matching the
-/// shape `playoff_game_results.season` stores. `short_year` is the
-/// 4-digit calendar year of the playoff end, which the series-games
-/// endpoint expects in its URL (e.g. `2023` for the 20222023 playoffs).
+/// `season` is the 8-digit season string (e.g. `20222023`), matching
+/// both `playoff_game_results.season` and the URL shape the series-games
+/// endpoint expects.
 pub async fn rebackfill_playoff_season_via_carousel(
     db: &FantasyDb,
     nhl: &Arc<NhlClient>,
     season: u32,
-    short_year: u32,
 ) -> Result<usize> {
     let carousel = nhl
         .get_playoff_carousel(season.to_string())
@@ -154,7 +152,7 @@ pub async fn rebackfill_playoff_season_via_carousel(
     for round in &carousel.rounds {
         for series in &round.series {
             let games = match nhl
-                .get_playoff_series_games(short_year, &series.series_letter)
+                .get_playoff_series_games(season, &series.series_letter)
                 .await
             {
                 Ok(g) => g,
@@ -164,7 +162,7 @@ pub async fn rebackfill_playoff_season_via_carousel(
                     // made the whole backfill look like a no-op.
                     return Err(crate::error::Error::NhlApi(format!(
                         "series {} ({}): {}",
-                        series.series_letter, short_year, e
+                        series.series_letter, season, e
                     )));
                 }
             };

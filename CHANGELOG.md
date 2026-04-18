@@ -4,6 +4,14 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.12.2 — 2026-04-18
+
+### Fixed — rebackfill URL used the wrong season format
+
+`/api/admin/rebackfill-carousel` was constructing URLs like `/v1/schedule/playoff-series/2023/a` using the 4-digit calendar year, which returns 404 from the NHL API. The endpoint actually requires the full 8-digit season (`/v1/schedule/playoff-series/20222023/a`). Every series fetch 404'd, every season reported 0 rows. The v1.12.1 error-surfacing exposed the 404 responses in the logs, which is how the bug was diagnosed.
+
+Removed the `short_year` derivation from the admin handler and the `rebackfill_playoff_season_via_carousel` signature; the endpoint now passes the 8-digit season through unchanged.
+
 ## v1.12.1 — 2026-04-18
 
 ### Fixed — Pulse "No games scheduled today" stuck after schedule landed

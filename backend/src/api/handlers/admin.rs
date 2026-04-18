@@ -144,15 +144,9 @@ pub async fn rebackfill_carousel(
     if !auth.is_admin {
         return Err(Error::Forbidden("Admin access required".into()));
     }
-    let short_year = params.season % 10_000;
     let nhl = Arc::new(state.nhl_client.clone());
-    let rows = rebackfill_playoff_season_via_carousel(
-        &state.db,
-        &nhl,
-        params.season,
-        short_year,
-    )
-    .await?;
+    let rows =
+        rebackfill_playoff_season_via_carousel(&state.db, &nhl, params.season).await?;
     info!(season = params.season, rows, "carousel-driven rebackfill complete");
     Ok(json_success(format!(
         "Rebackfilled {} completed playoff games for season {}",

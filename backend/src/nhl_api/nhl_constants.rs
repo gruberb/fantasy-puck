@@ -68,9 +68,10 @@ pub mod playoffs {
     }
 
     /// Get the games list for one playoff series. Season is the
-    /// 4-digit year of the second half (e.g. `2023` for 2022-23);
-    /// letter is lowercase (`a`..`m` etc., values from the carousel's
-    /// `seriesLetter`).
+    /// 8-digit `YYYYYYYY` string (e.g. `20222023` for 2022-23); letter
+    /// is lowercased before being appended (values from the carousel's
+    /// `seriesLetter`, which are uppercase). The 4-digit year returns
+    /// 404 — don't be tempted.
     pub fn series_games(season: u32, letter: &str) -> String {
         format!(
             "{}/v1/schedule/playoff-series/{}/{}",

@@ -482,11 +482,11 @@ impl NhlClient {
     }
 
     /// Fetch all games of one playoff series by its letter (A-O-ish).
-    /// Season is the 4-digit year of the playoffs' end (e.g. `2023` for
-    /// the 2022-23 playoffs). This endpoint returns every game in the
-    /// series with scored home/away teams, game IDs, and start times —
-    /// reliably for historical seasons where `/schedule/{date}` drops
-    /// games.
+    /// Season is the 8-digit season (e.g. `20222023` for the 2022-23
+    /// playoffs) — the NHL endpoint returns 404 for 4-digit years.
+    /// Response reliably includes game IDs, start times, and scored
+    /// home/away teams, including late-round games the
+    /// `/schedule/{date}` path drops.
     pub async fn get_playoff_series_games(
         &self,
         season: u32,
