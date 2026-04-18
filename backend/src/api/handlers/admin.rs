@@ -17,6 +17,7 @@ use crate::infra::calibrate::{
 use crate::infra::jobs::playoff_ingest::{
     ingest_playoff_games_for_range, rebackfill_playoff_season_via_carousel,
 };
+use crate::infra::jobs::rehydrate::{self, RehydrateSummary};
 use crate::infra::jobs::scheduler;
 
 pub async fn process_rankings(
@@ -308,4 +309,23 @@ pub async fn calibrate_sweep_handler(
         "calibration sweep complete"
     );
     Ok(json_success(report))
+}
+
+/// Run every NHL-mirror poller step once, synchronously, plus a
+/// one-shot backfill of `nhl_player_game_stats` from every game in
+/// `nhl_games`. Use this right after a fresh deploy to skip the
+/// 5-minute meta-poller warmup window. Safe to call repeatedly — all
+/// writes are idempotent upserts.
+///
+/// Admin-only. Returns a JSON summary of row counts.
+pub async fn rehydrate_mirror(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<RehydrateSummary>>> {
+    if !auth.is_admin {
+        return Err(Error::Forbidden("Admin access required".into()));
+    }
+    let nhl = Arc::new(state.nhl_client.clone());
+    let summary = rehydrate::run(&state.db, nhl).await;
+    Ok(json_success(summary))
 }

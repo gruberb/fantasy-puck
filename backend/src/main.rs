@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use dotenv::dotenv;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -12,6 +13,7 @@ use fantasy_hockey::infra::jobs::playoff_ingest::{
 };
 use fantasy_hockey::infra::jobs::scheduler;
 use fantasy_hockey::infra::jobs::scheduler::{init_rankings_scheduler, populate_historical_rankings};
+use fantasy_hockey::infra::jobs::{live_poller, meta_poller};
 use fantasy_hockey::FantasyDb;
 use fantasy_hockey::{api, NhlClient};
 
@@ -147,7 +149,38 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Run the API server
+    // --------------------------------------------------------------
+    // NHL mirror pollers
+    // --------------------------------------------------------------
+    //
+    // Two background tasks continuously mirror the NHL API into
+    // `nhl_*` Postgres tables so user-facing handlers only ever read
+    // from Postgres. The pollers coordinate across replicas via
+    // Postgres advisory locks (see `infra/db/nhl_mirror.rs`), so a
+    // multi-replica deployment only runs the work on one replica per
+    // tick.
+    let poller_cancel = CancellationToken::new();
+    {
+        let db_meta = db.clone();
+        let nhl_meta = Arc::new(nhl_client.clone());
+        let cancel = poller_cancel.clone();
+        tokio::spawn(async move {
+            meta_poller::run(db_meta, nhl_meta, cancel).await;
+        });
+    }
+    {
+        let db_live = db.clone();
+        let nhl_live = Arc::new(nhl_client.clone());
+        let cancel = poller_cancel.clone();
+        tokio::spawn(async move {
+            live_poller::run(db_live, nhl_live, cancel).await;
+        });
+    }
+
+    // Run the API server. When the server's graceful shutdown fires
+    // we cancel the pollers so they stop cleanly on SIGTERM.
     info!("Starting web server on port {}", config.port);
-    api::run_server(db, nhl_client, config).await
+    let result = api::run_server(db, nhl_client, config).await;
+    poller_cancel.cancel();
+    result
 }

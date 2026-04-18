@@ -254,6 +254,10 @@ pub fn create_router(db: FantasyDb, nhl_client: NhlClient, config: Arc<Config>) 
             "/api/admin/prewarm",
             get(handlers::admin::prewarm_cache),
         )
+        .route(
+            "/api/admin/rehydrate",
+            get(handlers::admin::rehydrate_mirror),
+        )
         // ---------------------------------------------------------------
         // WebSocket
         // ---------------------------------------------------------------
