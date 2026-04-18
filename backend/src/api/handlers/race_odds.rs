@@ -32,8 +32,8 @@ use crate::error::Result;
 use crate::models::fantasy::FantasyTeamInGame;
 use crate::models::nhl::{PlayoffCarousel, StatsLeaders};
 use crate::utils::race_sim::{
-    simulate, CurrentSeries, RaceSimInput, RaceSimOutput, SimFantasyTeam, SimPlayer, TeamOdds,
-    TeamRating, DEFAULT_K_FACTOR, DEFAULT_PPG, DEFAULT_TRIALS,
+    simulate, BracketState, RaceSimInput, RaceSimOutput, SeriesState, SimFantasyTeam, SimPlayer,
+    TeamOdds, TeamRating, DEFAULT_K_FACTOR, DEFAULT_PPG, DEFAULT_TRIALS,
 };
 
 // ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ async fn build_response(
     debug!(
         league_id = %league_id,
         teams = input.fantasy_teams.len(),
-        round1_series = input.round1.len(),
+        bracket_depth = input.bracket.depth(),
         "running race-odds simulation"
     );
 
@@ -221,7 +221,10 @@ async fn build_league_input(
     let regular_stats = regular_stats_res.ok();
     let ratings = ratings_from_standings(standings_res.ok().as_ref());
 
-    let round1 = round1_from_carousel(carousel.as_ref());
+    let bracket = bracket_from_carousel(carousel.as_ref());
+    // Still needed by `player_ppg` to decide when to switch from RS-PPG to
+    // playoff-PPG — has nothing to do with the sim's remaining-games logic,
+    // which now derives from the bracket directly.
     let games_played_so_far = games_played_from_carousel(carousel.as_ref());
 
     let fantasy_teams = teams
@@ -230,8 +233,7 @@ async fn build_league_input(
         .collect();
 
     Ok(RaceSimInput {
-        round1,
-        games_played_so_far,
+        bracket,
         ratings,
         k_factor: DEFAULT_K_FACTOR,
         fantasy_teams,
@@ -253,7 +255,7 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
     let regular_stats = regular_stats_res.ok();
     let ratings = ratings_from_standings(standings_res.ok().as_ref());
 
-    let round1 = round1_from_carousel(carousel.as_ref());
+    let bracket = bracket_from_carousel(carousel.as_ref());
     let games_played_so_far = games_played_from_carousel(carousel.as_ref());
 
     // Build a flat Fantasy Champion pool: top 40 regular-season skaters by
@@ -261,8 +263,7 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
     // per-team outputs map one-to-one to players.
     let Some(regular) = regular_stats.as_ref() else {
         return Ok(RaceSimInput {
-            round1,
-            games_played_so_far,
+            bracket,
             ratings,
             k_factor: DEFAULT_K_FACTOR,
             fantasy_teams: Vec::new(),
@@ -313,8 +314,7 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
         .collect();
 
     Ok(RaceSimInput {
-        round1,
-        games_played_so_far,
+        bracket,
         ratings,
         k_factor: DEFAULT_K_FACTOR,
         fantasy_teams,
@@ -325,24 +325,69 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
 // Carousel / roster helpers
 // ---------------------------------------------------------------------------
 
-fn round1_from_carousel(carousel: Option<&PlayoffCarousel>) -> Vec<CurrentSeries> {
+/// Build the full playoff bracket from the NHL `/playoff-series/carousel`
+/// feed. Every round is represented, padded with `SeriesState::Future` when
+/// the carousel hasn't populated a slot yet.
+///
+/// Classification per series:
+/// - `top_wins == 4` or `bottom_wins == 4` → `Completed` (winner fixed).
+/// - Both teams present → `InProgress` (may be 0-0 if the series hasn't
+///   started but the opponents are seeded, or live with real wins).
+/// - Missing entirely → `Future`.
+///
+/// Slot alignment: the carousel lists each round's series in bracket order
+/// (A-H for R1, AB/CD/EF/GH-style concatenations for R2, etc.) — we trust
+/// that order and pad from the right with `Future`.
+fn bracket_from_carousel(carousel: Option<&PlayoffCarousel>) -> BracketState {
+    const SLOT_COUNTS: [usize; 4] = [8, 4, 2, 1];
     let Some(c) = carousel else {
-        return Vec::new();
+        return BracketState::default();
     };
-    let Some(round) = c.rounds.iter().find(|r| r.round_number == 1) else {
-        return Vec::new();
-    };
-    round
-        .series
-        .iter()
-        .map(|s| CurrentSeries {
-            series_letter: s.series_letter.clone(),
-            top_team: s.top_seed.abbrev.clone(),
-            top_wins: s.top_seed.wins.max(0) as u32,
-            bottom_team: s.bottom_seed.abbrev.clone(),
-            bottom_wins: s.bottom_seed.wins.max(0) as u32,
-        })
-        .collect()
+
+    let mut rounds: Vec<Vec<SeriesState>> = Vec::with_capacity(SLOT_COUNTS.len());
+    for (idx, &slot_count) in SLOT_COUNTS.iter().enumerate() {
+        let round_number = (idx + 1) as i64;
+        let carousel_round = c.rounds.iter().find(|r| r.round_number == round_number);
+        let mut slots: Vec<SeriesState> = Vec::with_capacity(slot_count);
+        if let Some(round) = carousel_round {
+            for s in &round.series {
+                let top_wins = s.top_seed.wins.max(0) as u32;
+                let bottom_wins = s.bottom_seed.wins.max(0) as u32;
+                let state = if top_wins >= 4 {
+                    SeriesState::Completed {
+                        winner: s.top_seed.abbrev.clone(),
+                        loser: s.bottom_seed.abbrev.clone(),
+                        total_games: top_wins + bottom_wins,
+                    }
+                } else if bottom_wins >= 4 {
+                    SeriesState::Completed {
+                        winner: s.bottom_seed.abbrev.clone(),
+                        loser: s.top_seed.abbrev.clone(),
+                        total_games: top_wins + bottom_wins,
+                    }
+                } else if s.top_seed.abbrev.is_empty() || s.bottom_seed.abbrev.is_empty() {
+                    // Carousel has the slot but hasn't populated teams yet.
+                    SeriesState::Future
+                } else {
+                    SeriesState::InProgress {
+                        top_team: s.top_seed.abbrev.clone(),
+                        top_wins,
+                        bottom_team: s.bottom_seed.abbrev.clone(),
+                        bottom_wins,
+                    }
+                };
+                slots.push(state);
+                if slots.len() >= slot_count {
+                    break;
+                }
+            }
+        }
+        while slots.len() < slot_count {
+            slots.push(SeriesState::Future);
+        }
+        rounds.push(slots);
+    }
+    BracketState { rounds }
 }
 
 fn games_played_from_carousel(carousel: Option<&PlayoffCarousel>) -> HashMap<String, u32> {
@@ -530,8 +575,136 @@ fn compute_rivalry(my_team_id: i64, teams: &[TeamOdds]) -> Option<RivalryCard> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::nhl::{BottomSeed, PlayoffCarousel, Round, Series, TopSeed};
     use crate::utils::race_sim::TeamOdds;
     use std::collections::HashMap;
+
+    fn mk_series(letter: &str, top: &str, top_w: i64, bot: &str, bot_w: i64) -> Series {
+        Series {
+            series_letter: letter.into(),
+            round_number: 1,
+            series_label: String::new(),
+            series_link: String::new(),
+            top_seed: TopSeed {
+                id: 0,
+                abbrev: top.into(),
+                wins: top_w,
+                logo: String::new(),
+                dark_logo: String::new(),
+            },
+            bottom_seed: BottomSeed {
+                id: 0,
+                abbrev: bot.into(),
+                wins: bot_w,
+                logo: String::new(),
+                dark_logo: String::new(),
+            },
+            needed_to_win: 4,
+        }
+    }
+
+    #[test]
+    fn bracket_from_carousel_pads_missing_rounds_with_future() {
+        // Carousel has only R1 populated (the real shape on day 1 of
+        // playoffs). Bracket must still have depth 4 with later rounds
+        // filled with Future slots.
+        let carousel = PlayoffCarousel {
+            season_id: 20252026,
+            current_round: 1,
+            rounds: vec![Round {
+                round_number: 1,
+                round_label: "First Round".into(),
+                round_abbrev: "R1".into(),
+                series: (0..8)
+                    .map(|i| {
+                        mk_series(
+                            &format!("{}", (b'A' + i as u8) as char),
+                            &format!("T{}", i),
+                            0,
+                            &format!("B{}", i),
+                            0,
+                        )
+                    })
+                    .collect(),
+            }],
+        };
+        let bracket = bracket_from_carousel(Some(&carousel));
+        assert_eq!(bracket.depth(), 4);
+        assert_eq!(bracket.rounds[0].len(), 8);
+        assert_eq!(bracket.rounds[1].len(), 4);
+        assert_eq!(bracket.rounds[2].len(), 2);
+        assert_eq!(bracket.rounds[3].len(), 1);
+        for slot in &bracket.rounds[1] {
+            assert!(
+                matches!(slot, SeriesState::Future),
+                "R2 should be Future before any R1 series completes"
+            );
+        }
+    }
+
+    #[test]
+    fn bracket_from_carousel_classifies_series_state() {
+        // Mix: one completed (4-1), one in-progress (2-1), one 0-0
+        // (participants known but not played).
+        let carousel = PlayoffCarousel {
+            season_id: 20252026,
+            current_round: 1,
+            rounds: vec![Round {
+                round_number: 1,
+                round_label: "First Round".into(),
+                round_abbrev: "R1".into(),
+                series: vec![
+                    mk_series("A", "BOS", 4, "BUF", 1),
+                    mk_series("B", "TBL", 2, "MTL", 1),
+                    mk_series("C", "CAR", 0, "OTT", 0),
+                ],
+            }],
+        };
+        let bracket = bracket_from_carousel(Some(&carousel));
+        match &bracket.rounds[0][0] {
+            SeriesState::Completed {
+                winner,
+                loser,
+                total_games,
+            } => {
+                assert_eq!(winner, "BOS");
+                assert_eq!(loser, "BUF");
+                assert_eq!(*total_games, 5);
+            }
+            other => panic!("expected Completed, got {:?}", other),
+        }
+        match &bracket.rounds[0][1] {
+            SeriesState::InProgress {
+                top_team,
+                top_wins,
+                bottom_team,
+                bottom_wins,
+            } => {
+                assert_eq!(top_team, "TBL");
+                assert_eq!(*top_wins, 2);
+                assert_eq!(bottom_team, "MTL");
+                assert_eq!(*bottom_wins, 1);
+            }
+            other => panic!("expected InProgress, got {:?}", other),
+        }
+        // Third entry is 0-0 but both teams populated → InProgress (about
+        // to start), not Future.
+        assert!(matches!(bracket.rounds[0][2], SeriesState::InProgress { .. }));
+        // Remaining R1 slots padded with Future.
+        for i in 3..8 {
+            assert!(
+                matches!(bracket.rounds[0][i], SeriesState::Future),
+                "slot {} should be Future (padded)",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn bracket_from_carousel_absent_returns_empty() {
+        let bracket = bracket_from_carousel(None);
+        assert_eq!(bracket.depth(), 0);
+    }
 
     fn odds_with_h2h(
         id: i64,

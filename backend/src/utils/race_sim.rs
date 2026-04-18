@@ -5,23 +5,25 @@
 //! fantasy team's (and player's) projected final total plus win probability.
 //!
 //! The engine simulates the whole bracket end-to-end for N trials:
-//!   1. Every in-progress first-round series is resolved into a winner and a
-//!      game count by simulating individual games. Per-game win probability
-//!      is a logistic of the team-strength gap, biased by current series
-//!      state — this follows the hockeystats.com methodology where per-game
-//!      odds come from team strength and series outcome emerges from
-//!      iterated per-game draws, rather than from a pre-baked series-state
-//!      table.
-//!   2. Round winners pair up the bracket by series-letter convention
-//!      (A+B, C+D, E+F, G+H, then those pairs) through the Cup Final. Later
-//!      rounds start 0-0 and inherit team strengths.
-//!   3. Each playoff team ends the trial with a `games_played_this_run`
-//!      shared by every player on that roster — teammates are correlated by
-//!      construction, and cross-roster correlation (two fantasy teams both
-//!      rostering an Oilers skater) falls out automatically.
+//!   1. The caller hands us a [`BracketState`] — the playoff tree with every
+//!      series tagged `Completed` (winner fixed), `InProgress` (live wins),
+//!      or `Future` (participants not yet known). For each trial we walk the
+//!      rounds in order and resolve every slot. `Completed` slots propagate
+//!      their known winner unchanged — they contribute zero remaining games.
+//!      `InProgress` slots continue from their live (top_wins, bottom_wins)
+//!      state. `Future` slots pull their participants from the winners of
+//!      the two feeder slots in the previous round and simulate from 0-0.
+//!   2. Per-game win probability is a logistic of the team-strength gap —
+//!      this follows the hockeystats.com methodology where per-game odds
+//!      come from team strength and series outcome emerges from iterated
+//!      per-game draws, rather than from a pre-baked series-state table.
+//!   3. Each playoff team ends the trial with a `remaining_games_this_trial`
+//!      value shared by every player on that roster — teammates are
+//!      correlated by construction, and cross-roster correlation (two
+//!      fantasy teams both rostering an Oilers skater) falls out for free.
 //!   4. For each skater, remaining fantasy points are drawn from a Poisson
-//!      around `ppg * games_remaining`. Realised playoff points are added
-//!      on top.
+//!      around `ppg * remaining_games`. Realised playoff points (locked-in)
+//!      are added on top.
 //!
 //! Callers are expected to run [`simulate`] inside `spawn_blocking`: for the
 //! default 5000 trials across a full bracket and ~100 players we're in the
@@ -38,18 +40,102 @@ use serde::{Deserialize, Serialize};
 // Inputs
 // ---------------------------------------------------------------------------
 
-/// State of one currently-active first-round series.
+/// Lifecycle state of one playoff series.
 ///
-/// `series_letter` (A..H) determines round-2 bracket pairing — the NHL
-/// convention is A↔B, C↔D, E↔F, G↔H into round 2, then those winners pair
-/// into round 3, and the conference winners meet in the final.
+/// Every series in the bracket passes through these states in order:
+/// `Future` → `InProgress` → `Completed`. The simulator resolves each state
+/// differently inside a trial:
+/// - [`SeriesState::Completed`] propagates its known winner and contributes
+///   zero remaining games (the series is done in real life).
+/// - [`SeriesState::InProgress`] continues from the live `(top_wins,
+///   bottom_wins)` score — so a team up 3-0 inherits a near-certainty of
+///   advancing, and the remaining-games count excludes games already played.
+/// - [`SeriesState::Future`] has no participants until the previous round's
+///   feeding slots resolve within the trial. Simulated from 0-0.
 #[derive(Debug, Clone)]
-pub struct CurrentSeries {
-    pub series_letter: String,
-    pub top_team: String,
-    pub top_wins: u32,
-    pub bottom_team: String,
-    pub bottom_wins: u32,
+pub enum SeriesState {
+    /// Participants unknown; filled in per-trial from feeder slots.
+    Future,
+    /// Both teams known; may be 0-0 (about to start) or live.
+    InProgress {
+        top_team: String,
+        top_wins: u32,
+        bottom_team: String,
+        bottom_wins: u32,
+    },
+    /// Resolved series. `total_games` is the actual number of games played
+    /// in this series (4 to 7). Used only for bookkeeping; the sim adds
+    /// zero *remaining* games on top.
+    Completed {
+        winner: String,
+        loser: String,
+        total_games: u32,
+    },
+}
+
+/// The NHL playoff bracket as a strict positional binary tree.
+///
+/// Indexing convention:
+/// - `rounds[0]` — first round (8 series for a 16-team bracket)
+/// - `rounds[1]` — conference semifinals (4)
+/// - `rounds[2]` — conference finals (2)
+/// - `rounds[3]` — Stanley Cup Final (1)
+///
+/// Pairing is positional: the winner of `rounds[r][2i]` meets the winner of
+/// `rounds[r][2i+1]` in `rounds[r+1][i]`. This matches the NHL's static
+/// bracket (2013-present); teams do not re-seed between rounds.
+///
+/// Callers building this from the NHL `/playoff-series/carousel` feed
+/// should pad missing rounds / slots with `SeriesState::Future` so the
+/// sim walks the full tree.
+#[derive(Debug, Clone, Default)]
+pub struct BracketState {
+    pub rounds: Vec<Vec<SeriesState>>,
+}
+
+impl BracketState {
+    /// Number of rounds with at least one slot. For a full 16-team bracket
+    /// this returns 4.
+    pub fn depth(&self) -> usize {
+        self.rounds.len()
+    }
+
+    /// The set of NHL team abbreviations that are (or were) participants in
+    /// at least one bracket slot. Derived from `InProgress` and `Completed`
+    /// series in the first round — enough for every team that actually
+    /// entered the playoffs.
+    pub fn known_teams(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen = HashSet::<String>::new();
+        let first = match self.rounds.first() {
+            Some(r) => r,
+            None => return out,
+        };
+        for series in first {
+            match series {
+                SeriesState::InProgress {
+                    top_team,
+                    bottom_team,
+                    ..
+                } => {
+                    for t in [top_team, bottom_team] {
+                        if seen.insert(t.clone()) {
+                            out.push(t.clone());
+                        }
+                    }
+                }
+                SeriesState::Completed { winner, loser, .. } => {
+                    for t in [winner, loser] {
+                        if seen.insert(t.clone()) {
+                            out.push(t.clone());
+                        }
+                    }
+                }
+                SeriesState::Future => {}
+            }
+        }
+        out
+    }
 }
 
 /// Team strength scalar — regular-season standings points or equivalent.
@@ -83,14 +169,9 @@ pub struct SimFantasyTeam {
 
 #[derive(Debug, Clone)]
 pub struct RaceSimInput {
-    /// All in-progress first-round series. Later rounds are simulated from
-    /// 0-0 states because no NHL series ever exists past round 1 before
-    /// round 1 completes.
-    pub round1: Vec<CurrentSeries>,
-    /// Games already played per team across the whole playoff run so far.
-    /// For round 1 this is `top_wins + bottom_wins` of the team's current
-    /// series.
-    pub games_played_so_far: HashMap<String, u32>,
+    /// Full bracket — every round, every slot, tagged with its lifecycle
+    /// state. The sim walks this in order and resolves each slot per trial.
+    pub bracket: BracketState,
     /// Team-strength scalar keyed by NHL abbrev. Teams absent from this map
     /// are treated as league-average.
     pub ratings: HashMap<String, TeamRating>,
@@ -232,33 +313,24 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
     // Strict inequality: ties contribute to neither side.
     let mut h2h_wins: Vec<Vec<u32>> = vec![vec![0; n_teams]; n_teams];
 
-    // NHL-team accumulators. Index space is the set of abbrevs appearing in
-    // `round1` input — every team entering the playoffs starts with a slot.
-    let nhl_abbrevs: Vec<String> = {
-        let mut seen = HashSet::<String>::new();
-        let mut out = Vec::new();
-        for s in &input.round1 {
-            for abbrev in [&s.top_team, &s.bottom_team] {
-                if seen.insert(abbrev.clone()) {
-                    out.push(abbrev.clone());
-                }
-            }
-        }
-        out
-    };
+    // NHL-team accumulators. Index space is every abbrev appearing in R1 of
+    // the bracket (InProgress or Completed) — that's every team that
+    // entered the playoffs.
+    let nhl_abbrevs = input.bracket.known_teams();
     let nhl_idx: HashMap<String, usize> = nhl_abbrevs
         .iter()
         .enumerate()
         .map(|(i, a)| (a.clone(), i))
         .collect();
     let n_nhl = nhl_abbrevs.len();
-    let mut nhl_round1_wins = vec![0u32; n_nhl];
-    let mut nhl_conf_finals = vec![0u32; n_nhl];
-    let mut nhl_cup_finals = vec![0u32; n_nhl];
-    let mut nhl_cup_wins = vec![0u32; n_nhl];
+    let mut nhl_round_advance: Vec<Vec<u32>> = vec![vec![0; n_nhl]; input.bracket.depth()];
     let mut nhl_games_total = vec![0u64; n_nhl];
 
-    let mut team_games_this_run: HashMap<String, u32> = HashMap::with_capacity(16);
+    // Per-trial scratch. `remaining_games[team]` counts games the team is
+    // *still going to play* this trial — not games already played in real
+    // life. Used directly to size each player's Poisson draw, no
+    // subtraction needed.
+    let mut remaining_games: HashMap<String, u32> = HashMap::with_capacity(16);
     let mut team_totals: Vec<f32> = vec![0.0; n_teams];
     let mut ranking: Vec<(usize, f32)> = Vec::with_capacity(n_teams);
 
@@ -269,76 +341,101 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
     };
 
     for _ in 0..trials {
-        team_games_this_run.clear();
+        remaining_games.clear();
         for g in team_totals.iter_mut() {
             *g = 0.0;
         }
-        for (team, games) in &input.games_played_so_far {
-            team_games_this_run.insert(team.clone(), *games);
-        }
 
-        // --- Round 1: simulate remaining games in each active series. ---
-        let mut round_winners: Vec<(String, String)> = Vec::with_capacity(input.round1.len());
-        for series in &input.round1 {
-            let top_rating = rating_for(&input.ratings, &series.top_team);
-            let bot_rating = rating_for(&input.ratings, &series.bottom_team);
-            let p_top_game = sigmoid(k * (top_rating - bot_rating));
-
-            let outcome = simulate_series(
-                series.top_wins,
-                series.bottom_wins,
-                p_top_game,
-                rng,
-            );
-            let remaining = outcome
-                .total_games()
-                .saturating_sub(series.top_wins + series.bottom_wins);
-            add_games(&mut team_games_this_run, &series.top_team, remaining);
-            add_games(&mut team_games_this_run, &series.bottom_team, remaining);
-
-            let winner = if outcome.top_wins >= 4 {
-                series.top_team.clone()
-            } else {
-                series.bottom_team.clone()
-            };
-            // Winner advanced past round 1.
-            if let Some(&i) = nhl_idx.get(&winner) {
-                nhl_round1_wins[i] += 1;
-            }
-            round_winners.push((series.series_letter.clone(), winner));
-        }
-
-        // --- Rounds 2+: pair winners by bracket order, simulate from 0-0. ---
-        // Track which round the survivors have most recently reached. After
-        // round 1 they've reached "round 2" (conference semis). Each pass of
-        // pair_and_simulate advances the survivors one round further.
-        let mut round_reached = 2u32;
-        while round_winners.len() > 1 {
-            round_winners = pair_and_simulate(
-                &round_winners,
-                &input.ratings,
-                k,
-                &mut team_games_this_run,
-                rng,
-            );
-            round_reached += 1;
-            // round_reached now reflects the round the new `round_winners`
-            // have advanced to: 3 = Conference Finals, 4 = Cup Final,
-            // 5 = Cup winner.
-            for (_, winner) in &round_winners {
-                if let Some(&i) = nhl_idx.get(winner) {
-                    match round_reached {
-                        3 => nhl_conf_finals[i] += 1,
-                        4 => nhl_cup_finals[i] += 1,
-                        5 => nhl_cup_wins[i] += 1,
-                        _ => {} // bracket is 16→1, shouldn't go past 5
+        // --- Walk the bracket. Each round produces winners[r][i] = team that
+        // won slot i of round r in this trial. Round r+1's Future slots pull
+        // their participants from winners[r][2i] and winners[r][2i+1]. ---
+        let n_rounds = input.bracket.depth();
+        let mut winners: Vec<Vec<String>> = Vec::with_capacity(n_rounds);
+        for (r, round) in input.bracket.rounds.iter().enumerate() {
+            let mut round_winners: Vec<String> = Vec::with_capacity(round.len());
+            for (i, slot) in round.iter().enumerate() {
+                let (winner, games_added, top_team, bottom_team) = match slot {
+                    SeriesState::Completed {
+                        winner,
+                        loser,
+                        total_games: _,
+                    } => {
+                        // Series already happened in real life. Zero new games.
+                        (winner.clone(), 0u32, winner.clone(), loser.clone())
                     }
+                    SeriesState::InProgress {
+                        top_team,
+                        top_wins,
+                        bottom_team,
+                        bottom_wins,
+                    } => {
+                        let top_rating = rating_for(&input.ratings, top_team);
+                        let bot_rating = rating_for(&input.ratings, bottom_team);
+                        let p_top_game = sigmoid(k * (top_rating - bot_rating));
+                        let outcome =
+                            simulate_series(*top_wins, *bottom_wins, p_top_game, rng);
+                        // Only games played *from now on* count as remaining.
+                        let remaining = outcome
+                            .total_games()
+                            .saturating_sub(*top_wins + *bottom_wins);
+                        let winner = if outcome.top_wins >= 4 {
+                            top_team.clone()
+                        } else {
+                            bottom_team.clone()
+                        };
+                        (winner, remaining, top_team.clone(), bottom_team.clone())
+                    }
+                    SeriesState::Future => {
+                        // Participants come from the previous round's feeder
+                        // slots. If the bracket is structurally incomplete
+                        // (e.g. the previous round has fewer winners than we
+                        // need), skip this slot — the trial degrades
+                        // gracefully instead of panicking.
+                        let (top, bot) = match (
+                            winners.get(r.wrapping_sub(1)).and_then(|w| w.get(2 * i)),
+                            winners.get(r.wrapping_sub(1)).and_then(|w| w.get(2 * i + 1)),
+                        ) {
+                            (Some(a), Some(b)) => (a.clone(), b.clone()),
+                            _ => {
+                                round_winners.push(String::new());
+                                continue;
+                            }
+                        };
+                        let top_rating = rating_for(&input.ratings, &top);
+                        let bot_rating = rating_for(&input.ratings, &bot);
+                        let p_top_game = sigmoid(k * (top_rating - bot_rating));
+                        let outcome = simulate_series(0, 0, p_top_game, rng);
+                        let games = outcome.total_games();
+                        let winner = if outcome.top_wins >= 4 {
+                            top.clone()
+                        } else {
+                            bot.clone()
+                        };
+                        (winner, games, top, bot)
+                    }
+                };
+
+                if games_added > 0 {
+                    add_games(&mut remaining_games, &top_team, games_added);
+                    add_games(&mut remaining_games, &bottom_team, games_added);
+                }
+                round_winners.push(winner.clone());
+
+                // Record advancement: winning slot (r, i) means the team
+                // advanced *out of* round r, i.e. reached round r+1 (or the
+                // Cup if r is the final round).
+                if let Some(&team_i) = nhl_idx.get(&winner) {
+                    nhl_round_advance[r][team_i] += 1;
                 }
             }
+            winners.push(round_winners);
         }
 
-        // Accumulate games-played per NHL team for the expected_games stat.
-        for (abbrev, games) in &team_games_this_run {
+        // Expected-games accumulator — count games we simulated as
+        // remaining this trial. Already-played games are *not* in this
+        // number; callers who want "total games incl. past" add the
+        // carousel's current wins back themselves.
+        for (abbrev, games) in &remaining_games {
             if let Some(&i) = nhl_idx.get(abbrev) {
                 nhl_games_total[i] += *games as u64;
             }
@@ -346,14 +443,9 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
 
         // --- Accumulate fantasy totals. ---
         for (pi, player) in players.iter().enumerate() {
-            let team_games = *team_games_this_run.get(&player.nhl_team).unwrap_or(&0);
-            let already = *input
-                .games_played_so_far
-                .get(&player.nhl_team)
-                .unwrap_or(&0);
-            let remaining_games = team_games.saturating_sub(already);
-            let sim_pts = if remaining_games > 0 && player.ppg > 0.0 {
-                sample_poisson(player.ppg * remaining_games as f32, rng)
+            let rg = *remaining_games.get(&player.nhl_team).unwrap_or(&0);
+            let sim_pts = if rg > 0 && player.ppg > 0.0 {
+                sample_poisson(player.ppg * rg as f32, rng)
             } else {
                 0
             };
@@ -449,16 +541,31 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
         .collect();
 
     let trials_f = trials as f32;
+    // Pre-compute already-played games per team so `expected_games` remains
+    // "average total games this team plays across the whole run" rather than
+    // "average remaining." Frontends (My Stakes, Stanley Cup Odds) read it
+    // as a total, so preserving that semantics matters.
+    let already_played = already_played_by_team(&input.bracket);
+    let advance = |r: usize, i: usize| -> f32 {
+        nhl_round_advance
+            .get(r)
+            .and_then(|v| v.get(i).copied())
+            .unwrap_or(0) as f32
+            / trials_f
+    };
     let nhl_teams_out: Vec<NhlTeamOdds> = nhl_abbrevs
         .iter()
         .enumerate()
-        .map(|(i, abbrev)| NhlTeamOdds {
-            abbrev: abbrev.clone(),
-            advance_round1_prob: nhl_round1_wins[i] as f32 / trials_f,
-            conference_finals_prob: nhl_conf_finals[i] as f32 / trials_f,
-            cup_finals_prob: nhl_cup_finals[i] as f32 / trials_f,
-            cup_win_prob: nhl_cup_wins[i] as f32 / trials_f,
-            expected_games: nhl_games_total[i] as f32 / trials_f,
+        .map(|(i, abbrev)| {
+            let played = *already_played.get(abbrev).unwrap_or(&0) as f32;
+            NhlTeamOdds {
+                abbrev: abbrev.clone(),
+                advance_round1_prob: advance(0, i),
+                conference_finals_prob: advance(1, i),
+                cup_finals_prob: advance(2, i),
+                cup_win_prob: advance(3, i),
+                expected_games: played + nhl_games_total[i] as f32 / trials_f,
+            }
         })
         .collect();
 
@@ -512,40 +619,37 @@ fn simulate_series(
     SeriesOutcome { top_wins, bot_wins }
 }
 
-/// Advance winners into the next round. Pairing is positional: neighbouring
-/// entries meet in the next round, which matches the NHL bracket order
-/// (A,B,C,D,E,F,G,H → AB,CD,EF,GH → ABCD,EFGH → Cup).
-fn pair_and_simulate(
-    winners: &[(String, String)],
-    ratings: &HashMap<String, TeamRating>,
-    k: f32,
-    team_games: &mut HashMap<String, u32>,
-    rng: &mut SmallRng,
-) -> Vec<(String, String)> {
-    let mut next = Vec::with_capacity(winners.len() / 2);
-    let mut i = 0;
-    while i + 1 < winners.len() {
-        let (lbl_a, team_a) = &winners[i];
-        let (lbl_b, team_b) = &winners[i + 1];
-
-        let r_a = rating_for(ratings, team_a);
-        let r_b = rating_for(ratings, team_b);
-        let p_a_game = sigmoid(k * (r_a - r_b));
-
-        let outcome = simulate_series(0, 0, p_a_game, rng);
-        let games = outcome.total_games();
-        add_games(team_games, team_a, games);
-        add_games(team_games, team_b, games);
-
-        let winner = if outcome.top_wins >= 4 {
-            team_a.clone()
-        } else {
-            team_b.clone()
-        };
-        next.push((format!("{}{}", lbl_a, lbl_b), winner));
-        i += 2;
+/// Count games already played per team across the bracket (both
+/// `Completed` and `InProgress` contribute). Pure reduction over the
+/// input bracket, no simulation involved.
+fn already_played_by_team(bracket: &BracketState) -> HashMap<String, u32> {
+    let mut out = HashMap::<String, u32>::new();
+    for round in &bracket.rounds {
+        for series in round {
+            match series {
+                SeriesState::Completed {
+                    winner,
+                    loser,
+                    total_games,
+                } => {
+                    *out.entry(winner.clone()).or_insert(0) += total_games;
+                    *out.entry(loser.clone()).or_insert(0) += total_games;
+                }
+                SeriesState::InProgress {
+                    top_team,
+                    top_wins,
+                    bottom_team,
+                    bottom_wins,
+                } => {
+                    let g = top_wins + bottom_wins;
+                    *out.entry(top_team.clone()).or_insert(0) += g;
+                    *out.entry(bottom_team.clone()).or_insert(0) += g;
+                }
+                SeriesState::Future => {}
+            }
+        }
     }
-    next
+    out
 }
 
 fn rating_for(ratings: &HashMap<String, TeamRating>, team: &str) -> f32 {
@@ -623,30 +727,41 @@ mod tests {
         }
     }
 
-    fn baseline_input() -> RaceSimInput {
-        let r1 = vec![
-            ("A", "BOS", "BUF"),
-            ("B", "TBL", "MTL"),
-            ("C", "CAR", "OTT"),
-            ("D", "PIT", "PHI"),
-            ("E", "EDM", "ANA"),
-            ("F", "COL", "LAK"),
-            ("G", "DAL", "MIN"),
-            ("H", "VGK", "UTA"),
+    /// Build a fresh 16-team bracket with every R1 series at 0-0 and every
+    /// downstream round tagged Future. Mirrors the pre-puck-drop state of a
+    /// new playoffs.
+    fn baseline_bracket() -> BracketState {
+        let r1: Vec<SeriesState> = [
+            ("BOS", "BUF"),
+            ("TBL", "MTL"),
+            ("CAR", "OTT"),
+            ("PIT", "PHI"),
+            ("EDM", "ANA"),
+            ("COL", "LAK"),
+            ("DAL", "MIN"),
+            ("VGK", "UTA"),
         ]
         .into_iter()
-        .map(|(l, t, b)| CurrentSeries {
-            series_letter: l.into(),
+        .map(|(t, b)| SeriesState::InProgress {
             top_team: t.into(),
             top_wins: 0,
             bottom_team: b.into(),
             bottom_wins: 0,
         })
         .collect();
+        BracketState {
+            rounds: vec![
+                r1,
+                vec![SeriesState::Future; 4],
+                vec![SeriesState::Future; 2],
+                vec![SeriesState::Future; 1],
+            ],
+        }
+    }
 
+    fn baseline_input() -> RaceSimInput {
         RaceSimInput {
-            round1: r1,
-            games_played_so_far: HashMap::new(),
+            bracket: baseline_bracket(),
             ratings: HashMap::new(),
             k_factor: DEFAULT_K_FACTOR,
             fantasy_teams: vec![
@@ -742,10 +857,14 @@ mod tests {
     #[test]
     fn advancing_team_gets_more_games() {
         let mut input = baseline_input();
-        // BOS up 3-0, already played 3 games. MTL in a separate tied series.
-        input.round1[0].top_wins = 3;
-        input.games_played_so_far.insert("BOS".into(), 3);
-        input.games_played_so_far.insert("BUF".into(), 3);
+        // BOS up 3-0 (in the InProgress R1 series).
+        if let Some(SeriesState::InProgress { top_wins, .. }) =
+            input.bracket.rounds[0].get_mut(0)
+        {
+            *top_wins = 3;
+        } else {
+            panic!("expected first R1 slot to be InProgress");
+        }
 
         input.fantasy_teams = vec![
             SimFantasyTeam {
@@ -766,6 +885,198 @@ mod tests {
         assert!(
             bos.projected_final_mean > mtl.projected_final_mean,
             "BOS (up 3-0) should project higher than MTL (tied 0-0 in losing series)"
+        );
+    }
+
+    // --- New tests for bracket-state correctness (P0 regression guards) ---
+
+    #[test]
+    fn completed_r1_series_propagate_winner_deterministically() {
+        // If every R1 slot is Completed, the sim must honour those winners
+        // 100% of trials — no re-opening a decided series.
+        let mut bracket = baseline_bracket();
+        let winners = [
+            "BOS", "TBL", "CAR", "PIT", "EDM", "COL", "DAL", "VGK",
+        ];
+        let losers = [
+            "BUF", "MTL", "OTT", "PHI", "ANA", "LAK", "MIN", "UTA",
+        ];
+        for (i, (w, l)) in winners.iter().zip(losers.iter()).enumerate() {
+            bracket.rounds[0][i] = SeriesState::Completed {
+                winner: (*w).into(),
+                loser: (*l).into(),
+                total_games: 5,
+            };
+        }
+        let input = RaceSimInput {
+            bracket,
+            ratings: HashMap::new(),
+            k_factor: DEFAULT_K_FACTOR,
+            fantasy_teams: vec![SimFantasyTeam {
+                team_id: 1,
+                team_name: "Me".into(),
+                players: vec![mk_player("A", "BOS", 0.5, 0)],
+            }],
+        };
+        let out = simulate_with_seed(&input, 1000, 42);
+        let bos = out
+            .nhl_teams
+            .iter()
+            .find(|t| t.abbrev == "BOS")
+            .expect("BOS present");
+        let buf = out
+            .nhl_teams
+            .iter()
+            .find(|t| t.abbrev == "BUF")
+            .expect("BUF present");
+        assert!(
+            (bos.advance_round1_prob - 1.0).abs() < 1e-6,
+            "BOS must advance R1 in every trial, got {}",
+            bos.advance_round1_prob
+        );
+        assert!(
+            buf.advance_round1_prob.abs() < 1e-6,
+            "BUF must never advance R1, got {}",
+            buf.advance_round1_prob
+        );
+    }
+
+    #[test]
+    fn completed_series_add_zero_remaining_games() {
+        // When every series in the bracket is Completed, the sim should
+        // project zero future points for every player (no remaining games
+        // to score in). Only playoff_points_so_far remains.
+        let mut bracket = baseline_bracket();
+        for series in bracket.rounds[0].iter_mut() {
+            if let SeriesState::InProgress {
+                top_team,
+                bottom_team,
+                ..
+            } = series.clone()
+            {
+                *series = SeriesState::Completed {
+                    winner: top_team,
+                    loser: bottom_team,
+                    total_games: 4,
+                };
+            }
+        }
+        // Round 2+: propagate placeholder winners too so nothing is Future.
+        let r1_winners: Vec<String> = bracket.rounds[0]
+            .iter()
+            .map(|s| match s {
+                SeriesState::Completed { winner, .. } => winner.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+        for r in 1..bracket.rounds.len() {
+            for i in 0..bracket.rounds[r].len() {
+                let w = r1_winners[2 * i % r1_winners.len()].clone();
+                let l = r1_winners[(2 * i + 1) % r1_winners.len()].clone();
+                bracket.rounds[r][i] = SeriesState::Completed {
+                    winner: w,
+                    loser: l,
+                    total_games: 4,
+                };
+            }
+        }
+        let input = RaceSimInput {
+            bracket,
+            ratings: HashMap::new(),
+            k_factor: DEFAULT_K_FACTOR,
+            fantasy_teams: vec![SimFantasyTeam {
+                team_id: 1,
+                team_name: "Me".into(),
+                players: vec![mk_player("A", "BOS", 1.0, 5)],
+            }],
+        };
+        let out = simulate_with_seed(&input, 200, 7);
+        let me = &out.teams[0];
+        // Only lock-in points remain; nothing to sample.
+        assert!(
+            (me.projected_final_mean - 5.0).abs() < 1e-5,
+            "all-Completed bracket must project exactly the locked-in points, got {}",
+            me.projected_final_mean
+        );
+    }
+
+    #[test]
+    fn in_progress_late_round_is_respected() {
+        // A team up 3-0 in an R2 series should advance to the Conference
+        // Finals near-deterministically (clamp caps at 0.95 per game, so
+        // ~95% series win). This catches the old bug where R2 was replayed
+        // from 0-0.
+        let mut bracket = baseline_bracket();
+        // Finish R1: BOS, TBL, CAR, PIT advance on one side; EDM, COL, DAL,
+        // VGK on the other.
+        let r1_results = [
+            ("BOS", "BUF"),
+            ("TBL", "MTL"),
+            ("CAR", "OTT"),
+            ("PIT", "PHI"),
+            ("EDM", "ANA"),
+            ("COL", "LAK"),
+            ("DAL", "MIN"),
+            ("VGK", "UTA"),
+        ];
+        for (i, (w, l)) in r1_results.iter().enumerate() {
+            bracket.rounds[0][i] = SeriesState::Completed {
+                winner: (*w).into(),
+                loser: (*l).into(),
+                total_games: 5,
+            };
+        }
+        // R2: BOS vs TBL, BOS up 3-0.
+        bracket.rounds[1][0] = SeriesState::InProgress {
+            top_team: "BOS".into(),
+            top_wins: 3,
+            bottom_team: "TBL".into(),
+            bottom_wins: 0,
+        };
+        // Leave the remaining R2 slots as Future so the sim resolves them
+        // naturally from R1 Completed winners.
+
+        let input = RaceSimInput {
+            bracket,
+            ratings: HashMap::new(),
+            k_factor: DEFAULT_K_FACTOR,
+            fantasy_teams: vec![SimFantasyTeam {
+                team_id: 1,
+                team_name: "Me".into(),
+                players: vec![mk_player("A", "BOS", 0.5, 0)],
+            }],
+        };
+        let out = simulate_with_seed(&input, 2000, 55);
+        let bos = out
+            .nhl_teams
+            .iter()
+            .find(|t| t.abbrev == "BOS")
+            .expect("BOS present");
+        let tbl = out
+            .nhl_teams
+            .iter()
+            .find(|t| t.abbrev == "TBL")
+            .expect("TBL present");
+        // BOS already won R1 (Completed) and is up 3-0 in R2, so the chance
+        // they reach the Conference Finals should be >= 0.9 even with the
+        // per-game clamp.
+        assert!(
+            bos.conference_finals_prob >= 0.9,
+            "BOS up 3-0 in R2 after winning R1 should reach CF ≥ 90% of trials, got {}",
+            bos.conference_finals_prob
+        );
+        // TBL should never advance R1 again (they're Completed losers to
+        // someone else… wait, TBL won their R1 series in this setup, so
+        // they advance R1 deterministically) but their CF chance should
+        // be <= 0.1 (they'd have to come back from 0-3).
+        assert!(
+            (tbl.advance_round1_prob - 1.0).abs() < 1e-6,
+            "TBL won their R1 series in this setup; advance_round1_prob must be 1.0"
+        );
+        assert!(
+            tbl.conference_finals_prob <= 0.15,
+            "TBL down 0-3 should reach CF at most ~10% of trials, got {}",
+            tbl.conference_finals_prob
         );
     }
 

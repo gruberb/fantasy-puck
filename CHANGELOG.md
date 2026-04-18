@@ -4,6 +4,27 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.8.0 — 2026-04-18
+
+### Fixed — race-odds bracket-state correctness (P0)
+
+The race-odds sim was only bracket-state-aware for round 1. Once round 2 starts (~April 29), the old `RaceSimInput { round1: Vec<CurrentSeries>, ... }` + `pair_and_simulate(from 0-0)` path would have re-opened partially- or fully-decided R2+ series while `games_played_from_carousel` was already summing R2+ games into `games_played_so_far`. Net effect: a team up 3-0 in R2 would still be simulated as roughly 50/50 to advance, and the fantasy-points Poisson draw would see an inconsistent `remaining = team_games - already_played` that silently saturated to zero. This was invisible on day 1 of playoffs (only R1 active) but would have manifested mid-second-round.
+
+**Changes**
+- **New `SeriesState` enum** in `backend/src/utils/race_sim.rs`: `Future | InProgress { top_team, top_wins, bottom_team, bottom_wins } | Completed { winner, loser, total_games }`. Every slot in the bracket is tagged with one of these three and the sim resolves each differently per trial.
+- **New `BracketState` struct** — the full playoff tree as `rounds: Vec<Vec<SeriesState>>`, positional pairing (`rounds[r+1][i]` fed by `rounds[r][2i]` and `rounds[r][2i+1]`). Matches the NHL's static-bracket format.
+- **`RaceSimInput.round1: Vec<CurrentSeries>` → `RaceSimInput.bracket: BracketState`**. `games_played_so_far` dropped from the input — the sim now tracks `remaining_games` per trial directly, no subtraction confusion. `games_played_so_far` is still computed in `race_odds.rs` but only for the `player_ppg` tier-1 decision (switch from RS-PPG to playoff-PPG).
+- **New `bracket_from_carousel`** in `backend/src/api/handlers/race_odds.rs`: walks all four rounds of the NHL playoff carousel, classifies each series by its win totals (4+ wins → Completed, both teams present → InProgress, otherwise Future), and pads missing rounds/slots with `Future` so the sim always sees a depth-4 tree.
+- **`expected_games` semantics preserved**: still "average total games this team plays across the run," computed as `already_played + mean(remaining_games across trials)`. `MyStakes` / `StanleyCupOdds` frontends continue to read it as a total.
+
+**Tests** (`backend/src/utils/race_sim.rs`, `backend/src/api/handlers/race_odds.rs`)
+- `completed_r1_series_propagate_winner_deterministically` — Completed R1 series honour their real winner in 100% of trials; losers never advance R1.
+- `completed_series_add_zero_remaining_games` — a fully-Completed bracket projects exactly the locked-in `playoff_points_so_far` with no sampled points on top.
+- `in_progress_late_round_is_respected` — a team up 3-0 in an R2 series after winning R1 reaches the Conference Finals in ≥90% of trials (old code: ~50%). A team down 0-3 reaches the CF in ≤15% of trials.
+- `bracket_from_carousel_pads_missing_rounds_with_future` — a carousel with only R1 populated still yields a 4-round bracket with R2/R3/F filled with `Future` slots.
+- `bracket_from_carousel_classifies_series_state` — 4-1 → Completed (winner, loser, 5 games); 2-1 → InProgress with live wins; 0-0 with both teams present → InProgress (not Future).
+- `bracket_from_carousel_absent_returns_empty` — None carousel yields zero-depth bracket (sim runs, contributes zero points, no panic).
+
 ## v1.7.4 — 2026-04-18
 
 ### Changed
