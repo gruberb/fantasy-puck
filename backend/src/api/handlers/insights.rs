@@ -1145,7 +1145,7 @@ async fn compute_cold_hands(
 async fn compute_series_projections(
     state: &Arc<AppState>,
 ) -> Result<Vec<TeamSeriesProjection>> {
-    use crate::nhl_api::nhl_constants::team_names;
+    use crate::infra::nhl::constants::team_names;
     use crate::domain::prediction::series_projection as sp;
 
     let carousel = match state

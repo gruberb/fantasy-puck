@@ -10,13 +10,13 @@ use crate::api::handlers::insights::generate_and_cache_insights;
 use crate::api::handlers::race_odds::generate_and_cache_race_odds;
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
-use crate::db::FantasyDb;
+use crate::infra::db::FantasyDb;
 use crate::error::Result;
-use crate::models::fantasy::{DailyRanking, TeamDailyPerformance};
+use crate::domain::models::fantasy::{DailyRanking, TeamDailyPerformance};
 use crate::tuning::scheduler as tuning;
-use crate::utils::fantasy::process_game_performances;
-use crate::utils::player_pool::refresh_playoff_roster_cache;
-use crate::utils::playoff_ingest::ingest_playoff_games_for_date;
+use crate::domain::services::fantasy_points::process_game_performances;
+use crate::infra::jobs::player_pool::refresh_playoff_roster_cache;
+use crate::infra::jobs::playoff_ingest::ingest_playoff_games_for_date;
 use crate::ws::draft_hub::DraftHub;
 use crate::{Error, NhlClient};
 

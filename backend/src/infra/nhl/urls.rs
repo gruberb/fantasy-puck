@@ -8,9 +8,9 @@ use crate::api::dtos::{
 use crate::api::routes::AppState;
 use crate::Error;
 use crate::error::Result;
-use crate::models::fantasy::{FantasyTeamInGame, PlayerInGame};
-use crate::models::nhl::{GameBoxscore, GameState};
-use crate::utils::nhl::{calculate_form_from_game_log, find_player_stats_by_name};
+use crate::domain::models::fantasy::{FantasyTeamInGame, PlayerInGame};
+use crate::domain::models::nhl::{GameBoxscore, GameState};
+use crate::domain::services::nhl_stats::{calculate_form_from_game_log, find_player_stats_by_name};
 
 pub fn parse_date_param(date: String) -> Result<String> {
     match date.len() {
@@ -23,10 +23,10 @@ pub fn parse_date_param(date: String) -> Result<String> {
 
 /// Helper function to get fantasy players for an NHL team from the pre-aggregated map.
 pub fn get_fantasy_players_for_nhl_team(
-    nhl_client: &crate::nhl_api::nhl::NhlClient,
+    nhl_client: &crate::infra::nhl::client::NhlClient,
     nhl_team_players: &HashMap<String, HashMap<String, Vec<PlayerInGame>>>,
     nhl_team: &str,
-    fantasy_teams: &[crate::models::fantasy::FantasyTeamInGame],
+    fantasy_teams: &[crate::domain::models::fantasy::FantasyTeamInGame],
 ) -> Vec<FantasyPlayerResponse> {
     let mut players = Vec::new();
     if let Some(fantasy_map) = nhl_team_players.get(nhl_team) {
@@ -130,7 +130,7 @@ pub async fn process_players_for_team(
                         if !game_log.game_log.is_empty() {
                             // Calculate totals
                             let (goals, assists, points, games) =
-                                crate::utils::nhl::calculate_totals_from_game_log(
+                                crate::domain::services::nhl_stats::calculate_totals_from_game_log(
                                     &game_log.game_log,
                                 );
 
@@ -190,7 +190,7 @@ pub async fn process_players_for_team(
 
 /// Helper function to create a games summary.
 pub fn create_games_summary(
-    games: &[crate::models::nhl::TodayGame],
+    games: &[crate::domain::models::nhl::TodayGame],
     nhl_team_players: &HashMap<String, HashMap<String, Vec<PlayerInGame>>>,
 ) -> GamesSummaryResponse {
     // Collect all NHL teams playing today

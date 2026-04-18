@@ -9,10 +9,10 @@ use serde::Deserialize;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::auth::middleware::AuthUser;
-use crate::db::leagues::LeagueMemberRow;
-use crate::db::leagues::LeagueRow;
+use crate::infra::db::leagues::LeagueMemberRow;
+use crate::infra::db::leagues::LeagueRow;
 use crate::error::Result;
-use crate::models::db::League;
+use crate::domain::models::db::League;
 
 // ---------------------------------------------------------------------------
 // Query / request types

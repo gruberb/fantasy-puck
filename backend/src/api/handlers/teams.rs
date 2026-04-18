@@ -13,9 +13,9 @@ use crate::api::routes::AppState;
 use crate::api::{game_type, season};
 use crate::auth::middleware::AuthUser;
 use crate::error::Result;
-use crate::models::db::{FantasyPlayer, FantasyTeam};
-use crate::models::nhl::StatsLeaders;
-use crate::PlayerStats;
+use crate::domain::models::db::{FantasyPlayer, FantasyTeam};
+use crate::domain::models::nhl::StatsLeaders;
+use crate::domain::models::fantasy::PlayerStats;
 
 // ---------------------------------------------------------------------------
 // Request types

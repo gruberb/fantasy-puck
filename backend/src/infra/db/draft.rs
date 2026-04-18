@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-use crate::db::FantasyDb;
+use crate::infra::db::FantasyDb;
 use crate::error::Result;
 
 // --- Row types (returned from queries) ---

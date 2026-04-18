@@ -10,9 +10,9 @@ use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
 use crate::auth::middleware::AuthUser;
-use crate::db::draft::{DraftPickRow, DraftSessionRow, PlayerPoolRow};
+use crate::infra::db::draft::{DraftPickRow, DraftSessionRow, PlayerPoolRow};
 use crate::error::{Error, Result};
-use crate::utils::player_pool::{
+use crate::infra::jobs::player_pool::{
     fetch_playoff_roster_pool_cached, fetch_stats_leader_pool, PoolMap,
 };
 use crate::ws::draft_hub::DraftEvent;
@@ -30,10 +30,10 @@ async fn build_player_pool(state: &AppState) -> Result<PoolMap> {
 fn pool_to_inserts(
     session_id: &str,
     map: PoolMap,
-) -> Vec<crate::db::draft::PlayerPoolInsert> {
+) -> Vec<crate::infra::db::draft::PlayerPoolInsert> {
     map.into_iter()
         .map(|(nhl_id, (name, position, nhl_team, headshot_url))| {
-            crate::db::draft::PlayerPoolInsert {
+            crate::infra::db::draft::PlayerPoolInsert {
                 draft_session_id: session_id.to_string(),
                 nhl_id,
                 name,
@@ -323,7 +323,7 @@ pub async fn make_pick(
     // Insert the pick (pick_number is the global 0-based index, matching frontend)
     let pick = state
         .db
-        .insert_draft_pick(crate::db::draft::DraftPickInsert {
+        .insert_draft_pick(crate::infra::db::draft::DraftPickInsert {
             draft_session_id: draft_id.clone(),
             league_member_id: picking_member_id.clone(),
             player_pool_id: body.player_pool_id.clone(),

@@ -5,9 +5,9 @@ use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::api::dtos::PlayoffCarouselResponse;
-use crate::db::FantasyDb;
+use crate::infra::db::FantasyDb;
 use crate::error::{Error, Result};
-use crate::nhl_api::nhl::NhlClient;
+use crate::infra::nhl::client::NhlClient;
 
 /// (name, position, team_abbrev, headshot_url)
 pub type PoolEntry = (String, String, String, String);

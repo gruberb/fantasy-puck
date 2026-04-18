@@ -9,7 +9,7 @@ use axum::{
 
 use crate::api::handlers;
 use crate::config::Config;
-use crate::nhl_api::nhl::NhlClient;
+use crate::infra::nhl::client::NhlClient;
 use crate::ws::draft_hub::DraftHub;
 use crate::FantasyDb;
 

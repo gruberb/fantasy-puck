@@ -1,7 +1,7 @@
 use sqlx::postgres::PgPool;
 
 use crate::error::Result;
-use crate::models::db::FantasySleeper;
+use crate::domain::models::db::FantasySleeper;
 
 pub struct SleeperDbService<'a> {
     pool: &'a PgPool,

@@ -17,9 +17,9 @@ use std::sync::Arc;
 use chrono::NaiveDate;
 use tracing::{debug, info, warn};
 
-use crate::db::FantasyDb;
+use crate::infra::db::FantasyDb;
 use crate::error::Result;
-use crate::models::nhl::{GameState, TodayGame, TodaySchedule};
+use crate::domain::models::nhl::{GameState, TodayGame, TodaySchedule};
 use crate::NhlClient;
 
 /// Ingest every completed playoff game on `date` (YYYY-MM-DD). Returns the
@@ -272,7 +272,7 @@ async fn ingest_single_game(
     let (home_score, away_score) = match &game.game_score {
         Some(s) => (s.home, s.away),
         None => {
-            let sum_goals = |team: &crate::models::nhl::TeamGameStats| -> i32 {
+            let sum_goals = |team: &crate::domain::models::nhl::TeamGameStats| -> i32 {
                 team.forwards.iter().chain(team.defense.iter())
                     .map(|p| p.goals.unwrap_or(0))
                     .sum()
@@ -420,7 +420,7 @@ struct SkaterRow {
 }
 
 fn boxscore_to_row(
-    player: &crate::models::nhl::BoxscorePlayer,
+    player: &crate::domain::models::nhl::BoxscorePlayer,
     team_abbrev: &str,
     opponent: &str,
     home: bool,
@@ -448,7 +448,7 @@ fn boxscore_to_row(
     }
 }
 
-fn games_for_logging(schedule: &crate::models::nhl::TodaySchedule, date: &str) -> usize {
+fn games_for_logging(schedule: &crate::domain::models::nhl::TodaySchedule, date: &str) -> usize {
     schedule
         .games_for_date(date)
         .iter()

@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 use serde::Serialize;
 use tracing::debug;
 
-use crate::db::FantasyDb;
+use crate::infra::db::FantasyDb;
 use crate::domain::prediction::{
     backtest::{self, ResultRow},
     goalie_rating::{self, GoalieEntry},

@@ -6,12 +6,12 @@ use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use fantasy_hockey::config::Config;
-use fantasy_hockey::utils::historical_seed::seed_historical_skaters_if_empty;
-use fantasy_hockey::utils::playoff_ingest::{
+use fantasy_hockey::infra::jobs::historical_seed::seed_historical_skaters_if_empty;
+use fantasy_hockey::infra::jobs::playoff_ingest::{
     ingest_playoff_games_for_range, is_playoff_skater_game_stats_empty,
 };
-use fantasy_hockey::utils::scheduler;
-use fantasy_hockey::utils::scheduler::{init_rankings_scheduler, populate_historical_rankings};
+use fantasy_hockey::infra::jobs::scheduler;
+use fantasy_hockey::infra::jobs::scheduler::{init_rankings_scheduler, populate_historical_rankings};
 use fantasy_hockey::FantasyDb;
 use fantasy_hockey::{api, NhlClient};
 

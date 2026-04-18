@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::dtos::common::PlayerForm;
 use crate::api::dtos::common::{GamesSummaryResponse, SeriesStatusResponse};
-use crate::models::nhl::GameState;
+use crate::domain::models::nhl::GameState;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -11,7 +11,7 @@ use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
 use crate::error::Result;
-use crate::models::db::FantasyTeamWithPlayers;
+use crate::domain::models::db::FantasyTeamWithPlayers;
 
 pub async fn get_team_stats(
     State(state): State<Arc<AppState>>,
@@ -38,7 +38,7 @@ pub async fn get_team_stats(
         .await?;
 
     // 3. Calculate rankings
-    let rankings = crate::models::fantasy::TeamRanking::calculate_rankings(
+    let rankings = crate::domain::models::fantasy::TeamRanking::calculate_rankings(
         teams_with_players.clone(),
         stats.clone(),
     );
@@ -50,7 +50,7 @@ pub async fn get_team_stats(
         .await
         .unwrap_or_else(|_| Vec::new());
 
-    let daily_rankings_map: HashMap<i64, crate::models::db::TeamDailyRankingStats> = daily_rankings
+    let daily_rankings_map: HashMap<i64, crate::domain::models::db::TeamDailyRankingStats> = daily_rankings
         .into_iter()
         .map(|stats| (stats.team_id, stats))
         .collect();
@@ -59,7 +59,7 @@ pub async fn get_team_stats(
     let mut response = Vec::new();
 
     for team in &teams_with_players {
-        let default_ranking = crate::models::fantasy::TeamRanking::default();
+        let default_ranking = crate::domain::models::fantasy::TeamRanking::default();
         let team_ranking = rankings
             .iter()
             .find(|r| r.team_id == team.id)

@@ -152,7 +152,7 @@ pub mod edge {
 
 /// Stats related endpoints
 pub mod stats {
-    use crate::nhl_api::nhl_constants::NHL_FETCH_LIMIT;
+    use crate::infra::nhl::constants::NHL_FETCH_LIMIT;
 
     use super::NHL_API_BASE_URL;
 

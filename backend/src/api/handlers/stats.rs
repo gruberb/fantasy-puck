@@ -11,7 +11,7 @@ use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::error::Result;
-use crate::models::nhl::Player;
+use crate::domain::models::nhl::Player;
 
 /// Endpoint to fetch top skaters.
 pub async fn get_top_skaters(
@@ -47,7 +47,7 @@ pub async fn get_top_skaters(
     // (callers search by name/team/position, not by stat values). Cached in
     // Postgres so a cold hit doesn't fan out 16 roster calls to NHL.
     if game_type == 3 {
-        let pool = crate::utils::player_pool::fetch_playoff_roster_pool_cached(
+        let pool = crate::infra::jobs::player_pool::fetch_playoff_roster_pool_cached(
             &state.db,
             &state.nhl_client,
             *season,

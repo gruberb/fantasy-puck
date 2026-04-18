@@ -88,7 +88,7 @@ pub mod nhl_client {
 
     /// How often the background task sweeps expired entries out of
     /// the in-process URL cache. Spawned from `main.rs` via
-    /// [`crate::nhl_api::nhl::NhlClient::start_cache_cleanup`]. Short
+    /// [`crate::infra::nhl::client::NhlClient::start_cache_cleanup`]. Short
     /// enough that expired entries never accumulate; long enough
     /// that the sweep itself is cheap.
     pub const CACHE_CLEANUP_INTERVAL: Duration = Duration::from_secs(300);

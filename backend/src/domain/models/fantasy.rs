@@ -3,8 +3,8 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
-use crate::models::db::FantasyTeamWithPlayers;
-use crate::models::nhl::StatsLeaders;
+use crate::domain::models::db::FantasyTeamWithPlayers;
+use crate::domain::models::nhl::StatsLeaders;
 
 /// Player stats with calculated fantasy points
 #[derive(Debug, Default, Clone)]

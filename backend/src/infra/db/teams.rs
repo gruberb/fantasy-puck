@@ -4,8 +4,8 @@ use sqlx::postgres::PgPool;
 use sqlx::Row;
 
 use crate::error::Result;
-use crate::models::db::{FantasyTeam, FantasyTeamBets, NhlBetCount, TeamNhlCount};
-use crate::models::fantasy::{FantasyTeamInGame, PlayerInGame};
+use crate::domain::models::db::{FantasyTeam, FantasyTeamBets, NhlBetCount, TeamNhlCount};
+use crate::domain::models::fantasy::{FantasyTeamInGame, PlayerInGame};
 
 pub struct TeamDbService<'a> {
     pool: &'a PgPool,
@@ -332,7 +332,7 @@ impl<'a> TeamDbService<'a> {
     pub async fn get_daily_ranking_stats(
         &self,
         league_id: &str,
-    ) -> Result<Vec<crate::models::db::TeamDailyRankingStats>> {
+    ) -> Result<Vec<crate::domain::models::db::TeamDailyRankingStats>> {
         // Check if the table has any rows for this league
         let count: Option<i64> =
             sqlx::query_scalar("SELECT COUNT(*) FROM daily_rankings WHERE league_id = $1::uuid")
@@ -345,7 +345,7 @@ impl<'a> TeamDbService<'a> {
         }
 
         // Build a map of team stats
-        let mut team_stats: HashMap<i64, crate::models::db::TeamDailyRankingStats> = HashMap::new();
+        let mut team_stats: HashMap<i64, crate::domain::models::db::TeamDailyRankingStats> = HashMap::new();
 
         // First, initialize team stats with team IDs for this league
         let team_ids: Vec<i64> =
@@ -357,7 +357,7 @@ impl<'a> TeamDbService<'a> {
         for team_id in team_ids {
             team_stats.insert(
                 team_id,
-                crate::models::db::TeamDailyRankingStats {
+                crate::domain::models::db::TeamDailyRankingStats {
                     team_id,
                     wins: 0,
                     top_three: 0,

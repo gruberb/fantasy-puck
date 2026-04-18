@@ -1,4 +1,4 @@
-use crate::models::nhl::{BoxscorePlayer, GameBoxscore, GameLogEntry};
+use crate::domain::models::nhl::{BoxscorePlayer, GameBoxscore, GameLogEntry};
 
 /// Find player stats by NHL ID in boxscore (primary), falling back to name matching.
 pub fn find_player_stats_by_name(

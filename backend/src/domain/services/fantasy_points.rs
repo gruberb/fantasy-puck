@@ -1,6 +1,6 @@
-use crate::models::fantasy::{FantasyTeamInGame, PlayerGamePerformance, TeamDailyPerformance};
-use crate::models::nhl::GameBoxscore;
-use crate::utils::nhl::find_player_stats_by_name;
+use crate::domain::models::fantasy::{FantasyTeamInGame, PlayerGamePerformance, TeamDailyPerformance};
+use crate::domain::models::nhl::GameBoxscore;
+use crate::domain::services::nhl_stats::find_player_stats_by_name;
 
 pub fn process_game_performances(
     fantasy_teams: &[FantasyTeamInGame],

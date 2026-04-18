@@ -15,10 +15,10 @@ use crate::api::routes::AppState;
 use crate::api::{game_type, season};
 use crate::Error;
 use crate::error::Result;
-use crate::models::db::FantasyTeamWithPlayers;
-use crate::models::fantasy::{DailyRanking, TeamDailyPerformance, TeamRanking};
-use crate::utils::api::parse_date_param;
-use crate::utils::fantasy::process_game_performances;
+use crate::domain::models::db::FantasyTeamWithPlayers;
+use crate::domain::models::fantasy::{DailyRanking, TeamDailyPerformance, TeamRanking};
+use crate::infra::nhl::urls::parse_date_param;
+use crate::domain::services::fantasy_points::process_game_performances;
 
 /// Get current total rankings of all Fantasy Teams in a league
 pub async fn get_rankings(

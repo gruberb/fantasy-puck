@@ -14,8 +14,8 @@ use crate::api::routes::AppState;
 use crate::api::{game_type, season};
 use crate::auth::middleware::AuthUser;
 use crate::error::Result;
-use crate::models::fantasy::{FantasyTeamInGame, PlayerInGame};
-use crate::nhl_api::nhl_constants::team_names;
+use crate::domain::models::fantasy::{FantasyTeamInGame, PlayerInGame};
+use crate::infra::nhl::constants::team_names;
 use crate::domain::prediction::series_projection::{
     classify, games_remaining, probability_to_advance, SeriesStateCode,
 };
@@ -301,7 +301,7 @@ struct TeamSeriesState {
 }
 
 fn build_team_states(
-    carousel: &crate::models::nhl::PlayoffCarousel,
+    carousel: &crate::domain::models::nhl::PlayoffCarousel,
 ) -> HashMap<String, TeamSeriesState> {
     let mut map = HashMap::new();
     for round in &carousel.rounds {
@@ -331,7 +331,7 @@ fn build_team_states(
 
 fn build_series_forecast(
     teams: &[FantasyTeamInGame],
-    carousel: Option<&crate::models::nhl::PlayoffCarousel>,
+    carousel: Option<&crate::domain::models::nhl::PlayoffCarousel>,
 ) -> Vec<FantasyTeamForecast> {
     let team_states = carousel
         .map(build_team_states)
@@ -417,7 +417,7 @@ async fn build_league_board(
     teams: &[FantasyTeamInGame],
     today: &str,
     my_team_id: Option<i64>,
-    games_today: &[crate::models::nhl::TodayGame],
+    games_today: &[crate::domain::models::nhl::TodayGame],
 ) -> Result<Vec<LeagueBoardEntry>> {
     // Playoff totals per team via existing skater-stats pipeline.
     let stats = state
@@ -548,7 +548,7 @@ async fn compute_my_games_tonight(
     state: &Arc<AppState>,
     teams: &[FantasyTeamInGame],
     my_team_id: i64,
-    games_today: &[crate::models::nhl::TodayGame],
+    games_today: &[crate::domain::models::nhl::TodayGame],
 ) -> Vec<MyGameTonight> {
     let my_team = match teams.iter().find(|t| t.team_id == my_team_id) {
         Some(t) => t,
@@ -579,7 +579,7 @@ async fn compute_my_games_tonight(
         let mut players_signal = Vec::new();
         for p in &my_players {
             let (goals, assists) = match &boxscore {
-                Some(bs) => crate::utils::nhl::find_player_stats_by_name(
+                Some(bs) => crate::domain::services::nhl_stats::find_player_stats_by_name(
                     bs,
                     &p.nhl_team,
                     &p.player_name,

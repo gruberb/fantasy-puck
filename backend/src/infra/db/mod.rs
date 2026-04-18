@@ -54,8 +54,8 @@ impl FantasyDb {
 
     // --- League methods ---
 
-    pub async fn get_all_leagues(&self) -> Result<Vec<crate::models::db::League>> {
-        let leagues = sqlx::query_as::<_, crate::models::db::League>(
+    pub async fn get_all_leagues(&self) -> Result<Vec<crate::domain::models::db::League>> {
+        let leagues = sqlx::query_as::<_, crate::domain::models::db::League>(
             "SELECT id::text, name, season, visibility, created_by::text FROM leagues ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -64,8 +64,8 @@ impl FantasyDb {
         Ok(leagues)
     }
 
-    pub async fn get_public_leagues(&self) -> Result<Vec<crate::models::db::League>> {
-        let leagues = sqlx::query_as::<_, crate::models::db::League>(
+    pub async fn get_public_leagues(&self) -> Result<Vec<crate::domain::models::db::League>> {
+        let leagues = sqlx::query_as::<_, crate::domain::models::db::League>(
             "SELECT id::text, name, season, visibility, created_by::text FROM leagues WHERE visibility = 'public' ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -132,7 +132,7 @@ impl FantasyDb {
         &self,
         team_id: i64,
         league_id: &str,
-    ) -> Result<crate::models::db::FantasyTeam> {
+    ) -> Result<crate::domain::models::db::FantasyTeam> {
         teams::TeamDbService::new(&self.pool)
             .get_team(team_id, league_id)
             .await
@@ -141,7 +141,7 @@ impl FantasyDb {
     pub async fn get_all_teams(
         &self,
         league_id: &str,
-    ) -> Result<Vec<crate::models::db::FantasyTeam>> {
+    ) -> Result<Vec<crate::domain::models::db::FantasyTeam>> {
         teams::TeamDbService::new(&self.pool)
             .get_all_teams(league_id)
             .await
@@ -150,7 +150,7 @@ impl FantasyDb {
     pub async fn get_fantasy_bets_by_nhl_team(
         &self,
         league_id: &str,
-    ) -> Result<Vec<crate::models::db::FantasyTeamBets>> {
+    ) -> Result<Vec<crate::domain::models::db::FantasyTeamBets>> {
         teams::TeamDbService::new(&self.pool)
             .get_fantasy_bets_by_nhl_team(league_id)
             .await
@@ -160,7 +160,7 @@ impl FantasyDb {
         &self,
         nhl_teams: &[&str],
         league_id: &str,
-    ) -> Result<Vec<crate::models::fantasy::FantasyTeamInGame>> {
+    ) -> Result<Vec<crate::domain::models::fantasy::FantasyTeamInGame>> {
         teams::TeamDbService::new(&self.pool)
             .get_fantasy_teams_for_nhl_teams(nhl_teams, league_id)
             .await
@@ -186,7 +186,7 @@ impl FantasyDb {
     pub async fn get_all_teams_with_players(
         &self,
         league_id: &str,
-    ) -> Result<Vec<crate::models::fantasy::FantasyTeamInGame>> {
+    ) -> Result<Vec<crate::domain::models::fantasy::FantasyTeamInGame>> {
         teams::TeamDbService::new(&self.pool)
             .get_all_teams_with_players(league_id)
             .await
@@ -201,7 +201,7 @@ impl FantasyDb {
         name: &str,
         position: &str,
         nhl_team: &str,
-    ) -> Result<crate::models::db::FantasyPlayer> {
+    ) -> Result<crate::domain::models::db::FantasyPlayer> {
         players::PlayerDbService::new(&self.pool)
             .add_player_to_team(team_id, nhl_id, name, position, nhl_team)
             .await
@@ -216,7 +216,7 @@ impl FantasyDb {
     pub async fn get_team_players(
         &self,
         team_id: i64,
-    ) -> Result<Vec<crate::models::db::FantasyPlayer>> {
+    ) -> Result<Vec<crate::domain::models::db::FantasyPlayer>> {
         players::PlayerDbService::new(&self.pool)
             .get_team_players(team_id)
             .await
@@ -225,7 +225,7 @@ impl FantasyDb {
     pub async fn get_nhl_teams_and_players(
         &self,
         league_id: &str,
-    ) -> Result<Vec<crate::models::db::NhlTeamPlayers>> {
+    ) -> Result<Vec<crate::domain::models::db::NhlTeamPlayers>> {
         players::PlayerDbService::new(&self.pool)
             .get_nhl_teams_and_players(league_id)
             .await
@@ -235,7 +235,7 @@ impl FantasyDb {
         &self,
         nhl_teams: &[&str],
         league_id: &str,
-    ) -> Result<Vec<crate::models::fantasy::FantasyTeamInGame>> {
+    ) -> Result<Vec<crate::domain::models::fantasy::FantasyTeamInGame>> {
         players::PlayerDbService::new(&self.pool)
             .get_fantasy_players_for_nhl_teams(nhl_teams, league_id)
             .await
@@ -246,7 +246,7 @@ impl FantasyDb {
     pub async fn get_all_sleepers(
         &self,
         league_id: &str,
-    ) -> Result<Vec<crate::models::db::FantasySleeper>> {
+    ) -> Result<Vec<crate::domain::models::db::FantasySleeper>> {
         sleepers::SleeperDbService::new(&self.pool)
             .get_all_sleepers(league_id)
             .await
@@ -261,7 +261,7 @@ impl FantasyDb {
     pub async fn get_daily_ranking_stats(
         &self,
         league_id: &str,
-    ) -> Result<Vec<crate::models::db::TeamDailyRankingStats>> {
+    ) -> Result<Vec<crate::domain::models::db::TeamDailyRankingStats>> {
         teams::TeamDbService::new(&self.pool)
             .get_daily_ranking_stats(league_id)
             .await

@@ -8,12 +8,12 @@ use tokio::sync::{RwLock, Semaphore};
 use tracing::{info, warn};
 
 use crate::error::{Error, Result};
-use crate::models::nhl::{
+use crate::domain::models::nhl::{
     GameBoxscore, GameData, GameState, GoalieStatsLeaders, Player, PlayerGameLog, PlayoffCarousel,
     StatsLeaders, TodaySchedule,
 };
-use crate::nhl_api::nhl_constants as endpoints;
-use crate::utils::nhl::calculate_totals_from_game_log;
+use crate::infra::nhl::constants as endpoints;
+use crate::domain::services::nhl_stats::calculate_totals_from_game_log;
 
 /// A cached HTTP response with its expiration time.
 struct CacheEntry {
@@ -504,7 +504,7 @@ impl NhlClient {
         &self,
         season: u32,
         letter: &str,
-    ) -> Result<crate::models::nhl::PlayoffSeriesGames> {
+    ) -> Result<crate::domain::models::nhl::PlayoffSeriesGames> {
         let url = endpoints::playoffs::series_games(season, letter);
         self.make_request_cached(&url, ttl::PLAYOFF_CAROUSEL).await
     }
@@ -599,7 +599,7 @@ impl NhlClient {
     }
 
     pub fn get_team_name(&self, team_abbrev: &str) -> String {
-        crate::nhl_api::nhl_constants::team_names::get_team_name(team_abbrev).to_string()
+        crate::infra::nhl::constants::team_names::get_team_name(team_abbrev).to_string()
     }
 
     /// Get a player's game log for a specific season and game type

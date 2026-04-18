@@ -29,8 +29,8 @@ use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
 use crate::error::Result;
-use crate::models::fantasy::FantasyTeamInGame;
-use crate::models::nhl::{PlayoffCarousel, StatsLeaders};
+use crate::domain::models::fantasy::FantasyTeamInGame;
+use crate::domain::models::nhl::{PlayoffCarousel, StatsLeaders};
 use crate::domain::prediction::player_projection::{PlayerInput, Projection};
 use crate::domain::prediction::race_sim::{
     self, simulate, BracketState, RaceSimInput, RaceSimOutput, SeriesState, SimFantasyTeam,
@@ -295,7 +295,7 @@ async fn build_league_input(
 /// zero home-ice bonus (the standings-points scale doesn't admit a
 /// principled home-ice offset without its own calibration).
 async fn resolve_ratings(
-    db: &crate::db::FantasyDb,
+    db: &crate::infra::db::FantasyDb,
     nhl: &crate::NhlClient,
     season_val: u32,
     is_playoffs: bool,
@@ -394,7 +394,7 @@ async fn fetch_goalie_bonuses(
 /// Batches all rostered players into one DB round-trip and assembles the
 /// team structures off the returned projection map.
 async fn build_fantasy_teams_playoff(
-    db: &crate::db::FantasyDb,
+    db: &crate::infra::db::FantasyDb,
     season_val: u32,
     teams: Vec<FantasyTeamInGame>,
     playoff_stats: Option<&StatsLeaders>,
@@ -840,7 +840,7 @@ fn compute_rivalry(my_team_id: i64, teams: &[TeamOdds]) -> Option<RivalryCard> {
 mod tests {
     use super::*;
     use crate::domain::prediction::race_sim::TeamOdds;
-    use crate::models::nhl::{BottomSeed, PlayoffCarousel, Round, Series, TopSeed};
+    use crate::domain::models::nhl::{BottomSeed, PlayoffCarousel, Round, Series, TopSeed};
     use std::collections::HashMap;
 
     fn mk_series(letter: &str, top: &str, top_w: i64, bot: &str, bot_w: i64) -> Series {

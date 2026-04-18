@@ -1,6 +1,6 @@
 use crate::api::dtos::PlayerHighlightResponse;
 use crate::api::dtos::rankings::DailyFantasyRankingResponse;
-use crate::models::fantasy::{DailyRanking, PlayerHighlight};
+use crate::domain::models::fantasy::{DailyRanking, PlayerHighlight};
 
 pub trait IntoResponse {
     type Response;
@@ -16,7 +16,7 @@ impl IntoResponse for PlayerHighlight {
             points: self.points,
             nhl_team: self.nhl_team,
             nhl_id: self.nhl_id,
-            image_url: crate::nhl_api::nhl_constants::players::player_image(self.nhl_id),
+            image_url: crate::infra::nhl::constants::players::player_image(self.nhl_id),
         }
     }
 }

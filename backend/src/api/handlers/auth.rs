@@ -8,7 +8,7 @@ use crate::api::routes::AppState;
 use crate::auth::jwt::issue_token;
 use crate::auth::middleware::AuthUser;
 use crate::auth::password::{hash_password, verify_password};
-use crate::db::users::MembershipRow;
+use crate::infra::db::users::MembershipRow;
 use crate::error::{Error, Result};
 
 // ---------------------------------------------------------------------------

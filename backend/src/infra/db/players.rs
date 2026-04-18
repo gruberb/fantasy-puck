@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::error::Result;
-use crate::models::db::{FantasyPlayer, NhlTeamPlayers, PlayerWithTeam};
-use crate::models::fantasy::{FantasyTeamInGame, PlayerInGame};
+use crate::domain::models::db::{FantasyPlayer, NhlTeamPlayers, PlayerWithTeam};
+use crate::domain::models::fantasy::{FantasyTeamInGame, PlayerInGame};
 use sqlx::postgres::PgPool;
 use sqlx::Row;
 

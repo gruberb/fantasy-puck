@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use tracing::debug;
 
-use crate::db::FantasyDb;
+use crate::infra::db::FantasyDb;
 use crate::domain::prediction::{
     playoff_elo::{self, GameResult},
     player_projection::{self, GameStats, PlayerInput, Projection},

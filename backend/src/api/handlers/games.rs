@@ -12,10 +12,10 @@ use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::error::Result;
-use crate::models::fantasy::PlayerInGame;
-use crate::models::nhl::{BoxscorePlayer, GameBoxscore};
-use crate::utils::nhl::find_player_stats_by_name;
-use crate::utils::api::{
+use crate::domain::models::fantasy::PlayerInGame;
+use crate::domain::models::nhl::{BoxscorePlayer, GameBoxscore};
+use crate::domain::services::nhl_stats::find_player_stats_by_name;
+use crate::infra::nhl::urls::{
     create_games_summary, get_fantasy_players_for_nhl_team, process_players_for_team,
 };
 
@@ -56,7 +56,7 @@ pub async fn list_games(
 
 async fn process_games(
     state: Arc<AppState>,
-    schedule: crate::models::nhl::TodaySchedule,
+    schedule: crate::domain::models::nhl::TodaySchedule,
     date: String,
     league_id: &str,
 ) -> Result<Json<ApiResponse<TodaysGamesResponse>>> {
@@ -256,7 +256,7 @@ async fn process_games(
 
 async fn process_games_extended(
     state: Arc<AppState>,
-    schedule: crate::models::nhl::TodaySchedule,
+    schedule: crate::domain::models::nhl::TodaySchedule,
     date: String,
     league_id: &str,
 ) -> Result<Json<ApiResponse<TodaysGamesResponse>>> {

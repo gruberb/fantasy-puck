@@ -9,7 +9,7 @@ use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 
 use crate::config::Config;
-use crate::nhl_api::nhl::NhlClient;
+use crate::infra::nhl::client::NhlClient;
 use crate::FantasyDb;
 
 pub mod dtos;

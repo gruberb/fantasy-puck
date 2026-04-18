@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::models::nhl::SeriesStatus;
+use crate::domain::models::nhl::SeriesStatus;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
