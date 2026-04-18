@@ -4,6 +4,12 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## frontend v1.10.1 — 2026-04-18
+
+### Fixed — stale Stanley Cup Odds methodology blurb
+
+The paragraph above the Cup Odds table still claimed the model "underweights goalie quality and injuries" and was "calibrated against HockeyStats.com round-1 reference odds within ~3pp". Both became false in v1.15.0: the goalie component is now a first-class `TeamRating` field, and the HockeyStats calibration referenced an obsolete `DEFAULT_K_FACTOR` tuning from v1.7 for the pre-playoff standings path, not the current Elo engine. Replaced with a terse, accurate description of what the engine actually does now (standings Elo + dynamic playoff replay + starter SV% + home/road split + round-depth mean reversion).
+
 ## v1.15.0 — 2026-04-18
 
 ### Added — goalie-strength component on TeamRating

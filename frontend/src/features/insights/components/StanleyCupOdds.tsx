@@ -47,12 +47,11 @@ export function StanleyCupOdds({ projections }: StanleyCupOddsProps) {
   return (
     <div>
       <p className="text-[11px] text-[var(--color-ink-muted)] mb-3 leading-relaxed">
-        Monte Carlo, {data.trials.toLocaleString()} bracket trials · team
-        strength from regular-season standings points · current series state
-        as the starting condition · re-run every morning · calibrated against
-        HockeyStats.com round-1 reference odds within ~3pp. The model
-        underweights goalie quality and injuries, so elite favorites may be
-        modestly understated vs. the sharpest external models.
+        Monte Carlo, {data.trials.toLocaleString()} bracket trials. Team
+        strength blends regular-season Elo, every completed playoff game
+        (dynamic replay), each team's starting-goalie SV%, and the home/road
+        split. Round-depth mean reversion damps compounding confidence on
+        deep bracket paths. Re-run every morning.
       </p>
       <div className="border border-[var(--color-divider)] overflow-hidden">
         {/* Header */}
