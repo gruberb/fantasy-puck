@@ -248,6 +248,31 @@ fn parse_usize_list(s: Option<&str>) -> std::result::Result<Vec<usize>, String> 
         .collect()
 }
 
+/// Kick off the same pre-warm the 10am-UTC scheduler runs: insights +
+/// race-odds for every league (plus the global no-league variants).
+/// The work is spawned in a background tokio task so the HTTP response
+/// returns immediately — otherwise a cold-cache warm-up (standings +
+/// goalies + 5000-trial sim × every league) easily exceeds browser or
+/// Fly edge timeouts. Watch the server logs for per-league completion.
+pub async fn prewarm_cache(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<String>>> {
+    if !auth.is_admin {
+        return Err(Error::Forbidden("Admin access required".into()));
+    }
+    let db = state.db.clone();
+    let nhl = state.nhl_client.clone();
+    tokio::spawn(async move {
+        info!("Admin-triggered pre-warm starting");
+        scheduler::prewarm_derived_payloads(&db, &nhl).await;
+        info!("Admin-triggered pre-warm complete");
+    });
+    Ok(json_success(
+        "Pre-warm started in background; watch server logs for progress.".into(),
+    ))
+}
+
 /// Grid-search calibration over a set of hyperparameter combinations.
 /// One-off tool: you run it a handful of times to find winning knobs,
 /// then bake the winners into the production constants and ship.

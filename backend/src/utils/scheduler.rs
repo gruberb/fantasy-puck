@@ -200,8 +200,10 @@ async fn ingest_yesterdays_playoff_games(db: &FantasyDb, nhl_client: &NhlClient)
 }
 
 /// Pre-generate insights and race-odds for all leagues so they're cached
-/// when users visit. Runs once per day from the 10am-UTC scheduler job.
-async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
+/// when users visit. Runs once per day from the 10am-UTC scheduler job
+/// and on-demand via `GET /api/admin/prewarm` (usually after a cache
+/// invalidation or a model-version bump that emptied the cache).
+pub async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
     let state = Arc::new(AppState {
         db: db.clone(),
         nhl_client: nhl_client.clone(),
