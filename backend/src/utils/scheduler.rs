@@ -13,6 +13,7 @@ use crate::db::FantasyDb;
 use crate::error::Result;
 use crate::models::fantasy::{DailyRanking, TeamDailyPerformance};
 use crate::utils::fantasy::process_game_performances;
+use crate::utils::playoff_ingest::ingest_playoff_games_for_date;
 use crate::ws::draft_hub::DraftHub;
 use crate::{Error, NhlClient};
 
@@ -172,6 +173,32 @@ async fn process_daily_rankings_all_leagues(
     }
 }
 
+/// Ingest completed playoff box scores from yesterday into
+/// `playoff_skater_game_stats`. Runs before the prewarm step so the
+/// downstream player-projection model sees fresh data.
+async fn ingest_yesterdays_playoff_games(db: &FantasyDb, nhl_client: &NhlClient) {
+    let yesterday = match Utc::now().checked_sub_signed(Duration::days(1)) {
+        Some(t) => t.naive_utc().format("%Y-%m-%d").to_string(),
+        None => {
+            error!("Failed to compute yesterday's date for playoff ingest");
+            return;
+        }
+    };
+    let nhl_arc = Arc::new(nhl_client.clone());
+    match ingest_playoff_games_for_date(db, &nhl_arc, &yesterday).await {
+        Ok(rows) => info!(
+            date = %yesterday,
+            rows,
+            "Playoff ingest: yesterday's skater stats upserted"
+        ),
+        Err(e) => error!(
+            date = %yesterday,
+            error = %e,
+            "Playoff ingest for yesterday failed"
+        ),
+    }
+}
+
 /// Pre-generate insights and race-odds for all leagues so they're cached
 /// when users visit. Runs once per day from the 10am-UTC scheduler job.
 async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
@@ -283,12 +310,15 @@ pub async fn init_rankings_scheduler(
     })
     .map_err(|e| Error::Internal(format!("Failed to create afternoon job: {}", e)))?;
 
-    // Schedule derived-payload pre-warming at 10am UTC daily (insights + race-odds).
+    // Schedule derived-payload pre-warming at 10am UTC daily. Ingest
+    // yesterday's completed playoff box scores first so the downstream
+    // race-odds prewarm reads fresh player facts.
     let insights_job = Job::new_async("0 10 * * * *", move |_, _| {
         let db = db_clone_insights.clone();
         let nhl_client = nhl_client_clone_insights.clone();
         Box::pin(async move {
-            info!("Running daily pre-warming job (insights + race-odds)");
+            info!("Running daily pre-warming job (playoff ingest + insights + race-odds)");
+            ingest_yesterdays_playoff_games(&db, &nhl_client).await;
             prewarm_derived_payloads(&db, &nhl_client).await;
         })
     })

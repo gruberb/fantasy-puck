@@ -6,6 +6,10 @@ use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use fantasy_hockey::config::Config;
+use fantasy_hockey::utils::historical_seed::seed_historical_skaters_if_empty;
+use fantasy_hockey::utils::playoff_ingest::{
+    ingest_playoff_games_for_range, is_playoff_skater_game_stats_empty,
+};
 use fantasy_hockey::utils::scheduler;
 use fantasy_hockey::utils::scheduler::{init_rankings_scheduler, populate_historical_rankings};
 use fantasy_hockey::FantasyDb;
@@ -71,6 +75,17 @@ async fn main() -> anyhow::Result<()> {
     // Initialize the rankings scheduler
     init_rankings_scheduler(Arc::new(db.clone()), Arc::new(nhl_client.clone())).await?;
 
+    // Seed historical playoff skater totals if the table is empty. Runs
+    // in the background so startup latency isn't affected; idempotent.
+    {
+        let db_bg = db.clone();
+        tokio::spawn(async move {
+            if let Err(e) = seed_historical_skaters_if_empty(&db_bg).await {
+                tracing::error!("historical-skaters seed failed: {}", e);
+            }
+        });
+    }
+
     // Run backfill in background (non-blocking) so the server starts immediately
     if today.as_str() >= api::playoff_start() {
         if scheduler::is_rankings_table_empty(&db).await? {
@@ -84,6 +99,33 @@ async fn main() -> anyhow::Result<()> {
                     tracing::error!("Background backfill failed: {}", e);
                 } else {
                     info!("Background: historical rankings populated successfully");
+                }
+            });
+        }
+
+        // Backfill playoff skater game stats from playoff start through
+        // today if the table is empty. Idempotent (UPSERT on conflict),
+        // so a rerun is cheap but the emptiness gate avoids hitting the
+        // NHL API unnecessarily on every deploy.
+        let empty = is_playoff_skater_game_stats_empty(&db)
+            .await
+            .unwrap_or(true);
+        if empty {
+            let db_bg = db.clone();
+            let nhl_bg = Arc::new(nhl_client.clone());
+            let start = api::playoff_start().to_string();
+            let end = today.as_str().min(api::season_end()).to_string();
+            tokio::spawn(async move {
+                info!("Background: backfilling playoff skater stats from {} to {}", start, end);
+                match ingest_playoff_games_for_range(&db_bg, &nhl_bg, &start, &end).await {
+                    Ok(rows) => info!(
+                        rows,
+                        "Background: playoff skater stats backfill complete"
+                    ),
+                    Err(e) => tracing::error!(
+                        "Background: playoff skater stats backfill failed: {}",
+                        e
+                    ),
                 }
             });
         }

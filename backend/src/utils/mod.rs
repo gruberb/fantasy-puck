@@ -1,7 +1,9 @@
 pub mod api;
 pub mod fantasy;
+pub mod historical_seed;
 pub mod nhl;
 pub mod player_pool;
+pub mod playoff_ingest;
 pub mod race_sim;
 pub mod scheduler;
 pub mod series_projection;
