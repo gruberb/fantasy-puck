@@ -59,13 +59,22 @@ pub async fn generate_and_cache_insights(
         signals,
     };
 
-    // Cache — but only if the response has real content. An empty
-    // schedule could mean "off-day" or "NHL hasn't published yet"; we
-    // can't tell, so don't commit a narrative that would mislead.
-    // Off-days end up regenerating on every visit (cheap — the
-    // NhlClient caches the upstream schedule response anyway), which
-    // is the correct trade.
-    if !response.signals.todays_games.is_empty() {
+    // Cache — but only if the response is complete. Two gates:
+    //   1. Schedule was non-empty (not an off-day or pre-publish gap).
+    //   2. Every game has *some* landing-derived signal. A failed
+    //      landing fetch leaves leaders/goalies all None for that
+    //      game, producing cards with empty sidebars all day; better
+    //      to regenerate on next visit until the NHL API rate window
+    //      reopens and the landings succeed. Cost: extra Claude
+    //      calls during the failure window (rare and short).
+    let all_games_have_landing_data = response.signals.todays_games.iter().all(|g| {
+        g.home_goalie.is_some()
+            || g.away_goalie.is_some()
+            || g.points_leaders.is_some()
+            || g.goals_leaders.is_some()
+            || g.assists_leaders.is_some()
+    });
+    if !response.signals.todays_games.is_empty() && all_games_have_landing_data {
         let _ = state
             .db
             .cache()
@@ -500,7 +509,26 @@ async fn compute_todays_games(
         let mut home_goalie = None;
         let mut away_goalie = None;
 
-        if let Ok(landing) = state.nhl_client.get_game_landing_raw(game.id).await {
+        let landing_result = state.nhl_client.get_game_landing_raw(game.id).await;
+        if let Err(e) = &landing_result {
+            // Silent failure here previously produced game cards with
+            // no Players-to-Watch / goalie block while other cards on
+            // the same page rendered fully. Most common cause: a
+            // transient NHL API rate-limit on the first prewarm after
+            // a cold boot — all 8 landings fire at once and a few get
+            // 429'd past the retry budget. Log it so the gap is
+            // diagnosable; the `all_games_have_landing_data` guard on
+            // the cache write (below) prevents a partial payload from
+            // being served all day.
+            tracing::warn!(
+                game_id = game.id,
+                home = %home,
+                away = %away,
+                error = %e,
+                "insights: game landing fetch failed; leaders/goalies will be null"
+            );
+        }
+        if let Ok(landing) = landing_result {
             venue = landing.get("venue").and_then(|v| v.get("default")).and_then(|v| v.as_str()).unwrap_or("").to_string();
 
             if let Some(matchup) = landing.get("matchup") {
