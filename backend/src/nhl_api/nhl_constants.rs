@@ -82,12 +82,14 @@ pub mod playoffs {
     }
 }
 
-/// Standings endpoints
+/// Standings endpoints (date-based).
+///
+/// Live / "now" standings live under `teams::STANDINGS` +
+/// `teams::standings_url()` for historical reasons; keeping the
+/// date-based variant here because it's only called from the
+/// calibration path.
 pub mod standings {
     use super::NHL_API_BASE_URL;
-
-    /// Standings current (live).
-    pub const NOW: &str = "/v1/standings/now";
 
     /// Standings as of a specific date. Useful for historical
     /// calibration — passing the final day of a past regular season
