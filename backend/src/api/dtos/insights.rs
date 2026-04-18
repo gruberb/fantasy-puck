@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::utils::series_projection::SeriesStateCode;
+use crate::domain::prediction::series_projection::SeriesStateCode;
 
 /// Raw signal data computed from existing stats. Pulse-facing personal
 /// surfaces (Race Odds, Rivalry, Fantasy Race sparklines) are NOT in here —

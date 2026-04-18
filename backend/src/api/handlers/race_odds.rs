@@ -9,7 +9,7 @@
 //!
 //! The handler is thin: extract → fetch signals → build sim input → run
 //! simulation on a blocking thread → cache → return. All heavy math lives
-//! in [`crate::utils::race_sim`], which is a pure-domain module.
+//! in [`crate::domain::prediction::race_sim`], a pure-domain module.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -31,12 +31,13 @@ use crate::api::{game_type, season};
 use crate::error::Result;
 use crate::models::fantasy::FantasyTeamInGame;
 use crate::models::nhl::{PlayoffCarousel, StatsLeaders};
-use crate::utils::player_projection::{project_players, PlayerInput, Projection};
-use crate::utils::playoff_elo::compute_current_elo;
-use crate::utils::race_sim::{
-    simulate, BracketState, RaceSimInput, RaceSimOutput, SeriesState, SimFantasyTeam, SimPlayer,
-    TeamOdds, TeamRating, DEFAULT_K_FACTOR, DEFAULT_PPG, DEFAULT_TRIALS,
+use crate::domain::prediction::player_projection::{PlayerInput, Projection};
+use crate::domain::prediction::race_sim::{
+    self, simulate, BracketState, RaceSimInput, RaceSimOutput, SeriesState, SimFantasyTeam,
+    SimPlayer, TeamOdds, TeamRating, DEFAULT_K_FACTOR, DEFAULT_PPG, DEFAULT_TRIALS,
 };
+use crate::domain::prediction::team_ratings;
+use crate::infra::prediction::{compute_current_elo, project_players};
 
 /// Logistic scale applied when the input ratings are on the Elo scale
 /// (~1500-centered, ~±300 spread). Matches the standard Elo formula
@@ -302,7 +303,7 @@ async fn resolve_ratings(
                 Ok(elo) => {
                     let map: HashMap<String, TeamRating> =
                         elo.into_iter().map(|(k, v)| (k, TeamRating(v))).collect();
-                    let ice_bonus = ELO_K_FACTOR * crate::utils::race_sim::HOME_ICE_ELO;
+                    let ice_bonus = ELO_K_FACTOR * race_sim::HOME_ICE_ELO;
                     return (map, ELO_K_FACTOR, ice_bonus);
                 }
                 Err(e) => {
@@ -599,7 +600,7 @@ fn ratings_from_standings(standings: Option<&serde_json::Value>) -> HashMap<Stri
     };
     // Shared helper blends season points with L10 form so race-sim and
     // Insights report the same strength numbers.
-    crate::utils::team_ratings::from_standings(root)
+    team_ratings::from_standings(root)
         .into_iter()
         .map(|(abbrev, rating)| (abbrev, TeamRating(rating)))
         .collect()
@@ -762,8 +763,8 @@ fn compute_rivalry(my_team_id: i64, teams: &[TeamOdds]) -> Option<RivalryCard> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::prediction::race_sim::TeamOdds;
     use crate::models::nhl::{BottomSeed, PlayoffCarousel, Round, Series, TopSeed};
-    use crate::utils::race_sim::TeamOdds;
     use std::collections::HashMap;
 
     fn mk_series(letter: &str, top: &str, top_w: i64, bot: &str, bot_w: i64) -> Series {

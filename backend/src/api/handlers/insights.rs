@@ -130,7 +130,7 @@ async fn enrich_projections(
     let ratings: HashMap<String, f32> = match state.nhl_client.get_standings_raw().await {
         Ok(json) => {
             if crate::api::game_type() == 3 {
-                match crate::utils::playoff_elo::compute_current_elo(
+                match crate::infra::prediction::compute_current_elo(
                     &state.db,
                     &json,
                     crate::api::season(),
@@ -138,10 +138,10 @@ async fn enrich_projections(
                 .await
                 {
                     Ok(elo) => elo,
-                    Err(_) => crate::utils::team_ratings::from_standings(&json),
+                    Err(_) => crate::domain::prediction::team_ratings::from_standings(&json),
                 }
             } else {
-                crate::utils::team_ratings::from_standings(&json)
+                crate::domain::prediction::team_ratings::from_standings(&json)
             }
         }
         Err(_) => HashMap::new(),
@@ -1019,7 +1019,7 @@ async fn compute_series_projections(
     state: &Arc<AppState>,
 ) -> Result<Vec<TeamSeriesProjection>> {
     use crate::nhl_api::nhl_constants::team_names;
-    use crate::utils::series_projection as sp;
+    use crate::domain::prediction::series_projection as sp;
 
     let carousel = match state
         .nhl_client

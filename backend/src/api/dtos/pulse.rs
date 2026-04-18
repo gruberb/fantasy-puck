@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::utils::series_projection::SeriesStateCode;
+use crate::domain::prediction::series_projection::SeriesStateCode;
 
 // ---------------------------------------------------------------------------
 // Top-level response

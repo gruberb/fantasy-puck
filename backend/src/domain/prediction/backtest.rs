@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use crate::utils::race_sim::{BracketState, SeriesState};
+use super::race_sim::{BracketState, SeriesState};
 
 // ---------------------------------------------------------------------------
 // Binary-outcome metrics (series winners, cup winners, …)

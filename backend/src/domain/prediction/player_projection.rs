@@ -1,6 +1,10 @@
 //! Bayesian blend of a skater's points-per-game for the fantasy
-//! projection. Replaces `race_odds::player_ppg` once `game_type == 3`
-//! and `playoff_skater_game_stats` is populated.
+//! projection.
+//!
+//! Pure-domain module: no DB, no HTTP, no framework deps. The
+//! database-backed batch entrypoint lives in
+//! `infra::prediction::project_players` and calls into [`project_one`]
+//! here.
 //!
 //! The blend mixes four signals with shrinkage weights:
 //!   - regular-season PPG  (stable talent floor)
@@ -29,13 +33,6 @@
 //! player. Using the 82-game denominator slightly under-projects players
 //! who missed RS games; a future refinement can fetch each player's
 //! landing payload to recover true RS GP.
-
-use std::collections::HashMap;
-
-use tracing::debug;
-
-use crate::db::FantasyDb;
-use crate::error::{Error, Result};
 
 /// RS-prior strength, in games-equivalent. Higher = slower to trust the
 /// current-playoff signal.
@@ -78,80 +75,8 @@ pub struct Projection {
     pub active_prob: f32,
 }
 
-/// Project every player in a single DB round-trip.
-///
-/// `team_games_played` maps NHL team abbrev → playoff games already
-/// played (used for the availability multiplier and the `po_gp` weight).
-/// Typical source: summing the current season's `playoff_game_results`
-/// or carousel wins.
-pub async fn project_players(
-    db: &FantasyDb,
-    season: u32,
-    players: &[PlayerInput],
-    team_games_played: &HashMap<String, u32>,
-) -> Result<HashMap<i64, Projection>> {
-    if players.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let player_ids: Vec<i64> = players.iter().map(|p| p.nhl_id).collect();
-    // Order lets us slice per-player sub-ranges without rehashing —
-    // game_date DESC so the "last N" window is already at the front.
-    let stat_rows: Vec<(i64, i32)> = sqlx::query_as(
-        r#"
-        SELECT player_id, points
-        FROM playoff_skater_game_stats
-        WHERE season = $1
-          AND player_id = ANY($2::bigint[])
-        ORDER BY player_id ASC, game_date DESC, game_id DESC
-        "#,
-    )
-    .bind(season as i32)
-    .bind(&player_ids)
-    .fetch_all(db.pool())
-    .await
-    .map_err(Error::Database)?;
-
-    // Bucket stat rows by player for per-player aggregation. Preserves
-    // the ORDER BY — game_date DESC — so the first elements are the most
-    // recent games.
-    let mut by_player: HashMap<i64, Vec<i32>> = HashMap::with_capacity(players.len());
-    for (pid, pts) in stat_rows {
-        by_player.entry(pid).or_default().push(pts);
-    }
-
-    let names: Vec<&str> = players.iter().map(|p| p.player_name.as_str()).collect();
-    let historical_rows: Vec<(String, i32, i32)> = sqlx::query_as(
-        r#"
-        SELECT player_name, gp, p
-        FROM historical_playoff_skater_totals
-        WHERE player_name = ANY($1::text[])
-        "#,
-    )
-    .bind(&names)
-    .fetch_all(db.pool())
-    .await
-    .map_err(Error::Database)?;
-
-    let historical: HashMap<String, (i32, i32)> = historical_rows
-        .into_iter()
-        .map(|(n, gp, p)| (n, (gp, p)))
-        .collect();
-
-    let mut out: HashMap<i64, Projection> = HashMap::with_capacity(players.len());
-    for p in players {
-        let team_gp = team_games_played.get(&p.nhl_team).copied().unwrap_or(0);
-        let pts_rows = by_player.get(&p.nhl_id).cloned().unwrap_or_default();
-        let projection = project_one(p, team_gp, &pts_rows, historical.get(&p.player_name));
-        out.insert(p.nhl_id, projection);
-    }
-    debug!(players = players.len(), "player projection batch complete");
-    Ok(out)
-}
-
 /// Pure helper: given already-loaded signals for one player, compute the
-/// blended PPG and availability multiplier. Exposed for tests / the
-/// backtest harness.
+/// blended PPG and availability multiplier.
 pub fn project_one(
     input: &PlayerInput,
     team_games_played: u32,
@@ -210,7 +135,7 @@ pub fn project_one(
 /// `points_desc` (which is game_date-DESCending — i.e. most-recent first).
 /// Weights follow `w_i = 2^(-i / H)` for half-life `H`, normalised. 0
 /// when the input is empty.
-fn recency_weighted_ppg(points_desc: &[i32]) -> f32 {
+pub fn recency_weighted_ppg(points_desc: &[i32]) -> f32 {
     let n = points_desc.len().min(RECENT_WINDOW);
     if n == 0 {
         return 0.0;
@@ -244,8 +169,6 @@ mod tests {
 
     #[test]
     fn cold_start_falls_back_to_rs_prior() {
-        // No playoff games played yet, no historical record. With only
-        // the RS prior, projected_ppg == rs_ppg.
         let p = project_one(&input("Rookie", 82), 0, &[], None);
         assert!((p.ppg - 1.0).abs() < 1e-5, "got {}", p.ppg);
         assert!((p.active_prob - 1.0).abs() < 1e-6);
@@ -253,12 +176,8 @@ mod tests {
 
     #[test]
     fn heavy_playoff_sample_overtakes_rs_prior() {
-        // 20 games at 2.0 PPG should shift a 0.5-PPG RS prior toward
-        // the playoff signal — weight = 20 games vs ALPHA = 10.
         let pts: Vec<i32> = (0..20).map(|_| 2).collect();
         let p = project_one(&input("Hot", 41), 20, &pts, None);
-        // Expected blend (no recent-vs-raw distinction when every game
-        // is a 2): numerator = 10*0.5 + 20*2.0 = 45, denom = 30 → 1.5.
         assert!(
             (p.ppg - 1.5).abs() < 0.01,
             "expected ~1.5 blended, got {}",
@@ -268,9 +187,6 @@ mod tests {
 
     #[test]
     fn historical_anchor_damps_regression_for_unknown_current_sample() {
-        // RS 0, current playoff 0 games. Historical shows 80 pts in 50
-        // GP (1.6 PPG). The BETA prior should pull the projection up
-        // from pure RS (0.0) toward the historical mean.
         let no_history = project_one(&input("A", 0), 0, &[], None);
         let with_history = project_one(&input("A", 0), 0, &[], Some(&(50, 80)));
         assert_eq!(no_history.ppg, 0.0);
@@ -283,10 +199,6 @@ mod tests {
 
     #[test]
     fn recency_weights_last_game_heaviest() {
-        // 10 games: a 4-point spike at the front vs the back. With
-        // half-life 4 across a 10-game window, position-0 weighs ~4.5×
-        // position-9, so the "recent" series should carry several times
-        // more signal.
         let mut recent = vec![0; 10];
         recent[0] = 4;
         let mut stale = vec![0; 10];
@@ -301,12 +213,8 @@ mod tests {
 
     #[test]
     fn absent_player_gets_multiplier_hit() {
-        // Team has played 5 games; player has 0 appearances. Projection
-        // should be multiplied by ABSENT_MULTIPLIER.
         let pts: Vec<i32> = Vec::new();
         let p = project_one(&input("Scratched", 82), 5, &pts, None);
-        // Base would be rs_ppg = 1.0; with availability multiplier 0.3
-        // → 0.3.
         assert!(
             (p.ppg - 0.3).abs() < 1e-3,
             "expected 0.3 after multiplier, got {}",
@@ -316,13 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_input_returns_empty_map_without_query() {
-        // Safety: project_players on an empty roster must not panic or
-        // issue a zero-element IN query (some drivers choke on that).
-        // This test only checks the early-return path.
-        // The function is async and touches the DB, so we can only
-        // exercise the empty branch via the caller's check; here we
-        // just assert the helper preserves sanity.
+    fn empty_input_has_zero_projection() {
         let p = project_one(
             &PlayerInput {
                 nhl_id: 0,

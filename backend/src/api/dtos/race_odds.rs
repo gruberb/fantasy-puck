@@ -1,13 +1,14 @@
 //! Response shape for the `/api/race-odds` endpoint.
 //!
 //! Wraps the pure-domain [`TeamOdds`] / [`PlayerOdds`] types from
-//! [`crate::utils::race_sim`] with a top-level envelope that carries the
-//! generation timestamp, the mode (league race vs. global Fantasy Champion),
-//! and the simulation knobs used so consumers can display methodology.
+//! [`crate::domain::prediction::race_sim`] with a top-level envelope
+//! that carries the generation timestamp, the mode (league race vs.
+//! global Fantasy Champion), and the simulation knobs used so
+//! consumers can display methodology.
 
 use serde::{Deserialize, Serialize};
 
-use crate::utils::race_sim::{NhlTeamOdds, PlayerOdds, TeamOdds};
+use crate::domain::prediction::race_sim::{NhlTeamOdds, PlayerOdds, TeamOdds};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

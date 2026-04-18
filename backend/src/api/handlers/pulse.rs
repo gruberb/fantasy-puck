@@ -16,7 +16,7 @@ use crate::auth::middleware::AuthUser;
 use crate::error::Result;
 use crate::models::fantasy::{FantasyTeamInGame, PlayerInGame};
 use crate::nhl_api::nhl_constants::team_names;
-use crate::utils::series_projection::{
+use crate::domain::prediction::series_projection::{
     classify, games_remaining, probability_to_advance, SeriesStateCode,
 };
 

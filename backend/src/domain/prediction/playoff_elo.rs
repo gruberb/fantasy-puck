@@ -1,6 +1,10 @@
 //! Dynamic playoff Elo — a team-strength rating that updates after every
 //! completed playoff game instead of freezing at the regular-season mark.
 //!
+//! Pure-domain module: no DB, no HTTP, no framework deps. The
+//! database-backed replay loop lives in `infra::prediction::compute_current_elo`
+//! and calls into [`seed_from_standings`] + [`apply_game`] here.
+//!
 //! Algorithm:
 //! 1. Seed each team's Elo from regular-season standings points:
 //!    `elo_0 = BASE + POINTS_SCALE * (season_points - league_avg_points)`.
@@ -15,22 +19,8 @@
 //!    The `ln(goal_diff + 1)` factor is the Silver-style blowout bonus
 //!    so a 6-1 win moves ratings more than a 2-1 win, but with
 //!    diminishing returns.
-//!
-//! The module is game-log driven: no model state is persisted. Each call
-//! to [`compute_current_elo`] replays from scratch. Cheap enough at
-//! current volumes (~100 playoff games over a run, ~500 rows per-team
-//! cap) that we don't need an incremental update path yet.
-//!
-//! Designed to replace `team_ratings::from_standings` as the input to
-//! `race_sim` during `game_type == 3`. The regular-season blend still
-//! feeds this module (as the seeding term), so RS context is never lost.
 
 use std::collections::HashMap;
-
-use tracing::debug;
-
-use crate::db::FantasyDb;
-use crate::error::{Error, Result};
 
 /// Starting Elo for a league-average team.
 pub const BASE_ELO: f32 = 1500.0;
@@ -84,7 +74,9 @@ pub struct GameResult {
 }
 
 /// Apply a single game update in place. Exposed for tests and the
-/// backtest harness; production callers use [`compute_current_elo`].
+/// backtest harness; production callers use
+/// `infra::prediction::compute_current_elo` which loads games from the
+/// DB and folds them through this function.
 pub fn apply_game(ratings: &mut HashMap<String, f32>, game: &GameResult) {
     let elo_home = *ratings.get(&game.home_team).unwrap_or(&BASE_ELO);
     let elo_away = *ratings.get(&game.away_team).unwrap_or(&BASE_ELO);
@@ -99,46 +91,6 @@ pub fn apply_game(ratings: &mut HashMap<String, f32>, game: &GameResult) {
     let delta = K_FACTOR * margin_mult * (result_home - p_home);
     ratings.insert(game.home_team.clone(), elo_home + delta);
     ratings.insert(game.away_team.clone(), elo_away - delta);
-}
-
-/// Load every completed playoff game for the season, chronologically,
-/// and return the current Elo map. Seeded from `standings` before
-/// replay, so teams with no completed games still get their RS-based
-/// starting rating.
-pub async fn compute_current_elo(
-    db: &FantasyDb,
-    standings: &serde_json::Value,
-    season: u32,
-) -> Result<HashMap<String, f32>> {
-    let mut ratings = seed_from_standings(standings);
-
-    let rows: Vec<(String, String, i32, i32)> = sqlx::query_as(
-        r#"
-        SELECT home_team, away_team, home_score, away_score
-        FROM playoff_game_results
-        WHERE season = $1
-        ORDER BY game_date ASC, game_id ASC
-        "#,
-    )
-    .bind(season as i32)
-    .fetch_all(db.pool())
-    .await
-    .map_err(Error::Database)?;
-
-    let game_count = rows.len();
-    for (home_team, away_team, home_score, away_score) in rows {
-        apply_game(
-            &mut ratings,
-            &GameResult {
-                home_team,
-                away_team,
-                home_score,
-                away_score,
-            },
-        );
-    }
-    debug!(games = game_count, teams = ratings.len(), "playoff Elo replayed");
-    Ok(ratings)
 }
 
 #[cfg(test)]
