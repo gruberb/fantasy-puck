@@ -34,6 +34,20 @@ pub const HOME_ICE_ADV: f32 = 35.0;
 /// Base update rate. Scaled per-game by `ln(|goal_diff| + 1)` so a 1-goal
 /// win moves ratings by ~K and a 5-goal win by ~K·ln(6) ≈ 1.8·K.
 pub const K_FACTOR: f32 = 6.0;
+/// Production shrinkage factor applied to `(season_points − league_avg)`
+/// before scaling by `POINTS_SCALE`. A 0.7 factor treats each team's RS
+/// points differential as 70% signal / 30% noise — the Bayesian default
+/// for an 82-game NHL sample.
+///
+/// Picked by the v1.13.0 calibration sweep against all four backfilled
+/// historical seasons (2021-22 through 2024-25). At `ps=6, sh=0.7` the
+/// aggregate Brier averages 0.539 vs 0.542 for the legacy `sh=1.0`;
+/// more importantly the winning config never loses badly in any single
+/// season, while `sh=1.0` has a 0.72 Brier outlier on 2022-23 (BOS R1
+/// upset). Narrowing the Elo spread ~30% also brings chalky-favorite
+/// Cup probabilities closer to external consensus (e.g. COL dropped
+/// from 39% → ~28% on 2025-26).
+pub const PRODUCTION_SHRINKAGE: f32 = 0.7;
 /// How far a team's per-team home-ice bonus is allowed to drift from
 /// the league-wide `HOME_ICE_ADV`, in Elo units. A 41-game sample is
 /// noisy; capping the delta at ±15 keeps the per-team personalization
@@ -99,14 +113,14 @@ pub fn home_bonus_from_standings(standings: &serde_json::Value) -> HashMap<Strin
 }
 
 /// Seed each team's Elo from the NHL standings feed, using the
-/// production `POINTS_SCALE` and no shrinkage. Teams missing from the
-/// feed get `BASE_ELO`. Returns `abbrev → elo`.
+/// production `POINTS_SCALE` and `PRODUCTION_SHRINKAGE`. Teams missing
+/// from the feed get `BASE_ELO`. Returns `abbrev → elo`.
 ///
 /// Thin convenience wrapper over [`seed_from_standings_tuned`]. Use
-/// the tuned variant when you want to sweep `points_scale` or apply
-/// shrinkage (the calibration harness does this).
+/// the tuned variant directly when you want to sweep `points_scale`
+/// or apply a different shrinkage (the calibration harness does this).
 pub fn seed_from_standings(standings: &serde_json::Value) -> HashMap<String, f32> {
-    seed_from_standings_tuned(standings, POINTS_SCALE, 1.0)
+    seed_from_standings_tuned(standings, POINTS_SCALE, PRODUCTION_SHRINKAGE)
 }
 
 /// Seed Elo from standings with explicit `points_scale` and
@@ -205,11 +219,31 @@ mod tests {
                 entry("C", 90),
             ],
         });
-        let seed = seed_from_standings(&root);
+        // Call the tuned variant with shrinkage=1.0 so this test pins
+        // the raw scaling behaviour independent of the production
+        // shrinkage factor (which a future sweep may change).
+        let seed = seed_from_standings_tuned(&root, POINTS_SCALE, 1.0);
         // Average is 100; each team's Elo = 1500 + 6 * (pts - 100).
         assert!((seed["A"] - BASE_ELO).abs() < 1e-3);
         assert!((seed["B"] - (BASE_ELO + 60.0)).abs() < 1e-3);
         assert!((seed["C"] - (BASE_ELO - 60.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn production_seed_applies_shrinkage() {
+        // Pins the production default: POINTS_SCALE · PRODUCTION_SHRINKAGE
+        // = 6.0 · 0.7 = 4.2 Elo points per RS point from league avg.
+        let root = json!({
+            "standings": [
+                entry("A", 100),
+                entry("B", 110),
+                entry("C", 90),
+            ],
+        });
+        let seed = seed_from_standings(&root);
+        assert!((seed["A"] - BASE_ELO).abs() < 1e-3);
+        assert!((seed["B"] - (BASE_ELO + 42.0)).abs() < 1e-3);
+        assert!((seed["C"] - (BASE_ELO - 42.0)).abs() < 1e-3);
     }
 
     #[test]

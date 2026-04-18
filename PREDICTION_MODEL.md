@@ -2,7 +2,7 @@
 
 Technical reference for the Fantasy Puck race-odds / playoff-odds Monte Carlo system. Covers the full pipeline from NHL API ingest through bracket simulation to the `GET /api/race-odds` response, plus the admin endpoints, data model, tunable constants, calibration state, and known gaps.
 
-Current versions at the time of writing: **backend 1.15.0, frontend 1.10.0** (2026-04-18).
+Current versions at the time of writing: **backend 1.16.0, frontend 1.10.2** (2026-04-18).
 
 ---
 
@@ -393,7 +393,8 @@ The full tunable-hyperparameter table. This is the grid-search target.
 | Constant | Value | Location | Meaning |
 |---|---|---|---|
 | `BASE_ELO` | 1500.0 | `playoff_elo.rs:26` | League-average team Elo seed. |
-| `POINTS_SCALE` | 6.0 | `playoff_elo.rs:30` | Elo points per RS-point of separation. Likely too aggressive — see §10. |
+| `POINTS_SCALE` | 6.0 | `playoff_elo.rs` | Elo points per RS-point of separation before shrinkage. Effective scale (post-shrinkage) is `POINTS_SCALE · PRODUCTION_SHRINKAGE = 4.2`. |
+| `PRODUCTION_SHRINKAGE` | 0.7 | `playoff_elo.rs` | Bayesian shrinkage applied to `(season_points − avg)` in the production `seed_from_standings` path. Picked by the v1.13.0 sweep over 4 backfilled seasons (see §9). |
 | `HOME_ICE_ADV` | 35.0 | `playoff_elo.rs:33` | League-wide home-ice Elo used inside the replay step. |
 | `K_FACTOR` (Elo update) | 6.0 | `playoff_elo.rs:36` | Base Elo update rate per game, multiplied by `ln(goal_diff + 1)`. |
 | `HOME_BONUS_DELTA_CLAMP` | 15.0 | `playoff_elo.rs` | Per-team home-ice Elo *delta* clamp around `HOME_ICE_ADV`. Output range for the absolute per-team bonus is `[HOME_ICE_ADV ± 15] = [20, 50]`. |

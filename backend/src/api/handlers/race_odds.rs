@@ -83,12 +83,14 @@ pub async fn generate_and_cache_race_odds(
     my_team_id: Option<i64>,
 ) -> Result<RaceOddsResponse> {
     let today = hockey_today();
-    // Model version in the cache key: v2 reflects the P0+P1+P2 rework
-    // (bracket-state-aware sim, dynamic playoff Elo, Bayesian player
-    // projection). Bump when the projection model changes so a deploy
-    // doesn't serve stale same-day odds under the old model.
+    // Model version in the cache key: v3 reflects v1.14 + v1.15 + v1.16
+    // (shot-stabilised rate projection, TOI usage multiplier, goalie
+    // strength component, round-depth mean reversion, and the
+    // 0.7 production shrinkage on Elo seeding). Bump when the
+    // projection model changes so a deploy doesn't serve stale
+    // same-day odds under the old model.
     let cache_key = format!(
-        "race_odds:v2:{}:{}:{}:{}",
+        "race_odds:v3:{}:{}:{}:{}",
         if league_id.is_empty() { "global" } else { league_id },
         season(),
         game_type(),

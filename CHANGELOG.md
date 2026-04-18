@@ -4,6 +4,27 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.16.0 — 2026-04-18
+
+### Changed — Elo seeding now applies 0.7 production shrinkage
+
+The v1.13.0 sweep harness was exercised against all four backfilled seasons (2021-22 through 2024-25) with a 6-cell grid varying `points_scale ∈ {3, 4, 6}` and `shrinkage ∈ {0.7, 1.0}`. Aggregate Brier per config averaged across the four seasons:
+
+| Knobs | Avg brAgg |
+|---|---|
+| `ps=6, sh=0.7` | **0.5386** |
+| `ps=4, sh=1.0` | 0.5390 |
+| `ps=6, sh=1.0` (v1.15 production) | 0.5424 |
+| `ps=3, sh=1.0` | 0.5437 |
+| `ps=4, sh=0.7` | 0.5473 |
+| `ps=3, sh=0.7` | 0.5538 |
+
+The winner beats the legacy defaults across-the-board and is notably more stable on 2022-23 (the BOS-R1-upset season, where `sh=1.0` produced a 0.72 Brier outlier). New `playoff_elo::PRODUCTION_SHRINKAGE = 0.7` constant is now applied by the production `seed_from_standings` wrapper. `seed_from_standings_tuned` still lets callers (calibration sweep) override both knobs.
+
+User-visible effect: Stanley Cup Odds top-seed probabilities come in materially lower. A +200-Elo favourite no longer compounds to 94% R1 / 39% Cup — after shrinkage and the existing round-depth mean reversion, the same team lands closer to ~82% R1 / ~28% Cup. Still favoured, not anointed.
+
+Cache key bumped `race_odds:v2` → `race_odds:v3` so any cached pre-shrinkage payload from today's pre-warm is regenerated on the next request.
+
 ## frontend v1.10.2 — 2026-04-18
 
 ### Removed — Pulse 30s auto-refresh
