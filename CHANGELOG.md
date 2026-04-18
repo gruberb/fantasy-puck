@@ -4,6 +4,21 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.17.0 — 2026-04-18
+
+### Changed — halved Games-page cold-load time
+
+Two compounding waits killed the cold-load "Loading games data…" spinner on playoff nights:
+
+1. The NhlClient semaphore capped parallel NHL API calls at **5**. On a night with ~60–100 unique rostered skaters to fetch game logs for, that meant ~12 sequential batches at ~400ms each = 5–10 seconds of wall time just for the prefetch.
+2. Inside `process_games_extended`, boxscore prefetch and player-game-log prefetch ran **sequentially** — boxscores first (awaited to completion), then game logs. The shorter job gated the longer one.
+
+**Fixes:**
+- Bump the NhlClient semaphore `5 → 10`. NHL API tolerates 10 comfortably in practice; the existing 429 retry handles the rare overshoot.
+- Fuse the two prefetch groups into a single `tokio::join!` so they fire concurrently. Removed the duplicate `prefetch` block that was re-running the game-log fetch after the boxscore wait.
+
+Expected cold-load impact: ~2× faster on playoff-night slates with full fantasy rosters. Warm-cache paths are unchanged.
+
 ## v1.16.0 — 2026-04-18
 
 ### Changed — Elo seeding now applies 0.7 production shrinkage

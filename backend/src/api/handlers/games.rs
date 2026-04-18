@@ -362,9 +362,19 @@ async fn process_games_extended(
     }
 
     // Pre-load boxscores for live/completed games in parallel — the
-    // NhlClient semaphore (5 concurrent) throttles naturally, so this
-    // doesn't burst NHL. Was a sequential for-loop + .await, which
-    // serialised the whole slate end-to-end on cold loads.
+    // NhlClient semaphore (10 concurrent since v1.17) throttles
+    // naturally, so this doesn't burst NHL. Was a sequential for-loop
+    // + .await, which serialised the whole slate end-to-end on cold
+    // loads.
+    //
+    // Also pre-load player game logs for every unique rostered skater
+    // in tonight's slate so the downstream serial calls in
+    // `process_players_for_team` become cache hits. On a 3-game slate
+    // with ~60-100 unique players this collapses the serial NHL
+    // round-trips into parallel ones, capped by the semaphore.
+    //
+    // Both prefetches run inside a single `tokio::join!` so the
+    // shorter one (boxscores, usually) doesn't gate the longer one.
     let boxscore_futures = games_for_date
         .iter()
         .filter(|g| g.game_state.is_live() || g.game_state.is_completed())
@@ -373,8 +383,30 @@ async fn process_games_extended(
             let id = game.id;
             async move { (id, client.get_game_boxscore(id).await.ok()) }
         });
+    let unique_player_ids: HashSet<i64> = games_for_date
+        .iter()
+        .flat_map(|g| [g.home_team.abbrev.as_str(), g.away_team.abbrev.as_str()])
+        .filter_map(|abbrev| nhl_team_players.get(abbrev))
+        .flat_map(|fantasy_map| fantasy_map.values())
+        .flatten()
+        .map(|p| p.nhl_id)
+        .collect();
+    let season_prefetch = crate::api::season();
+    let game_type_prefetch = crate::api::game_type();
+    let player_log_futures = unique_player_ids.into_iter().map(|nhl_id| {
+        let client = state.nhl_client.clone();
+        async move {
+            let _ = client
+                .get_player_game_log(nhl_id, &season_prefetch, game_type_prefetch)
+                .await;
+        }
+    });
+    let (boxscore_results, _) = tokio::join!(
+        join_all(boxscore_futures),
+        join_all(player_log_futures),
+    );
     let boxscore_cache: HashMap<u32, Option<GameBoxscore>> =
-        join_all(boxscore_futures).await.into_iter().collect();
+        boxscore_results.into_iter().collect();
 
     // Build game responses (with basic player data for per-game display)
     let mut game_responses = Vec::new();
@@ -457,35 +489,13 @@ async fn process_games_extended(
         });
     }
 
-    // Build extended fantasy team data (playoff stats, form, TOI)
+    // Build extended fantasy team data (playoff stats, form, TOI).
+    // Game-log cache is already warm from the tokio::join! above —
+    // every `get_player_game_log` call inside `process_players_for_team`
+    // will hit the NhlClient cache instead of burning a round-trip.
     let season = crate::api::season();
     let game_type = crate::api::game_type();
     let form_games = 5;
-
-    // Warm the player-game-log cache for every roster skater on tonight's
-    // slate in parallel before the sequential post-processing runs. Each
-    // individual `get_player_game_log` call is cached by the NhlClient,
-    // so pre-fetching here turns the downstream serial calls in
-    // `process_players_for_team` into cache hits. On a 16-game slate
-    // with ~20 rostered players per team this collapses ~640 serial
-    // NHL round-trips into ~130 parallel ones, capped at 5 concurrent
-    // by the client's internal semaphore.
-    let unique_player_ids: HashSet<i64> = games_for_date
-        .iter()
-        .flat_map(|g| [g.home_team.abbrev.as_str(), g.away_team.abbrev.as_str()])
-        .filter_map(|abbrev| nhl_team_players.get(abbrev))
-        .flat_map(|fantasy_map| fantasy_map.values())
-        .flatten()
-        .map(|p| p.nhl_id)
-        .collect();
-    let prefetch = unique_player_ids.into_iter().map(|nhl_id| {
-        let client = state.nhl_client.clone();
-        let season = season;
-        async move {
-            let _ = client.get_player_game_log(nhl_id, &season, game_type).await;
-        }
-    });
-    join_all(prefetch).await;
 
     let mut all_players_by_fantasy_team: HashMap<i64, Vec<FantasyPlayerExtendedResponse>> = HashMap::new();
     let mut processed_players = HashSet::new();

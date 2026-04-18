@@ -61,7 +61,13 @@ impl Default for NhlClient {
 }
 
 impl NhlClient {
-    /// Create a new NHL API client (max 5 concurrent requests, retry on 429)
+    /// Create a new NHL API client (max 10 concurrent requests, retry on 429).
+    ///
+    /// The 10-concurrent limit was 5 through v1.15. Bumped in v1.17 to
+    /// halve cold-load time on the Games page, where ~60-100 unique
+    /// `player-game-log` calls fire on playoff nights. The NHL API
+    /// tolerates this comfortably in practice — the existing 429 retry
+    /// logic covers the rare overshoot.
     pub fn new() -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -70,7 +76,7 @@ impl NhlClient {
 
         Self {
             client,
-            semaphore: Arc::new(Semaphore::new(5)),
+            semaphore: Arc::new(Semaphore::new(10)),
             cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
