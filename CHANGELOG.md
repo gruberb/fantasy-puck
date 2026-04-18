@@ -4,7 +4,25 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
-## v1.11.0 — 2026-04-18
+## v1.11.1 — 2026-04-18
+
+### Fixed — calibration scoring vs corrupt realized outcomes
+
+v1.11.0's `/api/admin/calibrate` produced Brier scores worse than coinflip because the realized-outcome reconstruction couldn't find Cup winners or late-round advancements. Root cause: NHL's schedule endpoint returns `series_status.round` inconsistently for historical games. The 2022-23 Cup Final had 0 round-4 rows in the DB; same for 2023-24 and 2024-25. Conference-final games dropped into R1's 8-slot bucket where they got truncated.
+
+**Fix**: `reconstruct_bracket_from_results` (`domain/prediction/backtest.rs`) no longer consults the `round` column at all. Rounds are inferred topologically:
+
+1. Group all games into series by canonical team-pair.
+2. **R1** = first series in date order that *introduce* at least one new team. Cap at 8. (First-game-date alone fails when there are few series total; the "introduces a new team" heuristic correctly distinguishes R1 matchups from rematches in later rounds.)
+3. **R2** = next up to 4 series where *both* participants are R1 winners.
+4. **R3** = next up to 2 series where both participants are R2 winners.
+5. **Cup Final** = next 1 series where both participants are R3 winners.
+
+`ResultRow` grew a `game_date: String` field so the reconstruction can sort chronologically. The `round` field is kept but explicitly documented as ignored. Two new tests cover the topology-only path: one asserting a lying `round = 99` on R2 rows is ignored, one asserting Cup Final falls out of R3 winners across a full 16-team bracket.
+
+**Still expected**: Cup Final data is genuinely missing from the DB for 4 of 5 backfilled seasons (NHL schedule endpoint didn't return those games). Fix A can't recover rows that aren't there. A separate re-backfill using the `playoff-series/carousel/{season}` endpoint (which lists every game by ID) is queued as the follow-up — `/api/admin/backfill-historical` was fine for in-season but won't catch games the schedule endpoint drops.
+
+After this deploys, re-run `GET /api/admin/calibrate?season=20222023` — R3 advancement should now correctly credit VGK for the WCF win, though `wonCup` will still be false for every team on 4 of 5 seasons until the re-backfill lands.
 
 ### Added — calibration admin endpoint (P4.2 MVP)
 

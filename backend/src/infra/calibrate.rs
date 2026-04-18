@@ -153,9 +153,13 @@ pub async fn calibrate_season(
 // ---------------------------------------------------------------------------
 
 async fn load_result_rows(db: &FantasyDb, season: u32) -> Result<Vec<ResultRow>> {
-    let rows: Vec<(String, String, i32, i32, Option<i16>)> = sqlx::query_as(
+    let rows: Vec<(String, String, String, i32, i32, Option<i16>)> = sqlx::query_as(
         r#"
-        SELECT home_team, away_team, home_score, away_score, round
+        SELECT
+            TO_CHAR(game_date, 'YYYY-MM-DD') AS game_date,
+            home_team, away_team,
+            home_score, away_score,
+            round
         FROM playoff_game_results
         WHERE season = $1
         ORDER BY game_date ASC, game_id ASC
@@ -167,13 +171,16 @@ async fn load_result_rows(db: &FantasyDb, season: u32) -> Result<Vec<ResultRow>>
     .map_err(Error::Database)?;
     Ok(rows
         .into_iter()
-        .map(|(home_team, away_team, home_score, away_score, round)| ResultRow {
-            home_team,
-            away_team,
-            home_score,
-            away_score,
-            round: round.map(|r| r as u8),
-        })
+        .map(
+            |(game_date, home_team, away_team, home_score, away_score, round)| ResultRow {
+                game_date,
+                home_team,
+                away_team,
+                home_score,
+                away_score,
+                round: round.map(|r| r as u8),
+            },
+        )
         .collect())
 }
 
