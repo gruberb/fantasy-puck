@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use tokio::time::{interval, MissedTickBehavior};
+use tokio::time::{interval_at, Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -34,12 +34,14 @@ use crate::tuning::live_mirror;
 /// poller. The 6-tick roster cadence is not a wall-clock cron; it
 /// ticks off a tick counter started at process boot.
 pub async fn run(db: FantasyDb, nhl: Arc<NhlClient>, cancel: CancellationToken) {
-    let mut tick = interval(live_mirror::META_POLL_INTERVAL);
+    let start = Instant::now() + live_mirror::META_POLL_STARTUP_DELAY;
+    let mut tick = interval_at(start, live_mirror::META_POLL_INTERVAL);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     let mut counter: u32 = 0;
     info!(
         interval_secs = live_mirror::META_POLL_INTERVAL.as_secs(),
+        startup_delay_secs = live_mirror::META_POLL_STARTUP_DELAY.as_secs(),
         roster_every = live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS,
         "meta_poller: started"
     );

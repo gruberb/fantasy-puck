@@ -263,4 +263,18 @@ pub mod live_mirror {
     /// = 6, rosters refresh once every 30 min — matching
     /// [`super::nhl_client::ROSTER_TTL`].
     pub const ROSTER_REFRESH_EVERY_N_META_TICKS: u32 = 6;
+
+    /// Delay between process boot and the meta poller's first tick.
+    /// `tokio::time::interval` fires immediately on the first poll,
+    /// which at startup collides with the rankings-backfill NHL
+    /// fan-out and produces a 429 cascade. 15 s gives the startup
+    /// backfill enough room to finish.
+    pub const META_POLL_STARTUP_DELAY: Duration = Duration::from_secs(15);
+
+    /// Delay between process boot and the live poller's first tick.
+    /// Must be greater than the time the meta poller takes to
+    /// populate `nhl_games` for today, otherwise the live poller
+    /// wakes to an empty table and has no games to poll for one
+    /// whole interval.
+    pub const LIVE_POLL_STARTUP_DELAY: Duration = Duration::from_secs(45);
 }
