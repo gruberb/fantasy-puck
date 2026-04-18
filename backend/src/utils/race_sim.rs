@@ -180,8 +180,21 @@ pub struct RaceSimInput {
     /// a sensible 5–15% advantage for a top team over a wildcard. Callers
     /// can tune or recalibrate.
     pub k_factor: f32,
+    /// Pre-sigmoid home-ice bonus. Added to the rating gap when the home
+    /// team is hosting, subtracted when visiting. Must be expressed in
+    /// the same units the caller is passing to [`k_factor`] —
+    /// specifically, it's `k_factor * HOME_ICE_ELO` when `ratings` are on
+    /// the Elo scale. Pass `0.0` to model a neutral-site series (the
+    /// legacy behaviour).
+    pub home_ice_bonus: f32,
     pub fantasy_teams: Vec<SimFantasyTeam>,
 }
+
+/// Raw home-ice Elo advantage, matching the value used inside
+/// [`playoff_elo`] when updating ratings from past games. Callers on the
+/// Elo path multiply this by their k-factor to get the pre-sigmoid
+/// [`RaceSimInput::home_ice_bonus`].
+pub const HOME_ICE_ELO: f32 = 35.0;
 
 /// Default Monte Carlo trial count. Tuned so win probability resolution is
 /// ±~1pp at 95% confidence without burning more than a CPU-tenth per call.
@@ -388,9 +401,17 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
                     } => {
                         let top_rating = rating_for(&input.ratings, top_team);
                         let bot_rating = rating_for(&input.ratings, bottom_team);
-                        let p_top_game = sigmoid(k * (top_rating - bot_rating));
-                        let outcome =
-                            simulate_series(*top_wins, *bottom_wins, p_top_game, rng);
+                        let gap = k * (top_rating - bot_rating);
+                        // Carousel convention: top_seed is the higher seed
+                        // and therefore holds home-ice advantage.
+                        let outcome = simulate_series(
+                            *top_wins,
+                            *bottom_wins,
+                            gap,
+                            input.home_ice_bonus,
+                            true,
+                            rng,
+                        );
                         // Only games played *from now on* count as remaining.
                         let remaining = outcome
                             .total_games()
@@ -420,8 +441,22 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
                         };
                         let top_rating = rating_for(&input.ratings, &top);
                         let bot_rating = rating_for(&input.ratings, &bot);
-                        let p_top_game = sigmoid(k * (top_rating - bot_rating));
-                        let outcome = simulate_series(0, 0, p_top_game, rng);
+                        let gap = k * (top_rating - bot_rating);
+                        // Home-ice in Future slots: whichever winner has
+                        // the higher NHL regular-season rating. In the
+                        // NHL this is decided by RS standings points; our
+                        // rating map correlates closely enough for this
+                        // purpose. When ratings tie, top_team (by feeder
+                        // order) gets the nod.
+                        let top_has_home = top_rating >= bot_rating;
+                        let outcome = simulate_series(
+                            0,
+                            0,
+                            gap,
+                            input.home_ice_bonus,
+                            top_has_home,
+                            rng,
+                        );
                         let games = outcome.total_games();
                         let winner = if outcome.top_wins >= 4 {
                             top.clone()
@@ -647,23 +682,51 @@ impl SeriesOutcome {
     }
 }
 
-/// Play out a best-of-7 game by game from the given state, with `p_top_game`
-/// as the per-game probability the top seed wins.
+/// NHL 2-2-1-1-1 home-ice schedule. `true` means the home-ice team
+/// hosts game `i` (0-indexed). Games 1, 2, 5, 7 are home (4 of 7).
+const HOME_ICE_SCHEDULE: [bool; 7] = [true, true, false, false, true, false, true];
+
+/// Play out a best-of-7 game by game from the given state.
 ///
-/// We deliberately do *not* fold the hockeystats "second-by-second shot sim"
-/// here — that would require xG/RAPM data we don't have. Per-game prob from
-/// a team-strength logistic is the biggest cheap improvement over assuming
-/// 50/50 regardless of matchup.
+/// `gap_times_k` is `k * (rating_top - rating_bottom)` — the pre-sigmoid
+/// rating difference already scaled by the logistic's k-factor. Per
+/// game, the home-ice team gets an additive `ice_bonus` on that gap;
+/// the road team gets `-ice_bonus`. Pass `ice_bonus = 0.0` to model a
+/// neutral-site series.
+///
+/// `top_has_home_ice` describes who hosts games 1, 2, 5, 7 of the NHL
+/// 2-2-1-1-1 schedule. When resuming mid-series, `top_wins + bot_wins`
+/// tells us how many games have already been played, so the schedule
+/// index for the next game is that sum.
+///
+/// We deliberately do *not* fold the hockeystats "second-by-second shot
+/// sim" here — that would require xG/RAPM data we don't have. Per-game
+/// prob from a team-strength logistic, adjusted for home-ice, is the
+/// largest cheap improvement over assuming 50/50 regardless of matchup.
 fn simulate_series(
     mut top_wins: u32,
     mut bot_wins: u32,
-    p_top_game: f32,
+    gap_times_k: f32,
+    ice_bonus: f32,
+    top_has_home_ice: bool,
     rng: &mut SmallRng,
 ) -> SeriesOutcome {
-    // Clamp to [0.05, 0.95] so an extreme rating gap doesn't produce sweeps
-    // every trial — real upsets happen.
-    let p = p_top_game.clamp(0.05, 0.95);
     while top_wins < 4 && bot_wins < 4 {
+        let game_idx = (top_wins + bot_wins) as usize;
+        // The home-ice team hosts games 1, 2, 5, 7 per the 2-2-1-1-1
+        // schedule. Past game 7 we shouldn't be here (loop bounds clamp
+        // at 4-4), but default to the home-ice team hosting just in
+        // case a malformed input sneaks past the guards above.
+        let hi_team_is_home = HOME_ICE_SCHEDULE.get(game_idx).copied().unwrap_or(true);
+        let top_is_home = top_has_home_ice == hi_team_is_home;
+        let effective_gap = if top_is_home {
+            gap_times_k + ice_bonus
+        } else {
+            gap_times_k - ice_bonus
+        };
+        // Clamp to [0.05, 0.95] so an extreme rating gap doesn't produce
+        // sweeps every trial — real upsets happen.
+        let p = sigmoid(effective_gap).clamp(0.05, 0.95);
         if rng.r#gen::<f32>() < p {
             top_wins += 1;
         } else {
@@ -872,6 +935,7 @@ mod tests {
             bracket: baseline_bracket(),
             ratings: HashMap::new(),
             k_factor: DEFAULT_K_FACTOR,
+            home_ice_bonus: 0.0,
             fantasy_teams: vec![
                 SimFantasyTeam {
                     team_id: 1,
@@ -1020,6 +1084,7 @@ mod tests {
             bracket,
             ratings: HashMap::new(),
             k_factor: DEFAULT_K_FACTOR,
+            home_ice_bonus: 0.0,
             fantasy_teams: vec![SimFantasyTeam {
                 team_id: 1,
                 team_name: "Me".into(),
@@ -1092,6 +1157,7 @@ mod tests {
             bracket,
             ratings: HashMap::new(),
             k_factor: DEFAULT_K_FACTOR,
+            home_ice_bonus: 0.0,
             fantasy_teams: vec![SimFantasyTeam {
                 team_id: 1,
                 team_name: "Me".into(),
@@ -1109,6 +1175,61 @@ mod tests {
     }
 
     #[test]
+    fn home_ice_bonus_shifts_series_odds() {
+        // At equal ratings, the home-ice-owning top_seed should win
+        // their series more often when a home-ice bonus is applied.
+        // We lean on an exaggerated bonus to keep the Monte Carlo noise
+        // below the effect size — the real-world ~35-Elo bonus is a
+        // ~1-2pp signal that would need many more trials to resolve.
+        let ratings: HashMap<String, TeamRating> = [("BOS", 1500.0), ("BUF", 1500.0)]
+            .into_iter()
+            .map(|(a, r)| (a.into(), TeamRating(r)))
+            .collect();
+
+        let mut neutral = RaceSimInput {
+            bracket: baseline_bracket(),
+            ratings: ratings.clone(),
+            k_factor: DEFAULT_K_FACTOR,
+            home_ice_bonus: 0.0,
+            fantasy_teams: vec![SimFantasyTeam {
+                team_id: 1,
+                team_name: "Me".into(),
+                players: vec![mk_player("A", "BOS", 0.0, 0)],
+            }],
+        };
+        let mut with_home_ice = neutral.clone();
+        // 0.8 in pre-sigmoid units ≈ 69/31 per-game split at the home
+        // site — bigger than real life but large enough that 2000
+        // trials resolve the advantage cleanly.
+        with_home_ice.home_ice_bonus = 0.8;
+        // Seed every slot's top team to match the baseline_bracket so
+        // BOS occupies the home-ice slot.
+        let _ = &mut neutral;
+
+        let n = 2000;
+        let out_neutral = simulate_with_seed(&neutral, n, 7);
+        let out_home = simulate_with_seed(&with_home_ice, n, 7);
+
+        let bos_neutral = out_neutral
+            .nhl_teams
+            .iter()
+            .find(|t| t.abbrev == "BOS")
+            .unwrap();
+        let bos_home = out_home
+            .nhl_teams
+            .iter()
+            .find(|t| t.abbrev == "BOS")
+            .unwrap();
+        assert!(
+            bos_home.advance_round1_prob > bos_neutral.advance_round1_prob + 0.05,
+            "home-ice-owning BOS should win R1 notably more often \
+             with ice_bonus on: neutral={}, home={}",
+            bos_neutral.advance_round1_prob,
+            bos_home.advance_round1_prob,
+        );
+    }
+
+    #[test]
     fn ties_split_win_credit_fractionally() {
         // Four fantasy teams, each with an empty roster → every trial
         // ends in a 4-way tie at 0 points. Each team must get exactly
@@ -1118,6 +1239,7 @@ mod tests {
             bracket: baseline_bracket(),
             ratings: HashMap::new(),
             k_factor: DEFAULT_K_FACTOR,
+            home_ice_bonus: 0.0,
             fantasy_teams: vec![
                 SimFantasyTeam {
                     team_id: 1,
@@ -1196,6 +1318,7 @@ mod tests {
             bracket,
             ratings: HashMap::new(),
             k_factor: DEFAULT_K_FACTOR,
+            home_ice_bonus: 0.0,
             fantasy_teams: vec![SimFantasyTeam {
                 team_id: 1,
                 team_name: "Me".into(),

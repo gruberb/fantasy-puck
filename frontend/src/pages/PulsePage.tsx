@@ -9,7 +9,7 @@ import { RivalryCard } from "@/features/race-odds/components/RivalryCard";
 import { RaceOddsSection } from "@/features/race-odds/components/RaceOddsSection";
 import { MyStakes } from "@/features/race-odds/components/MyStakes";
 import { useLeague } from "@/contexts/LeagueContext";
-import { getNHLTeamLogoUrl, getNHLTeamShortName } from "@/utils/nhlTeams";
+import { getNHLTeamLogoUrl, getNHLTeamShortName, nhlPlayerProfileUrl } from "@/utils/nhlTeams";
 import type { MyGameTonight } from "@/features/pulse";
 
 const PulsePage = () => {
@@ -64,7 +64,7 @@ const PulsePage = () => {
               <StatCol label="Rank" value={`#${myTeam.rank}`} />
               <StatCol label="Total" value={myTeam.totalPoints.toString()} />
               <StatCol
-                label="Last day"
+                label="Yesterday"
                 value={myTeam.pointsToday.toString()}
                 accent
               />
@@ -156,7 +156,7 @@ const PulsePage = () => {
               <span>Team</span>
               <span className="text-right">Total</span>
               <span className="text-right">Active</span>
-              <span className="text-right">Last</span>
+              <span className="text-right">Yesterday</span>
               <span className="text-right">5-day</span>
             </div>
             {leagueBoard.map((team) => (
@@ -326,9 +326,19 @@ function GameTonightCard({ game }: { game: MyGameTonight }) {
         {game.myPlayers.map((p) => (
           <div
             key={p.nhlId}
-            className="flex items-center justify-between text-xs"
+            className="flex items-center justify-between text-xs gap-1"
           >
-            <span className="truncate flex-1">{p.name}</span>
+            <span className="text-[10px] font-bold uppercase text-gray-500 shrink-0 w-8">
+              {getNHLTeamShortName(p.nhlTeam)}
+            </span>
+            <a
+              href={nhlPlayerProfileUrl(p.nhlId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="truncate flex-1 hover:text-[#2563EB] hover:underline"
+            >
+              {p.name}
+            </a>
             <span className="text-gray-400 ml-1 shrink-0">{p.position}</span>
             {(p.goals !== 0 || p.assists !== 0) && (
               <span className="ml-2 font-bold text-[#2563EB] tabular-nums">

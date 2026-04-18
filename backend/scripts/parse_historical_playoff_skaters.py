@@ -114,6 +114,10 @@ def project(row: list[str]) -> dict[str, object] | None:
 
         if not player_name or not team or gp is None:
             return None
+        # Skaters-only fantasy format: drop goalies at the seed boundary
+        # so they can't pollute the Bayesian projection prior.
+        if position.upper() == "G":
+            return None
         return {
             "player_name": player_name,
             "team": team,

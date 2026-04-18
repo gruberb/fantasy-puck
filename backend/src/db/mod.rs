@@ -176,9 +176,10 @@ impl FantasyDb {
         &self,
         league_id: &str,
         days: i32,
+        min_date: &str,
     ) -> Result<std::collections::HashMap<i64, Vec<i32>>> {
         teams::TeamDbService::new(&self.pool)
-            .get_team_sparklines(league_id, days)
+            .get_team_sparklines(league_id, days, min_date)
             .await
     }
 

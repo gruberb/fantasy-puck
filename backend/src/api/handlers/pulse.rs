@@ -162,10 +162,19 @@ async fn generate_pulse_narrative(response: &PulseResponse) -> Option<String> {
         Ok(v) => v,
         Err(_) => return None,
     };
+    // Detect the pre-drop / zero-state. If every team's playoff total
+    // is 0 AND nobody's "Yesterday" bucket is non-zero, no games have
+    // fired in this round yet — any "X points" phrasing in the output
+    // would be wrong.
+    let no_playoff_scoring_yet = response
+        .league_board
+        .iter()
+        .all(|e| e.total_points == 0 && e.points_today == 0);
+
     let mut headline = String::new();
     if let Some(t) = &response.my_team {
         headline.push_str(&format!(
-            "Caller's team: {} · Rank #{} · {} total pts · {} pts from the last completed scoring day · {}/{} players have an NHL game scheduled today.\n",
+            "Caller's team: {} · Rank #{} · {} total playoff pts · {} pts from the last completed scoring day · {}/{} players have an NHL game scheduled today.\n",
             t.team_name,
             t.rank,
             t.total_points,
@@ -185,6 +194,11 @@ async fn generate_pulse_narrative(response: &PulseResponse) -> Option<String> {
             "Off-day"
         }
     ));
+    if no_playoff_scoring_yet {
+        headline.push_str(
+            "ZERO-STATE: no playoff games have been played yet in this league. Every team sits at 0 playoff points. Do not invent a gap, a lead, a 'last-day delta', or phrases like 'came into today with X points' — there is no scoring to reference. The only real content right now is who has how many active skaters tonight and which NHL matchups those skaters are in.\n",
+        );
+    }
     for entry in response.league_board.iter().take(3) {
         headline.push_str(&format!(
             "  #{} {} · {} pts\n",
@@ -426,8 +440,14 @@ async fn build_league_board(
         }
     }
 
-    // Sparklines: last 5 days of daily_rankings per team.
-    let sparklines = state.db.get_team_sparklines(league_id, 5).await.unwrap_or_default();
+    // Sparklines: last 5 days of daily_rankings per team, clipped at
+    // playoff_start so pre-playoff regular-season remnants never show
+    // up as "Yesterday's" points on day 1 of a new round.
+    let sparklines = state
+        .db
+        .get_team_sparklines(league_id, 5, crate::api::playoff_start())
+        .await
+        .unwrap_or_default();
 
     // Today's points — use yesterday's daily_ranking if scheduler already
     // processed; otherwise 0. Since the scheduler runs on yesterday's games,

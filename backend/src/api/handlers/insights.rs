@@ -123,9 +123,27 @@ async fn enrich_projections(
         return;
     }
 
-    // Team ratings blend season points with L10 form (shared helper).
+    // Team ratings: during the playoffs use the dynamic playoff Elo
+    // (same source the Stanley Cup Odds table reads), so both surfaces
+    // on this page agree on which team is "stronger." Before playoffs
+    // fall back to the standings-points blend.
     let ratings: HashMap<String, f32> = match state.nhl_client.get_standings_raw().await {
-        Ok(json) => crate::utils::team_ratings::from_standings(&json),
+        Ok(json) => {
+            if crate::api::game_type() == 3 {
+                match crate::utils::playoff_elo::compute_current_elo(
+                    &state.db,
+                    &json,
+                    crate::api::season(),
+                )
+                .await
+                {
+                    Ok(elo) => elo,
+                    Err(_) => crate::utils::team_ratings::from_standings(&json),
+                }
+            } else {
+                crate::utils::team_ratings::from_standings(&json)
+            }
+        }
         Err(_) => HashMap::new(),
     };
 

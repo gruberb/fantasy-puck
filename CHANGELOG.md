@@ -60,9 +60,31 @@ Replaces `team_ratings::from_standings` as the sim's team-strength source when `
 
 - **`utils/backtest`** exposes `brier_score`, `log_loss`, `calibration_curve`, `mae`, `rmse`, `interval_coverage`, and `reconstruct_bracket_from_results` (group completed games into series, pad missing slots with `Future`). Enough to measure calibration against realized outcomes once enough games accrue. A full historical-day simulation loop is the next step but is gated on ingesting 2021-2025 box scores into `playoff_game_results`.
 
+### Added — forward home-ice in the sim
+
+The forward Monte Carlo had been running every series as a neutral-site set. Now `simulate_series` threads a pre-sigmoid `home_ice_bonus` through the per-game draw, stepping through the NHL 2-2-1-1-1 schedule so games 1, 2, 5, 7 favor the home-ice-owning team and 3, 4, 6 favor the road team. Home-ice ownership: InProgress slots honor the carousel's top seed (higher RS seed); Future slots award home-ice to the winner with the higher rating (proxy for RS standings). On the Elo path, the bonus is `ELO_K_FACTOR × HOME_ICE_ELO` with `HOME_ICE_ELO = 35` — the same 54/46-home-split constant the Elo replay already uses. Pre-playoff path passes `home_ice_bonus = 0.0` so behaviour is unchanged.
+
+### Changed — Insights Playoff Bracket Tree uses playoff Elo
+
+`backend/src/api/handlers/insights.rs` was calling `team_ratings::from_standings` for the STRENGTH labels on the Playoff Bracket Tree, which froze at RS values once the L10 window closed. Now during `game_type == 3` it reads `playoff_elo::compute_current_elo` instead, so the bracket tree and the Stanley Cup Odds table on the same page agree on which team is stronger. Pre-playoff path still uses the blended standings rating.
+
+### Fixed — Pulse pre-drop state
+
+- **Sparkline clipped at playoff_start.** `get_team_sparklines` now takes a `min_date` floor and Pulse passes `playoff_start()` so regular-season remnants in `daily_rankings` never surface as "Yesterday" points on day 1 of a new round. On day 1 every team correctly shows 0.
+- **Narrative zero-state guard.** When every fantasy team has 0 playoff points AND 0 from the last scoring day, the Claude prompt now receives an explicit `ZERO-STATE` rule forbidding phrases like "came into today with N points" or "N-point gap" — with no games played yet there's nothing to reference.
+- **`points_today` label re-worded.** Column heading on the League Live Board and the `StatCol` on Tonight are both now "Yesterday" instead of "Last" / "Last day" — clearer than a tooltip, matches how daily-fantasy contexts label the previous completed day.
+
+### Added — Tonight game cards: NHL team + player links
+
+Each player row in the Tonight section now leads with a compact 3-letter NHL team abbreviation so the home/away split inside a CAR-OTT card is unambiguous, and the player name itself is an anchor to `nhl.com/player/{id}` — matching the profile-link treatment that Series Rosters and MyStakes have had since v1.7.0.
+
+### Fixed — goalies in the historical seed
+
+The 5-year export included 18 goalie rows (Shesterkin, Bobrovsky, etc.) that slipped into `historical_playoff_skater_totals`. Fantasy format is skater-only, so these could never match a rostered player — dead weight that risked polluting the Bayesian prior's name-match. The Python parse script now filters `position == 'G'` at the seed boundary; the committed CSV shrinks from 600 to 582 rows.
+
 ### Tests
 
-Lib suite at **52 passing** (was 11 before the rework). New coverage:
+Lib suite at **53 passing** (was 11 before the rework). New coverage:
 - 3 bracket-state correctness regressions.
 - 3 carousel-to-BracketState classification tests.
 - 6 playoff-Elo tests (seeding, upset payoff, blowout scaling, zero-sum, home-ice).
@@ -70,6 +92,7 @@ Lib suite at **52 passing** (was 11 before the rework). New coverage:
 - 1 tie-splitting test (four empty rosters must each get 0.25 win-prob).
 - 2 distribution tests (Gamma mean/variance, NegBin variance exceeds Poisson).
 - 9 backtest helpers (Brier, log-loss, calibration, MAE/RMSE, interval coverage, bracket reconstruction).
+- 1 home-ice test (owning home-ice raises advance-R1 probability when ratings are equal).
 
 ## v1.7.4 — 2026-04-18
 

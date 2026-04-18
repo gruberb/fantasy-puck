@@ -243,7 +243,7 @@ async fn build_league_input(
     let games_played_so_far = games_played_from_carousel(carousel.as_ref());
 
     let is_playoffs = game_type_val == 3;
-    let (ratings, k_factor) = resolve_ratings(
+    let (ratings, k_factor, home_ice_bonus) = resolve_ratings(
         &state.db,
         season_val,
         is_playoffs,
@@ -279,26 +279,31 @@ async fn build_league_input(
         bracket,
         ratings,
         k_factor,
+        home_ice_bonus,
         fantasy_teams,
     })
 }
 
-/// Compute the ratings map + matching logistic k-factor. Playoff path
-/// uses the game-log-driven Elo; pre-playoff falls back to the blended
-/// standings rating that the codebase has always used.
+/// Compute the ratings map + matching logistic k-factor + pre-sigmoid
+/// home-ice bonus. Playoff path uses the game-log-driven Elo and the
+/// standard HOME_ICE_ELO=35 advantage threaded through the per-game
+/// draw; pre-playoff falls back to the blended standings rating and a
+/// zero home-ice bonus (the standings-points scale doesn't admit a
+/// principled home-ice offset without its own calibration).
 async fn resolve_ratings(
     db: &crate::db::FantasyDb,
     season_val: u32,
     is_playoffs: bool,
     standings_json: Option<&serde_json::Value>,
-) -> (HashMap<String, TeamRating>, f32) {
+) -> (HashMap<String, TeamRating>, f32, f32) {
     if is_playoffs {
         if let Some(standings) = standings_json {
             match compute_current_elo(db, standings, season_val).await {
                 Ok(elo) => {
                     let map: HashMap<String, TeamRating> =
                         elo.into_iter().map(|(k, v)| (k, TeamRating(v))).collect();
-                    return (map, ELO_K_FACTOR);
+                    let ice_bonus = ELO_K_FACTOR * crate::utils::race_sim::HOME_ICE_ELO;
+                    return (map, ELO_K_FACTOR, ice_bonus);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -311,7 +316,7 @@ async fn resolve_ratings(
             tracing::warn!("standings fetch empty; cannot compute playoff Elo");
         }
     }
-    (ratings_from_standings(standings_json), DEFAULT_K_FACTOR)
+    (ratings_from_standings(standings_json), DEFAULT_K_FACTOR, 0.0)
 }
 
 /// Build SimFantasyTeams using the Bayesian `player_projection` path.
@@ -407,7 +412,7 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
     let games_played_so_far = games_played_from_carousel(carousel.as_ref());
 
     let is_playoffs = game_type_val == 3;
-    let (ratings, k_factor) =
+    let (ratings, k_factor, home_ice_bonus) =
         resolve_ratings(&state.db, season_val, is_playoffs, standings_json.as_ref()).await;
 
     // Build a flat Fantasy Champion pool: top 40 regular-season skaters by
@@ -418,6 +423,7 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
             bracket,
             ratings,
             k_factor,
+            home_ice_bonus,
             fantasy_teams: Vec::new(),
         });
     };
@@ -497,6 +503,7 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
         bracket,
         ratings,
         k_factor,
+        home_ice_bonus,
         fantasy_teams,
     })
 }

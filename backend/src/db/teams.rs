@@ -203,18 +203,31 @@ impl<'a> TeamDbService<'a> {
         Ok(result)
     }
 
-    /// Return last-N-days of team points for every team in the league.
-    /// Result: team_id -> Vec<i32> in chronological order (oldest first).
-    /// Missing days are simply absent from each vec (not padded with zeros),
-    /// so callers can decide how to render short histories.
+    /// Return last-N-days of team points for every team in the league,
+    /// clipped so no row older than `min_date` is returned. Result:
+    /// team_id -> Vec<i32> in chronological order (oldest first).
+    /// Missing days are absent from each vec rather than padded with zeros.
+    ///
+    /// `min_date` (YYYY-MM-DD, inclusive) keeps pre-playoff daily_rankings
+    /// from leaking into Pulse's "Yesterday" column on day 1 of a new
+    /// round — passing `playoff_start()` clears everything before puck
+    /// drop. Pass an empty string to disable the clip.
     pub async fn get_team_sparklines(
         &self,
         league_id: &str,
         days: i32,
+        min_date: &str,
     ) -> Result<HashMap<i64, Vec<i32>>> {
         let since = chrono::Utc::now()
             - chrono::Duration::days(days as i64);
-        let since_str = since.format("%Y-%m-%d").to_string();
+        let window_start = since.format("%Y-%m-%d").to_string();
+        // Take the later of the trailing-N-days window and the caller's
+        // `min_date` floor — whichever clips more.
+        let since_str: String = if !min_date.is_empty() && min_date > window_start.as_str() {
+            min_date.to_string()
+        } else {
+            window_start
+        };
 
         let rows = sqlx::query(
             r#"
