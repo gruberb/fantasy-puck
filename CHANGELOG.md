@@ -4,7 +4,12 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
-## v1.7.2 — 2026-04-17
+## v1.7.3 — 2026-04-17
+
+### Changed
+- **Dashboard Overall Rankings shows all teams** — removed the 7-team cap; the home board now renders every fantasy team in the league. In a 10+ team league the old cap hid the bottom half of the standings behind a View All click.
+- **Dropped redundant season badge on Dashboard** — the yellow `2025/2026 Playoffs` chip under `Overall Rankings` and `Sleepers` duplicated the `NHL 2026` label already shown in the NavBar. Removed the `dateBadge` prop on both tables.
+- **Mobile menu gained Teams + Browse Leagues** — desktop has always exposed these under the user dropdown, but on mobile (`lg:hidden`) the user section jumped straight from the nav links to `League Settings`, leaving no way to reach the Teams page or switch leagues without going through the desktop breakpoint. Now mirrors the desktop dropdown.
 
 ### Changed
 - **Insights ownership pills now you-only** — v1.7.1's +N MORE toggle helped on desktop but still looked horrible on mobile in `StanleyCupOdds`, where the Team column is ~80px wide and each chip stacked vertically. In 15-team leagues the cross-league ownership list was noise anyway — the signal you scan for during a game is "do I have skin in this?". `RosteredChips` now renders a single `YOU: {count}` pill when the caller owns players on that NHL team, and nothing otherwise. Matching is done via `useLeague()` + active-league membership, so no backend changes.

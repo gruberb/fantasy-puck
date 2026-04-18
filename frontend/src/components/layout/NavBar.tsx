@@ -471,6 +471,24 @@ const NavBar = () => {
                     </div>
                   )}
 
+                  {hasLeague && (
+                    <NavLink
+                      to={`${lp}/teams`}
+                      onClick={() => setMobileOpen(false)}
+                      className={({ isActive }) =>
+                        isActive ? activeLinkClass : inactiveLinkClass
+                      }
+                    >
+                      Teams
+                    </NavLink>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleGoToLeagues}
+                    className={`${inactiveLinkClass} w-full text-left cursor-pointer`}
+                  >
+                    Browse Leagues
+                  </button>
                   {hasLeague && isLeagueOwner && (
                     <NavLink
                       to={`${lp}/settings`}
