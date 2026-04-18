@@ -4,8 +4,6 @@ import ErrorMessage from "@/components/common/ErrorMessage";
 import Sparkbars from "@/components/common/Sparkbars";
 import SeriesForecastHero from "@/components/pulse/SeriesForecastHero";
 import { usePulse } from "@/features/pulse";
-import { useRaceOdds } from "@/features/race-odds/hooks/use-race-odds";
-import { RivalryCard } from "@/features/race-odds/components/RivalryCard";
 import { RaceOddsSection } from "@/features/race-odds/components/RaceOddsSection";
 import { MyStakes } from "@/features/race-odds/components/MyStakes";
 import { useLeague } from "@/contexts/LeagueContext";
@@ -16,9 +14,6 @@ const PulsePage = () => {
   const { pulse, isLoading, error, hasLive } = usePulse();
   const { activeLeagueId } = useLeague();
   const lp = activeLeagueId ? `/league/${activeLeagueId}` : "";
-  // Wire the rivalry hero line: runs a cheap cached query keyed by league +
-  // my_team_id so the backend can surface the closest-rival h2h matchup.
-  const { data: raceOdds } = useRaceOdds({ myTeamId: pulse?.myTeam?.teamId });
 
   if (isLoading) {
     return <LoadingSpinner size="large" message="Loading pulse..." />;
@@ -102,18 +97,8 @@ const PulsePage = () => {
         </section>
       )}
 
-      {/* Rivalry hero line: compact head-to-head framing against the closest
-          rival by projected mean. */}
-      {raceOdds?.rivalry && (
-        <div className="bg-white border-2 border-[#1A1A1A] px-6 py-4">
-          <p className="text-[10px] uppercase tracking-widest text-[var(--color-ink-muted)] font-bold mb-2">
-            Head-to-Head
-          </p>
-          <RivalryCard rivalry={raceOdds.rivalry} variant="compact" />
-        </div>
-      )}
-
-      {/* Race Odds — per-league Monte Carlo projections. */}
+      {/* Race Odds — per-league Monte Carlo projections. Includes the
+          Head-to-Head card internally, so no separate rivalry section here. */}
       <RaceOddsSection myTeamId={myTeam?.teamId ?? null} />
 
       {/* My Stakes — "which NHL series am I rooting for?" — every NHL team

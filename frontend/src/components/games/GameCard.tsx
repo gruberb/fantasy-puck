@@ -26,8 +26,8 @@ const GameCard = ({
     <NHLGameCard
       game={game}
       getTeamPrimaryColor={getTeamPrimaryColor}
-      expandLabel="Show Game Details"
-      collapseLabel="Hide Game Details"
+      expandLabel="Show Rostered Skaters"
+      collapseLabel="Hide Rostered Skaters"
       isExpanded={hasLeague ? isExpanded : false}
       onToggleExpand={hasLeague ? onToggleExpand : undefined}
     >

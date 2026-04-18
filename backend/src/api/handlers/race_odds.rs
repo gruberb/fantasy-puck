@@ -301,10 +301,21 @@ async fn resolve_ratings(
         if let Some(standings) = standings_json {
             match compute_current_elo(db, standings, season_val).await {
                 Ok(elo) => {
-                    let map: HashMap<String, TeamRating> =
-                        elo.into_iter().map(|(k, v)| (k, TeamRating(v))).collect();
-                    let ice_bonus = ELO_K_FACTOR * race_sim::HOME_ICE_ELO;
-                    return (map, ELO_K_FACTOR, ice_bonus);
+                    // Derive each team's own home-ice advantage from
+                    // their RS home/road split — stored on the rating
+                    // alongside the base Elo. `simulate_series` prefers
+                    // this per-team value when non-zero, falling back
+                    // to the league-constant bonus below.
+                    let home_bonus_map = crate::domain::prediction::playoff_elo::home_bonus_from_standings(standings);
+                    let map: HashMap<String, TeamRating> = elo
+                        .into_iter()
+                        .map(|(k, base)| {
+                            let home_bonus = home_bonus_map.get(&k).copied().unwrap_or(0.0);
+                            (k, TeamRating::with_home_bonus(base, home_bonus))
+                        })
+                        .collect();
+                    let fallback_ice_bonus = ELO_K_FACTOR * race_sim::HOME_ICE_ELO;
+                    return (map, ELO_K_FACTOR, fallback_ice_bonus);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -602,7 +613,7 @@ fn ratings_from_standings(standings: Option<&serde_json::Value>) -> HashMap<Stri
     // Insights report the same strength numbers.
     team_ratings::from_standings(root)
         .into_iter()
-        .map(|(abbrev, rating)| (abbrev, TeamRating(rating)))
+        .map(|(abbrev, rating)| (abbrev, TeamRating::new(rating)))
         .collect()
 }
 

@@ -35,6 +35,52 @@ pub const HOME_ICE_ADV: f32 = 35.0;
 /// win moves ratings by ~K and a 5-goal win by ~K·ln(6) ≈ 1.8·K.
 pub const K_FACTOR: f32 = 6.0;
 
+/// Compute each team's per-team home-ice advantage in Elo units from
+/// their regular-season home-vs-road record. A team that earned a
+/// points-percentage 8 pp higher at home than on the road gets a
+/// ~32-point Elo home bonus; flat home/road split gets zero. Clamped
+/// to `[10, 80]` to smooth small-sample noise and avoid negative
+/// home-ice (rare but possible in a short season).
+///
+/// Scale rationale: on the Elo side `sigmoid(ELO_K * 35) ≈ 0.55`
+/// (the 54/46 league-average home-ice split). Points-percentage gap
+/// of ~0.08 maps to roughly the same win-prob shift, so the linear
+/// coefficient is `35 / 0.08 ≈ 437`; we use 400 for a round number.
+pub fn home_bonus_from_standings(standings: &serde_json::Value) -> HashMap<String, f32> {
+    let Some(arr) = standings.get("standings").and_then(|v| v.as_array()) else {
+        return HashMap::new();
+    };
+    arr.iter()
+        .filter_map(|entry| {
+            let abbrev = entry
+                .get("teamAbbrev")
+                .and_then(|a| a.get("default"))
+                .and_then(|a| a.as_str())?
+                .to_string();
+
+            let pts_pct = |w_key: &str, l_key: &str, otl_key: &str| -> Option<f32> {
+                let w = entry.get(w_key).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let l = entry.get(l_key).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let otl = entry.get(otl_key).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let gp = w + l + otl;
+                if gp < 5.0 {
+                    return None;
+                }
+                Some(((w * 2.0 + otl) / (gp * 2.0)) as f32)
+            };
+
+            let home = pts_pct("homeWins", "homeLosses", "homeOtLosses")?;
+            let road = pts_pct("roadWins", "roadLosses", "roadOtLosses")?;
+            let raw = (home - road) * 400.0;
+            // Clamp: zero floor (no negative home-ice), 80-Elo ceiling
+            // so a hot-home / cold-road small sample can't dominate
+            // the per-game draw.
+            let bonus = raw.clamp(10.0, 80.0);
+            Some((abbrev, bonus))
+        })
+        .collect()
+}
+
 /// Seed each team's Elo from the NHL standings feed. Teams missing from
 /// the feed get `BASE_ELO`. Returns `abbrev → elo`.
 pub fn seed_from_standings(standings: &serde_json::Value) -> HashMap<String, f32> {
@@ -119,6 +165,40 @@ mod tests {
         assert!((seed["A"] - BASE_ELO).abs() < 1e-3);
         assert!((seed["B"] - (BASE_ELO + 60.0)).abs() < 1e-3);
         assert!((seed["C"] - (BASE_ELO - 60.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn home_bonus_reflects_home_road_gap() {
+        // Strong home, weak road: 30-5-5 home (65 pts / 40 games = .8125
+        // pts/game), 5-30-5 road (.1875 pts/game). Diff ≈ 0.625 → 250 Elo
+        // raw, clamped to 80.
+        let root = serde_json::json!({
+            "standings": [{
+                "teamAbbrev": { "default": "HOT" },
+                "homeWins": 30, "homeLosses": 5, "homeOtLosses": 5,
+                "roadWins": 5, "roadLosses": 30, "roadOtLosses": 5,
+            }]
+        });
+        let map = home_bonus_from_standings(&root);
+        assert!((map["HOT"] - 80.0).abs() < 1e-3);
+
+        // Flat home/road: equal split → 0 diff → clamped to floor 10.
+        let root = serde_json::json!({
+            "standings": [{
+                "teamAbbrev": { "default": "EVEN" },
+                "homeWins": 20, "homeLosses": 15, "homeOtLosses": 5,
+                "roadWins": 20, "roadLosses": 15, "roadOtLosses": 5,
+            }]
+        });
+        let map = home_bonus_from_standings(&root);
+        assert!((map["EVEN"] - 10.0).abs() < 1e-3);
+
+        // Missing home/road fields: team skipped, not defaulted.
+        let root = serde_json::json!({
+            "standings": [{ "teamAbbrev": { "default": "EMPTY" } }]
+        });
+        let map = home_bonus_from_standings(&root);
+        assert!(!map.contains_key("EMPTY"));
     }
 
     #[test]

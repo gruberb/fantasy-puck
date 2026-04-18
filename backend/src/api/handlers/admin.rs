@@ -11,6 +11,7 @@ use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::{Error, Result};
+use crate::utils::playoff_ingest::ingest_playoff_games_for_range;
 use crate::utils::scheduler;
 
 pub async fn process_rankings(
@@ -77,4 +78,42 @@ pub async fn invalidate_cache(
             )))
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct BackfillHistoricalParams {
+    /// Inclusive YYYY-MM-DD. Typically the playoff start of a past season.
+    start: String,
+    /// Inclusive YYYY-MM-DD. Typically the Cup Final end of the same season.
+    end: String,
+}
+
+/// Backfill completed playoff games for a past date range into the
+/// `playoff_game_results` + `playoff_skater_game_stats` tables. Only
+/// completed, `game_type == 3` games are ingested — the existing
+/// `ingest_playoff_games_for_date` filter handles this.
+///
+/// Meant to be run once per historical season to seed training data
+/// for future Elo calibration work. Safe to re-run; upserts are
+/// idempotent on `(game_id, player_id)` and `game_id`.
+pub async fn backfill_historical_playoffs(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<BackfillHistoricalParams>,
+) -> Result<Json<ApiResponse<String>>> {
+    if !auth.is_admin {
+        return Err(Error::Forbidden("Admin access required".into()));
+    }
+    let nhl = Arc::new(state.nhl_client.clone());
+    let rows = ingest_playoff_games_for_range(&state.db, &nhl, &params.start, &params.end).await?;
+    info!(
+        start = %params.start,
+        end = %params.end,
+        rows,
+        "historical-playoff backfill complete"
+    );
+    Ok(json_success(format!(
+        "Backfilled {} skater rows for playoff games between {} and {}",
+        rows, params.start, params.end
+    )))
 }

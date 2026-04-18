@@ -5,7 +5,6 @@ import {
 } from "@/utils/nhlTeams";
 
 import type { TeamSeriesProjection } from "@/features/insights";
-import { RosteredChips } from "./RosteredChips";
 
 interface StanleyCupOddsProps {
   /**
@@ -113,11 +112,6 @@ function TeamCell({
           <span className="md:hidden">{abbrev}</span>
           <span className="hidden md:inline">{getNHLTeamShortName(abbrev)}</span>
         </p>
-        {series && series.rosteredTags.length > 0 && (
-          <div className="mt-0.5">
-            <RosteredChips tags={series.rosteredTags} />
-          </div>
-        )}
       </div>
     </div>
   );

@@ -234,6 +234,10 @@ pub fn create_router(db: FantasyDb, nhl_client: NhlClient, config: Arc<Config>) 
             "/api/admin/cache/invalidate",
             get(handlers::admin::invalidate_cache),
         )
+        .route(
+            "/api/admin/backfill-historical",
+            get(handlers::admin::backfill_historical_playoffs),
+        )
         // ---------------------------------------------------------------
         // WebSocket
         // ---------------------------------------------------------------

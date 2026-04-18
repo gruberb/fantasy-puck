@@ -4,6 +4,30 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.10.0 — 2026-04-18
+
+### Added — per-team home-ice advantage
+
+Replaced the league-constant `HOME_ICE_ELO = 35` with per-team values derived from each team's regular-season home-vs-road record. `TeamRating` expanded from a scalar tuple struct to `{ base, home_bonus }`; both are on the Elo scale. `playoff_elo::home_bonus_from_standings` parses `homeWins/homeLosses/homeOtLosses` vs `roadWins/…` from the standings feed, computes `(home_pts_pct − road_pts_pct) × 400`, and clamps to `[10, 80]` to smooth small-sample noise. `simulate_series` prefers the home team's own `home_bonus` when non-zero; otherwise falls through to the league-wide `input.home_ice_bonus`. Pre-playoff path unchanged (standings-points scale, bonus=0). Test coverage extended to 54 passing.
+
+### Added — historical playoff game-results backfill
+
+New admin endpoint `GET /api/admin/backfill-historical?start=YYYY-MM-DD&end=YYYY-MM-DD` calls the existing `ingest_playoff_games_for_range` across a date range, upserting completed `game_type == 3` games into `playoff_game_results` and `playoff_skater_game_stats`. Meant to be run once per past season to seed the training data needed for P4.2 hyperparameter tuning. Idempotent.
+
+### Fixed — Insights narrative "No games on the slate today"
+
+The insights response was cached for the whole hockey-date. If the 10am UTC prewarm ran before NHL published today's schedule, the stale narrative stuck all day. Now the handler self-heals: on cache hit, if `todays_games.is_empty()`, the cached entry is thrown out and regenerated. Likewise, empty-schedule responses are no longer cached — off-days regenerate cheaply on each visit (the NhlClient still caches the upstream schedule response) rather than committing a misleading narrative.
+
+### Added — dashboard quick-link buttons
+
+`ActionButtons` dropped the old "View All Teams / Game Center / View Full Rankings" trio in favour of four targets: **Pulse**, **Insights**, **Today's Games**, **Detailed Stats**. League-scoped where applicable; the Games link is global.
+
+### Changed — Pulse cleanup
+
+- **Removed the standalone "Head-to-Head" bar** between the narrative and Race Odds. The Race Odds section already shows the same rivalry card at its top; having both was redundant.
+- **Stanley Cup Odds: dropped the `YOU: N` pill** from rostered-team cells. Ownership info is redundant on the NHL-centric Insights surface.
+- **Games page: "Show Game Details" → "Show Rostered Skaters"**. The toggle reveals fantasy-team skaters active in the NHL game; old label implied game-level info.
+
 ## v1.9.0 — 2026-04-18
 
 ### Refactored — prediction engine isolated in `domain/prediction/`

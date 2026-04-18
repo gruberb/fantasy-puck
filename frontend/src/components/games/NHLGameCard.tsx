@@ -131,8 +131,8 @@ function getSeriesRecord(game: Game, isAwayTeam: boolean): string | null {
 const NHLGameCard = ({
   game,
   getTeamPrimaryColor,
-  expandLabel = "Show Game Details",
-  collapseLabel = "Hide Game Details",
+  expandLabel = "Show Rostered Skaters",
+  collapseLabel = "Hide Rostered Skaters",
   isExpanded = false,
   onToggleExpand,
   children,

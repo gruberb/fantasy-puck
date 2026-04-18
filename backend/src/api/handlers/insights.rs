@@ -29,14 +29,22 @@ pub async fn generate_and_cache_insights(
     let today = hockey_today();
     let cache_key = format!("insights:{}:{}:{}:{}", league_id, season(), game_type(), today);
 
-    // Check cache
+    // Check cache. Self-heal: if the cached narrative was built against
+    // an empty schedule (e.g. the 10am UTC prewarm ran before NHL
+    // published today's games), throw it out and regenerate. Otherwise
+    // the "No games on the slate today" copy sticks all day even after
+    // the schedule appears. Safe to skip on genuine off-days since those
+    // just regenerate against the empty schedule once per visit — cheap
+    // and correct.
     if let Some(cached) = state
         .db
         .cache()
         .get_cached_response::<InsightsResponse>(&cache_key)
         .await?
     {
-        return Ok(cached);
+        if !cached.signals.todays_games.is_empty() {
+            return Ok(cached);
+        }
     }
 
     // 1. Compute signals
@@ -51,12 +59,19 @@ pub async fn generate_and_cache_insights(
         signals,
     };
 
-    // Cache
-    let _ = state
-        .db
-        .cache()
-        .store_response(&cache_key, &today, &response)
-        .await;
+    // Cache — but only if the response has real content. An empty
+    // schedule could mean "off-day" or "NHL hasn't published yet"; we
+    // can't tell, so don't commit a narrative that would mislead.
+    // Off-days end up regenerating on every visit (cheap — the
+    // NhlClient caches the upstream schedule response anyway), which
+    // is the correct trade.
+    if !response.signals.todays_games.is_empty() {
+        let _ = state
+            .db
+            .cache()
+            .store_response(&cache_key, &today, &response)
+            .await;
+    }
 
     Ok(response)
 }

@@ -142,8 +142,30 @@ impl BracketState {
 ///
 /// Only the *relative* value across teams matters; the engine feeds the gap
 /// through a logistic, so absolute scale is absorbed by [`RaceSimInput::k_factor`].
+/// A team's strength rating, with an optional team-specific home-ice
+/// advantage in the same units as `base` (Elo on the playoff path,
+/// standings-points on the pre-playoff path).
+///
+/// `base` is what feeds the per-game logistic directly. `home_bonus`
+/// is added to `base` when the team is hosting a given game and
+/// subtracted from `base` for the visitor. Pre-playoff ratings pass
+/// `home_bonus: 0.0` — the standings-points scale doesn't admit a
+/// principled per-team home-ice offset without its own calibration.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct TeamRating(pub f32);
+pub struct TeamRating {
+    pub base: f32,
+    pub home_bonus: f32,
+}
+
+impl TeamRating {
+    pub fn new(base: f32) -> Self {
+        Self { base, home_bonus: 0.0 }
+    }
+
+    pub fn with_home_bonus(base: f32, home_bonus: f32) -> Self {
+        Self { base, home_bonus }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SimPlayer {
@@ -401,14 +423,21 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
                     } => {
                         let top_rating = rating_for(&input.ratings, top_team);
                         let bot_rating = rating_for(&input.ratings, bottom_team);
-                        let gap = k * (top_rating - bot_rating);
+                        let gap = k * (top_rating.base - bot_rating.base);
                         // Carousel convention: top_seed is the higher seed
-                        // and therefore holds home-ice advantage.
+                        // and therefore holds home-ice advantage. Prefer
+                        // the team's own home-ice bonus (derived from RS
+                        // home/road split) over the league-wide default.
+                        let ice_bonus = if top_rating.home_bonus > 0.0 {
+                            k * top_rating.home_bonus
+                        } else {
+                            input.home_ice_bonus
+                        };
                         let outcome = simulate_series(
                             *top_wins,
                             *bottom_wins,
                             gap,
-                            input.home_ice_bonus,
+                            ice_bonus,
                             true,
                             rng,
                         );
@@ -441,22 +470,20 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
                         };
                         let top_rating = rating_for(&input.ratings, &top);
                         let bot_rating = rating_for(&input.ratings, &bot);
-                        let gap = k * (top_rating - bot_rating);
+                        let gap = k * (top_rating.base - bot_rating.base);
                         // Home-ice in Future slots: whichever winner has
-                        // the higher NHL regular-season rating. In the
-                        // NHL this is decided by RS standings points; our
-                        // rating map correlates closely enough for this
-                        // purpose. When ratings tie, top_team (by feeder
-                        // order) gets the nod.
-                        let top_has_home = top_rating >= bot_rating;
-                        let outcome = simulate_series(
-                            0,
-                            0,
-                            gap,
-                            input.home_ice_bonus,
-                            top_has_home,
-                            rng,
-                        );
+                        // the higher NHL regular-season rating hosts. In
+                        // the NHL this is decided by RS standings points;
+                        // our rating map correlates closely enough for
+                        // this purpose.
+                        let top_has_home = top_rating.base >= bot_rating.base;
+                        let home_team_rating = if top_has_home { top_rating } else { bot_rating };
+                        let ice_bonus = if home_team_rating.home_bonus > 0.0 {
+                            k * home_team_rating.home_bonus
+                        } else {
+                            input.home_ice_bonus
+                        };
+                        let outcome = simulate_series(0, 0, gap, ice_bonus, top_has_home, rng);
                         let games = outcome.total_games();
                         let winner = if outcome.top_wins >= 4 {
                             top.clone()
@@ -769,8 +796,8 @@ fn already_played_by_team(bracket: &BracketState) -> HashMap<String, u32> {
     out
 }
 
-fn rating_for(ratings: &HashMap<String, TeamRating>, team: &str) -> f32 {
-    ratings.get(team).copied().unwrap_or(TeamRating(0.0)).0
+fn rating_for(ratings: &HashMap<String, TeamRating>, team: &str) -> TeamRating {
+    ratings.get(team).copied().unwrap_or_default()
 }
 
 fn add_games(map: &mut HashMap<String, u32>, team: &str, games: u32) {
@@ -999,8 +1026,8 @@ mod tests {
     fn stronger_team_wins_more_often() {
         let mut input = baseline_input();
         // Make BOS dominant, MTL average; the other teams balance out.
-        input.ratings.insert("BOS".into(), TeamRating(80.0));
-        input.ratings.insert("BUF".into(), TeamRating(40.0));
+        input.ratings.insert("BOS".into(), TeamRating::new(80.0));
+        input.ratings.insert("BUF".into(), TeamRating::new(40.0));
         input.fantasy_teams = vec![
             SimFantasyTeam {
                 team_id: 1,
@@ -1183,7 +1210,7 @@ mod tests {
         // ~1-2pp signal that would need many more trials to resolve.
         let ratings: HashMap<String, TeamRating> = [("BOS", 1500.0), ("BUF", 1500.0)]
             .into_iter()
-            .map(|(a, r)| (a.into(), TeamRating(r)))
+            .map(|(a, r)| (a.into(), TeamRating::new(r)))
             .collect();
 
         let mut neutral = RaceSimInput {
@@ -1387,8 +1414,8 @@ mod tests {
         // Set BOS up as a heavyweight; the rating gap should show up in the
         // Cup-win probability, not just the head-to-head.
         let mut input = baseline_input();
-        input.ratings.insert("BOS".into(), TeamRating(120.0));
-        input.ratings.insert("BUF".into(), TeamRating(60.0));
+        input.ratings.insert("BOS".into(), TeamRating::new(120.0));
+        input.ratings.insert("BUF".into(), TeamRating::new(60.0));
 
         let out = simulate_with_seed(&input, 3000, 21);
         let bos = out
