@@ -74,7 +74,12 @@ impl Default for CalibrationKnobs {
     fn default() -> Self {
         Self {
             points_scale: playoff_elo::POINTS_SCALE,
-            shrinkage: 1.0,
+            // Track the production `seed_from_standings` wrapper's
+            // shrinkage so `/api/admin/calibrate` scores today's live
+            // model. When the sweep picks a new shrinkage the update
+            // here and in `playoff_elo::PRODUCTION_SHRINKAGE` move
+            // together.
+            shrinkage: playoff_elo::PRODUCTION_SHRINKAGE,
             k_factor: ELO_K_FACTOR,
             home_ice_elo: HOME_ICE_ELO,
             trials: DEFAULT_TRIALS,
