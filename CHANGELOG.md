@@ -4,6 +4,13 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.8.1 — 2026-04-18
+
+### Fixed
+
+- **Auto-apply migrations on startup.** v1.8.0 shipped three new tables (`playoff_skater_game_stats`, `historical_playoff_skater_totals`, `playoff_game_results`) but Fly deploys don't run Supabase migrations. The server booted against a DB missing those tables and the race-odds / backfill paths errored with `relation does not exist`. Now `main.rs` runs `sqlx::migrate!("./supabase/migrations")` at boot, embedding the `.sql` files into the binary at compile time and tracking applied versions in `_sqlx_migrations`. Every one of the existing migrations uses `CREATE ... IF NOT EXISTS` / `DO $$` guards, so the coexisting Supabase-CLI tracker and this sqlx tracker don't fight — sqlx re-"applies" prior migrations as no-ops on first boot, then becomes authoritative going forward.
+- **Tonight player rows: overlapping team label.** v1.8.0 used `getNHLTeamShortName(p.nhlTeam)` for the per-player team tag inside Tonight game cards, which returned long names ("HURRICANES") that overran the 2rem column and stacked behind the player name. Now uses `p.nhlTeam` directly (the 3-letter abbrev), widened the column to 2.25rem, and added `min-w-0` on the name anchor so the truncate works.
+
 ## v1.8.0 — 2026-04-18
 
 Race-odds rework: the Monte Carlo engine was sound but the inputs it ran on were blunt. This release restructures the sim to be correct end-to-end across the bracket, switches from frozen-RS team strength to a game-log-driven playoff Elo, replaces the crude `rs_points/82` PPG with a Bayesian blend that leans on a real playoff history, and widens the per-player tails with a Negative-Binomial draw.

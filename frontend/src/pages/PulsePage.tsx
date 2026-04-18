@@ -326,16 +326,16 @@ function GameTonightCard({ game }: { game: MyGameTonight }) {
         {game.myPlayers.map((p) => (
           <div
             key={p.nhlId}
-            className="flex items-center justify-between text-xs gap-1"
+            className="flex items-center text-xs gap-2"
           >
-            <span className="text-[10px] font-bold uppercase text-gray-500 shrink-0 w-8">
-              {getNHLTeamShortName(p.nhlTeam)}
+            <span className="text-[10px] font-bold uppercase text-gray-500 shrink-0 w-9 tabular-nums">
+              {p.nhlTeam}
             </span>
             <a
               href={nhlPlayerProfileUrl(p.nhlId)}
               target="_blank"
               rel="noopener noreferrer"
-              className="truncate flex-1 hover:text-[#2563EB] hover:underline"
+              className="truncate flex-1 hover:text-[#2563EB] hover:underline min-w-0"
             >
               {p.name}
             </a>

@@ -70,6 +70,22 @@ async fn main() -> anyhow::Result<()> {
     nhl_client.start_cache_cleanup(std::time::Duration::from_secs(300));
     let db = FantasyDb::new(&config.database_url).await?;
 
+    // Apply any pending database migrations on every boot. `sqlx::migrate!`
+    // embeds the `.sql` files under supabase/migrations into the binary at
+    // compile time and tracks what's been run via `_sqlx_migrations`.
+    //
+    // The Supabase CLI has its own migration tracker
+    // (`supabase_migrations.schema_migrations`), but the two coexist fine
+    // because they use disjoint tracking tables. On first boot after this
+    // change, sqlx will re-"apply" every migration — every one of ours
+    // uses `CREATE ... IF NOT EXISTS` / `DO $$` guards, so the operations
+    // against an already-migrated prod DB are no-ops.
+    sqlx::migrate!("./supabase/migrations")
+        .run(db.pool())
+        .await
+        .map_err(|e| anyhow::anyhow!("database migration failed: {}", e))?;
+    info!("Database migrations up to date");
+
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
     // Initialize the rankings scheduler
