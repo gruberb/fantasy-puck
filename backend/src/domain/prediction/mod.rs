@@ -6,6 +6,7 @@
 //! that need DB-backed wrappers go through `infra::prediction`.
 
 pub mod backtest;
+pub mod goalie_rating;
 pub mod playoff_elo;
 pub mod player_projection;
 pub mod race_sim;

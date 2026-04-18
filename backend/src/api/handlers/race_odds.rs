@@ -246,6 +246,7 @@ async fn build_league_input(
     let is_playoffs = game_type_val == 3;
     let (ratings, k_factor, home_ice_bonus) = resolve_ratings(
         &state.db,
+        &state.nhl_client,
         season_val,
         is_playoffs,
         standings_json.as_ref(),
@@ -293,6 +294,7 @@ async fn build_league_input(
 /// principled home-ice offset without its own calibration).
 async fn resolve_ratings(
     db: &crate::db::FantasyDb,
+    nhl: &crate::NhlClient,
     season_val: u32,
     is_playoffs: bool,
     standings_json: Option<&serde_json::Value>,
@@ -307,13 +309,25 @@ async fn resolve_ratings(
                     // this per-team value when non-zero, falling back
                     // to the league-constant bonus below.
                     let home_bonus_map = crate::domain::prediction::playoff_elo::home_bonus_from_standings(standings);
-                    let map: HashMap<String, TeamRating> = elo
+                    // Goalie component — each team's starter SV% from
+                    // the *regular season* leaderboard is the pre-
+                    // playoff signal. Failures fall back to a zero
+                    // bonus; the simulator already tolerates missing
+                    // entries in the ratings map.
+                    let goalie_bonuses = fetch_goalie_bonuses(nhl, season_val).await;
+                    let mut map: HashMap<String, TeamRating> = elo
                         .into_iter()
                         .map(|(k, base)| {
                             let home_bonus = home_bonus_map.get(&k).copied().unwrap_or(0.0);
                             (k, TeamRating::with_home_bonus(base, home_bonus))
                         })
                         .collect();
+                    for (abbrev, rating) in map.iter_mut() {
+                        rating.goalie_bonus = goalie_bonuses
+                            .get(abbrev.as_str())
+                            .copied()
+                            .unwrap_or(0.0);
+                    }
                     let fallback_ice_bonus = ELO_K_FACTOR * race_sim::HOME_ICE_ELO;
                     return (map, ELO_K_FACTOR, fallback_ice_bonus);
                 }
@@ -329,6 +343,49 @@ async fn resolve_ratings(
         }
     }
     (ratings_from_standings(standings_json), DEFAULT_K_FACTOR, 0.0)
+}
+
+/// Fetch the regular-season goalie leaderboard for `season_val` and
+/// compute each team's goalie-bonus Elo via
+/// `goalie_rating::compute_bonuses`. Returns an empty map on any error
+/// (logged), so callers can unconditionally merge the result without
+/// blocking on goalie data being available.
+async fn fetch_goalie_bonuses(
+    nhl: &crate::NhlClient,
+    season_val: u32,
+) -> HashMap<String, f32> {
+    use crate::domain::prediction::goalie_rating::{self, GoalieEntry};
+    // Regular-season SV% is the pre-playoff signal. Playoff SV% is
+    // itself part of what we're predicting — circular to use it.
+    let leaders = match nhl.get_goalie_stats(&season_val, 2).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(error = %e, season = season_val, "goalie-stats fetch failed");
+            return HashMap::new();
+        }
+    };
+
+    // Build a lookup from player_id → save_pct so we can zip it onto
+    // the wins leaderboard. Callers use `wins` as the "primary
+    // starter" signal; `save_pctg` is the quality signal.
+    let sv_lookup: HashMap<i64, f32> = leaders
+        .save_pctg
+        .iter()
+        .map(|p| (p.id as i64, p.value as f32))
+        .collect();
+
+    let entries: Vec<GoalieEntry> = leaders
+        .wins
+        .iter()
+        .map(|p| GoalieEntry {
+            player_id: p.id as i64,
+            team_abbrev: p.team_abbrev.clone(),
+            wins: p.value as f32,
+            save_pct: sv_lookup.get(&(p.id as i64)).copied(),
+        })
+        .collect();
+
+    goalie_rating::compute_bonuses(&entries)
 }
 
 /// Build SimFantasyTeams using the Bayesian `player_projection` path.
@@ -424,8 +481,14 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
     let games_played_so_far = games_played_from_carousel(carousel.as_ref());
 
     let is_playoffs = game_type_val == 3;
-    let (ratings, k_factor, home_ice_bonus) =
-        resolve_ratings(&state.db, season_val, is_playoffs, standings_json.as_ref()).await;
+    let (ratings, k_factor, home_ice_bonus) = resolve_ratings(
+        &state.db,
+        &state.nhl_client,
+        season_val,
+        is_playoffs,
+        standings_json.as_ref(),
+    )
+    .await;
 
     // Build a flat Fantasy Champion pool: top 40 regular-season skaters by
     // points. Treat each as its own one-player "team" so the simulator's

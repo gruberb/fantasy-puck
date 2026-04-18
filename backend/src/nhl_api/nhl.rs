@@ -9,8 +9,8 @@ use tracing::{info, warn};
 
 use crate::error::{Error, Result};
 use crate::models::nhl::{
-    GameBoxscore, GameData, GameState, Player, PlayerGameLog, PlayoffCarousel, StatsLeaders,
-    TodaySchedule,
+    GameBoxscore, GameData, GameState, GoalieStatsLeaders, Player, PlayerGameLog, PlayoffCarousel,
+    StatsLeaders, TodaySchedule,
 };
 use crate::nhl_api::nhl_constants as endpoints;
 use crate::utils::nhl::calculate_totals_from_game_log;
@@ -198,6 +198,18 @@ impl NhlClient {
     /// Fetch skater stats leaders for a specific season and game type
     pub async fn get_skater_stats(&self, season: &u32, game_type: u8) -> Result<StatsLeaders> {
         let url = endpoints::stats::skater_stats_leaders(season, game_type);
+        self.make_request_cached(&url, ttl::SKATER_STATS).await
+    }
+
+    /// Fetch goalie stats leaders for a specific season and game type.
+    /// Used by the race-odds path to derive a per-team goalie bonus for
+    /// the Monte Carlo — see `domain::prediction::goalie_rating`.
+    pub async fn get_goalie_stats(
+        &self,
+        season: &u32,
+        game_type: u8,
+    ) -> Result<GoalieStatsLeaders> {
+        let url = endpoints::stats::goalie_stats_leaders(season, game_type);
         self.make_request_cached(&url, ttl::SKATER_STATS).await
     }
 

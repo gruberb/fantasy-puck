@@ -153,17 +153,44 @@ impl BracketState {
 /// principled per-team home-ice offset without its own calibration.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TeamRating {
+    /// Standings / Elo component. Dominant term in the pre-sigmoid
+    /// gap; shrinks by `round_depth_shrinkage` for `Future` slots.
     pub base: f32,
+    /// Absolute per-team home-ice bonus in Elo units (see
+    /// `playoff_elo::home_bonus_from_standings`). Applied only when
+    /// the team hosts a given game in the 2-2-1-1-1 schedule.
     pub home_bonus: f32,
+    /// Goaltending component in Elo units. Derived from the team's
+    /// primary starter's SV% relative to the league average via
+    /// `domain::prediction::goalie_rating`. Symmetric around 0 (an
+    /// average goalie contributes nothing). Shrunk by the same
+    /// `round_depth_shrinkage` as `base` in `Future` slots — goalies
+    /// rotate and get hurt deeper into the bracket.
+    pub goalie_bonus: f32,
 }
 
 impl TeamRating {
     pub fn new(base: f32) -> Self {
-        Self { base, home_bonus: 0.0 }
+        Self {
+            base,
+            home_bonus: 0.0,
+            goalie_bonus: 0.0,
+        }
     }
 
     pub fn with_home_bonus(base: f32, home_bonus: f32) -> Self {
-        Self { base, home_bonus }
+        Self {
+            base,
+            home_bonus,
+            goalie_bonus: 0.0,
+        }
+    }
+
+    /// Attach a goalie bonus to an existing rating. Chainable:
+    /// `TeamRating::with_home_bonus(base, hb).with_goalie_bonus(gb)`.
+    pub fn with_goalie_bonus(mut self, goalie_bonus: f32) -> Self {
+        self.goalie_bonus = goalie_bonus;
+        self
     }
 }
 
@@ -423,7 +450,12 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
                     } => {
                         let top_rating = rating_for(&input.ratings, top_team);
                         let bot_rating = rating_for(&input.ratings, bottom_team);
-                        let gap = k * (top_rating.base - bot_rating.base);
+                        // Both Elo-scale deltas feed the gap at full
+                        // weight — the series is live, the starters
+                        // are known today, no mean reversion needed.
+                        let gap = k
+                            * ((top_rating.base - bot_rating.base)
+                                + (top_rating.goalie_bonus - bot_rating.goalie_bonus));
                         // Carousel convention: top_seed is the higher seed
                         // and therefore holds home-ice advantage. Prefer
                         // the team's own home-ice bonus (derived from RS
@@ -470,7 +502,25 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
                         };
                         let top_rating = rating_for(&input.ratings, &top);
                         let bot_rating = rating_for(&input.ratings, &bot);
-                        let gap = k * (top_rating.base - bot_rating.base);
+                        // Mean-reversion: compound uncertainty in longer
+                        // paths by shrinking the rating gap toward zero as
+                        // we predict further into the bracket. A team that
+                        // looks 200 Elo stronger now is not likely to still
+                        // *appear* 200 Elo stronger in the Cup Final — the
+                        // field has been filtered to comparable survivors.
+                        // Only Future slots get shrunk; InProgress and
+                        // Completed pass through unchanged since those
+                        // teams are known.
+                        let shrink = round_depth_shrinkage(r);
+                        // Goalie contribution shrinks at the same
+                        // rate as base — the assumed "starter" may be
+                        // rested, injured, or replaced by the deep
+                        // rounds, so compounded uncertainty about
+                        // rosters applies equally to goaltending.
+                        let gap = k
+                            * ((top_rating.base - bot_rating.base)
+                                + (top_rating.goalie_bonus - bot_rating.goalie_bonus))
+                            * shrink;
                         // Home-ice in Future slots: whichever winner has
                         // the higher NHL regular-season rating hosts. In
                         // the NHL this is decided by RS standings points;
@@ -712,6 +762,36 @@ impl SeriesOutcome {
 /// NHL 2-2-1-1-1 home-ice schedule. `true` means the home-ice team
 /// hosts game `i` (0-indexed). Games 1, 2, 5, 7 are home (4 of 7).
 const HOME_ICE_SCHEDULE: [bool; 7] = [true, true, false, false, true, false, true];
+
+/// Mean-reversion shrinkage factor applied to the `rating_top.base -
+/// rating_bot.base` gap when resolving a `Future` bracket slot.
+///
+/// Round 0 (current round): 1.0 — full rating gap, the matchup is
+/// today and we have the most information about the teams.
+/// Round 1+: decays the rating gap so distant predictions don't
+/// compound confidence. A team that looks +200 Elo in round 0 still
+/// looks ~+110 Elo in the conference finals after shrinkage —
+/// reflecting the fact that playoff survivors have been filtered to
+/// comparable strength by the time you reach the later rounds.
+///
+/// Only Future slots are shrunk. `InProgress` and `Completed` states
+/// have known participants with no compounded uncertainty; they pass
+/// through unchanged.
+///
+/// The schedule is hand-picked rather than derived from an exponential
+/// for readability. `0.85 / 0.70 / 0.55` gives a three-step decay that
+/// matches the intuition "every round doubles the uncertainty". Use
+/// the calibration sweep to retune if backtest Brier wants a steeper
+/// or flatter curve.
+pub fn round_depth_shrinkage(round_idx: usize) -> f32 {
+    match round_idx {
+        0 => 1.00,
+        1 => 0.85,
+        2 => 0.70,
+        3 => 0.55,
+        _ => 0.50,
+    }
+}
 
 /// Play out a best-of-7 game by game from the given state.
 ///
@@ -1495,6 +1575,19 @@ mod tests {
             nb_var,
             lambda * 1.5
         );
+    }
+
+    #[test]
+    fn round_depth_shrinkage_monotonic_and_bounded() {
+        let s0 = round_depth_shrinkage(0);
+        let s1 = round_depth_shrinkage(1);
+        let s2 = round_depth_shrinkage(2);
+        let s3 = round_depth_shrinkage(3);
+        let s99 = round_depth_shrinkage(99);
+        assert!((s0 - 1.0).abs() < 1e-6, "round 0 must pass through unchanged");
+        assert!(s0 > s1 && s1 > s2 && s2 > s3, "shrinkage must be monotonic");
+        assert!(s3 >= 0.5 && s3 <= 0.7, "Cup Final shrinkage should land in [0.5, 0.7]");
+        assert!(s99 > 0.0, "out-of-bounds rounds still return positive shrinkage");
     }
 
     #[test]

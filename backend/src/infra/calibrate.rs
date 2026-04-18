@@ -29,6 +29,7 @@ use tracing::debug;
 use crate::db::FantasyDb;
 use crate::domain::prediction::{
     backtest::{self, ResultRow},
+    goalie_rating::{self, GoalieEntry},
     playoff_elo::{self},
     race_sim::{
         self, simulate_with_seed, BracketState, RaceSimInput, SeriesState, SimFantasyTeam,
@@ -178,7 +179,13 @@ pub async fn calibrate_season_with_knobs(
     //    today's live standings, which carries the current-roster
     //    bias but beats running with no ratings.
     let standings = fetch_historical_standings(db, nhl, season).await;
-    let (ratings, k_factor, home_ice_bonus) = build_ratings(standings.as_ref(), knobs);
+    // Goalie bonuses are the v1.15+ component. Fetch the historical
+    // season's regular-season goalie leaderboard; on failure the
+    // calibration falls back to zero bonuses (and underestimates the
+    // production model accordingly).
+    let goalie_bonuses = fetch_historical_goalie_bonuses(nhl, season).await;
+    let (ratings, k_factor, home_ice_bonus) =
+        build_ratings(standings.as_ref(), &goalie_bonuses, knobs);
 
     // 5. Run sim. No fantasy teams needed — we're only scoring NHL team
     //    advancement, so we hand the engine a single placeholder team
@@ -357,6 +364,7 @@ fn build_day1_bracket(realized: &BracketState) -> BracketState {
 
 fn build_ratings(
     standings: Option<&serde_json::Value>,
+    goalie_bonuses: &HashMap<String, f32>,
     knobs: &CalibrationKnobs,
 ) -> (HashMap<String, TeamRating>, f32, f32) {
     let fallback_ice_bonus = knobs.k_factor * knobs.home_ice_elo;
@@ -370,10 +378,51 @@ fn build_ratings(
         .into_iter()
         .map(|(abbrev, base)| {
             let home_bonus = home_bonus_map.get(&abbrev).copied().unwrap_or(0.0);
-            (abbrev, TeamRating::with_home_bonus(base, home_bonus))
+            let goalie_bonus = goalie_bonuses.get(&abbrev).copied().unwrap_or(0.0);
+            let rating = TeamRating::with_home_bonus(base, home_bonus)
+                .with_goalie_bonus(goalie_bonus);
+            (abbrev, rating)
         })
         .collect();
     (map, knobs.k_factor, fallback_ice_bonus)
+}
+
+/// Fetch the regular-season goalie leaderboard for the given
+/// historical season and convert to per-team Elo bonuses via
+/// `goalie_rating::compute_bonuses`. Returns an empty map on any
+/// error (logged) — calibration still runs without goalie data, it
+/// just underestimates the v1.15+ production model.
+async fn fetch_historical_goalie_bonuses(
+    nhl: &crate::NhlClient,
+    season: u32,
+) -> HashMap<String, f32> {
+    let leaders = match nhl.get_goalie_stats(&season, 2).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                season,
+                "calibrate: goalie-stats fetch failed; skipping goalie component"
+            );
+            return HashMap::new();
+        }
+    };
+    let sv_lookup: HashMap<i64, f32> = leaders
+        .save_pctg
+        .iter()
+        .map(|p| (p.id as i64, p.value as f32))
+        .collect();
+    let entries: Vec<GoalieEntry> = leaders
+        .wins
+        .iter()
+        .map(|p| GoalieEntry {
+            player_id: p.id as i64,
+            team_abbrev: p.team_abbrev.clone(),
+            wins: p.value as f32,
+            save_pct: sv_lookup.get(&(p.id as i64)).copied(),
+        })
+        .collect();
+    goalie_rating::compute_bonuses(&entries)
 }
 
 /// Fetch the NHL standings snapshot for the day before `season`'s

@@ -2,7 +2,7 @@
 
 Technical reference for the Fantasy Puck race-odds / playoff-odds Monte Carlo system. Covers the full pipeline from NHL API ingest through bracket simulation to the `GET /api/race-odds` response, plus the admin endpoints, data model, tunable constants, calibration state, and known gaps.
 
-Current versions at the time of writing: **backend 1.14.0, frontend 1.10.0** (2026-04-18).
+Current versions at the time of writing: **backend 1.15.0, frontend 1.10.0** (2026-04-18).
 
 ---
 
@@ -220,8 +220,8 @@ One trial of `run` (line 341):
 1. Clear scratch (`remaining_games`, `team_totals`).
 2. For each round `r` in order, for each slot `i`:
    - If `Completed`: emit the known winner, add 0 games.
-   - If `InProgress`: call `simulate_series(top_wins, bottom_wins, gap, ice_bonus, top_has_home_ice=true, rng)`. `remaining_games` counts *only* games played from now on (`outcome.total_games() - (top_wins + bottom_wins)`), so already-played games are not double-counted.
-   - If `Future`: look up the two feeder winners in `winners[r-1]`. Home-ice goes to whichever has the higher `base` rating (proxy for the eventual RS-standings-based home-ice assignment). If a feeder slot is missing (structurally incomplete bracket), the slot degrades gracefully — the winner is the empty string and downstream rounds skip it.
+   - If `InProgress`: call `simulate_series(top_wins, bottom_wins, gap, ice_bonus, top_has_home_ice=true, rng)` where `gap = k · ((top.base − bot.base) + (top.goalie_bonus − bot.goalie_bonus))`. `remaining_games` counts *only* games played from now on (`outcome.total_games() - (top_wins + bottom_wins)`), so already-played games are not double-counted.
+   - If `Future`: look up the two feeder winners in `winners[r-1]`. Home-ice goes to whichever has the higher `base` rating (proxy for the eventual RS-standings-based home-ice assignment). Since v1.15, the base-plus-goalie gap is multiplied by `round_depth_shrinkage(r)` — 1.00 at round 0, 0.85 at semis, 0.70 at conference finals, 0.55 at Cup Final — so compounded uncertainty about distant matchups doesn't compound fake confidence. If a feeder slot is missing (structurally incomplete bracket), the slot degrades gracefully — the winner is the empty string and downstream rounds skip it.
 3. Record `nhl_round_advance[r][team_idx] += 1` for each slot winner. Winning slot `(r, i)` means the team advanced out of round `r`, i.e. reached round `r+1` (or the Cup when `r == 3`).
 4. After the walk, for each fantasy player: draw `sim_pts = sample_negbin(ppg * remaining_games, NB_DISPERSION, rng)` when their team has remaining games, else 0. Add to `playoff_points_so_far`. Accumulate into each fantasy team's total.
 5. Sort fantasy teams by total; update `team_wins` and `team_top3` with **fractional tie-splitting** (see below).
@@ -358,6 +358,22 @@ Constants (`player_projection.rs`):
 - `TOI_RATIO_DERATE_FLOOR = 0.70`, `TOI_RATIO_BOOST_CAP = 1.10` — asymmetric clamp, demotions matter more than promotions.
 
 `rs_points / 82` is still used because the `StatsLeaders` leaderboard the crate consumes does not carry GP per player; this slightly under-projects players who missed RS games. See §10.
+
+### 5.3b Goalie strength — `goalie_rating.rs` (v1.15+)
+
+Per-team Elo delta derived from the regular-season starter's SV%, sitting alongside `base` and `home_bonus` on `TeamRating`.
+
+- **Identify starter**: for each team, pick the goalie with the most wins from the RS leaderboard (minimum `MIN_WINS_FOR_STARTER = 3`). Tandems (secondary starter within 3 wins of the primary) average both bonuses.
+- **Map SV% to Elo**: `bonus = ((sv_pct - LEAGUE_AVG_SVP) × GOALIE_BONUS_SCALE).clamp(±GOALIE_BONUS_CLAMP)`.
+- **Apply in sim**: `simulate_series` gets a gap that already includes `k · (top.goalie_bonus − bot.goalie_bonus)`. For `Future` slots the contribution is shrunk by `round_depth_shrinkage` at the same rate as `base` — the assumed starter may be rested, injured, or replaced by the deep rounds.
+
+Constants (`goalie_rating.rs`):
+- `LEAGUE_AVG_SVP = 0.905`
+- `GOALIE_BONUS_SCALE = 800.0` (0.020 SV% delta → 16 Elo)
+- `GOALIE_BONUS_CLAMP = 30.0` (caps out at roughly ±.9425 SV%)
+- `MIN_WINS_FOR_STARTER = 3.0`
+
+Data source: `NhlClient::get_goalie_stats(season, 2)` → `/v1/goalie-stats-leaders/{season}/2`. Hardcoded to regular-season game-type because playoff SV% is a small-sample leak of what the model is predicting.
 
 ### 5.4 k_factor
 

@@ -161,6 +161,16 @@ pub mod stats {
             NHL_API_BASE_URL, season, game_type, NHL_FETCH_LIMIT
         )
     }
+
+    /// Get goalie stats leaders for a season and game type.
+    /// Same shape as the skater endpoint: leaderboards per category
+    /// (wins, save_pctg, goals_against_average, shutouts, save_pctg_5v5).
+    pub fn goalie_stats_leaders(season: &u32, game_type: u8) -> String {
+        format!(
+            "{}/v1/goalie-stats-leaders/{}/{}?limit={}",
+            NHL_API_BASE_URL, season, game_type, NHL_FETCH_LIMIT
+        )
+    }
 }
 
 pub mod team_names {

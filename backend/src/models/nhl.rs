@@ -32,6 +32,31 @@ pub struct StatsLeaders {
     pub toi: Vec<Player>,
 }
 
+/// Goalie stats categories from NHL API response.
+///
+/// The `/v1/goalie-stats-leaders/{season}/{game_type}` payload mirrors
+/// the skater leaderboard: each category is its own `Vec<Player>` where
+/// `Player.value` carries the metric for that category.
+///
+/// Every field is `#[serde(default)]` so a partial payload (some
+/// categories missing) still deserialises — the NHL endpoint
+/// occasionally drops categories early in a season before enough games
+/// have been played to rank every one.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalieStatsLeaders {
+    #[serde(default)]
+    pub wins: Vec<Player>,
+    #[serde(default)]
+    pub save_pctg: Vec<Player>,
+    #[serde(default)]
+    pub goals_against_average: Vec<Player>,
+    #[serde(default)]
+    pub shutouts: Vec<Player>,
+    #[serde(default)]
+    pub save_pctg_5v5: Vec<Player>,
+}
+
 /// Venue information for games
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]

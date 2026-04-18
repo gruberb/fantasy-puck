@@ -4,6 +4,39 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.15.0 — 2026-04-18
+
+### Added — goalie-strength component on TeamRating
+
+The team-rating model was a single scalar plus a home-ice delta — a .930 starter and a .895 starter produced identical pre-sigmoid gaps when their standings points matched. v1.15 adds `goalie_bonus` as a third component, symmetric around zero.
+
+New pure-domain module `domain::prediction::goalie_rating`:
+- `GoalieEntry { player_id, team_abbrev, wins, save_pct }` — a framework-free projection of the NHL API goalie leaderboard.
+- `compute_bonuses(entries)` picks each team's primary starter (most wins, ≥ 3 wins) and maps `(sv_pct - 0.905) × 800` clamped to `±30` Elo. Tandems (two goalies within 3 wins) average their bonuses.
+- `bonus_for_svp` exposed for unit tests.
+
+`TeamRating` gains `goalie_bonus: f32` with a chainable `with_goalie_bonus` builder. `simulate_series` is unchanged — the caller folds the bonus into the rating gap before passing it in. Goalie contribution applies at full weight for live (`InProgress`) series and shrinks with `round_depth_shrinkage` for `Future` slots on the theory that starters rotate and get hurt deeper into the bracket.
+
+### Added — round-depth mean reversion for Future bracket slots
+
+`race_sim::run` was using the same rating gap for a first-round matchup and a hypothetical Cup Final between two projected winners three rounds out. The gap was uniformly wide, which compounded confidence in the better-seeded team through the bracket.
+
+New `round_depth_shrinkage(round_idx)`:
+- Round 0 (current): 1.00 — unchanged.
+- Round 1 (conference semis): 0.85.
+- Round 2 (conference finals): 0.70.
+- Round 3 (Cup Final): 0.55.
+
+Only applied to `Future` slots. `InProgress` and `Completed` states have known participants and pass through unchanged. Combined effect across the bracket tree: a +200 Elo favourite still looks like a significant favourite in round 1, but their Cup-win probability no longer compounds as if the same 200-Elo gap applies to a hypothetical survivor matchup in round 4.
+
+### Changed — NHL client now fetches goalie leaderboards
+
+`NhlClient::get_goalie_stats(season, game_type)` calls `/v1/goalie-stats-leaders/{season}/{game_type}` (present in `nhl_constants` since v1.7 but previously unused). The race-odds handler and calibration path both pull regular-season (`game_type = 2`) goalie data — playoff SV% is too small a sample and circularly part of what we're predicting.
+
+### Changed — calibration now scores the full v1.15 model
+
+`infra::calibrate::build_ratings` accepts a pre-computed goalie-bonus map; `calibrate_season_with_knobs` fetches the historical season's goalie leaderboard via the same pure-domain module. Grid-search results now reflect production behavior instead of an Elo-only model that's missing ~25% of the strength signal.
+
 ## v1.14.0 — 2026-04-18
 
 ### Changed — player projection now uses shots and TOI, not just points
