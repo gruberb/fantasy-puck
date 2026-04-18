@@ -558,6 +558,21 @@ impl NhlClient {
         self.make_request_cached(&url, ttl::STANDINGS).await
     }
 
+    /// Standings as-of a specific date (YYYY-MM-DD). Used by the
+    /// calibration path to seed Elo from a past season's final RS
+    /// state instead of the current live standings. Note the NHL
+    /// endpoint returns an empty list for dates in the gap between
+    /// the regular season finale and playoff game 1; callers should
+    /// step the date backward a few days if the first attempt is
+    /// empty.
+    pub async fn get_standings_for_date(
+        &self,
+        date: &str,
+    ) -> Result<serde_json::Value> {
+        let url = endpoints::standings::on_date(date);
+        self.make_request_cached(&url, ttl::STANDINGS).await
+    }
+
     /// Get scores/results for a specific date (raw JSON)
     pub async fn get_scores_by_date(&self, date: &str) -> Result<serde_json::Value> {
         let url = endpoints::scores::scores_by_date(date);

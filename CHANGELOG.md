@@ -4,7 +4,15 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
-## v1.12.2 — 2026-04-18
+## v1.12.3 — 2026-04-18
+
+### Fixed — calibration now seeds Elo from historical, not current, standings
+
+Previously `/api/admin/calibrate` computed Elo seeds from `NhlClient::get_standings_raw()` — the *live* standings snapshot. Scoring a past season's bracket with current-roster ratings confounded the Brier numbers: the model's "team strength" signal was based on 2026 rosters even when predicting 2023 outcomes. R1 Brier came in around 0.35 across four past seasons — worse than the 0.25 coinflip baseline — not because the model structure was bad but because its inputs were.
+
+New `NhlClient::get_standings_for_date(date)` hits `/v1/standings/{YYYY-MM-DD}`. New `infra::calibrate::fetch_historical_standings` walks back day-by-day from the season's first playoff game date looking for a non-empty standings response (the NHL endpoint returns an empty array for dates in the gap between the regular-season finale and playoff game 1, so a fixed "day before" isn't enough). Up to 10 tries, then falls back to live standings with a warn log.
+
+Side-effect: the per-team home-ice bonus (derived from `homeWins`/`homeLosses`/`homeOtLosses` via `playoff_elo::home_bonus_from_standings`) is now also season-accurate instead of reflecting the current season's home/road split.
 
 ### Fixed — rebackfill URL used the wrong season format
 

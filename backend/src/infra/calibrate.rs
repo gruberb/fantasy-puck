@@ -112,12 +112,14 @@ pub async fn calibrate_season(
     //    wins zeroed out, and later rounds all Future.
     let day1 = build_day1_bracket(&realized_bracket);
 
-    // 4. Seed Elo + home-ice from the NHL standings endpoint. For
-    //    historical seasons we have to pass the season; the NHL API
-    //    returns current standings so this is a limitation of the MVP.
-    //    A future improvement fetches `/standings/2022-05-02` style
-    //    snapshots but requires plumbing not built yet.
-    let standings = nhl.get_standings_raw().await.ok();
+    // 4. Seed Elo + home-ice from the standings snapshot AS OF the
+    //    day before this season's first playoff game. Falls back to a
+    //    few days earlier if the NHL API returns empty for that date
+    //    (there's a gap between regular-season end and playoff start
+    //    where the endpoint serves nothing). Last-ditch fallback is
+    //    today's live standings, which carries the current-roster
+    //    bias but beats running with no ratings.
+    let standings = fetch_historical_standings(db, nhl, season).await;
     let (ratings, k_factor, home_ice_bonus) = build_ratings(standings.as_ref());
 
     // 5. Run sim. No fantasy teams needed — we're only scoring NHL team
@@ -304,6 +306,61 @@ fn build_ratings(
         .collect();
     let fallback_ice_bonus = ELO_K_FACTOR * HOME_ICE_ELO;
     (map, ELO_K_FACTOR, fallback_ice_bonus)
+}
+
+/// Fetch the NHL standings snapshot for the day before `season`'s
+/// first backfilled playoff game. Retries the call stepping one day
+/// further back each attempt (up to 10 days) because the NHL API
+/// returns an empty `standings` array for dates in the RS-to-playoffs
+/// gap. Returns `None` if every attempt is empty — caller should fall
+/// back to live standings and accept the bias.
+async fn fetch_historical_standings(
+    db: &FantasyDb,
+    nhl: &crate::NhlClient,
+    season: u32,
+) -> Option<serde_json::Value> {
+    // Pull the earliest playoff date for this season. This becomes
+    // our starting "day before" anchor.
+    let earliest: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT TO_CHAR(MIN(game_date), 'YYYY-MM-DD')
+        FROM playoff_game_results
+        WHERE season = $1
+        "#,
+    )
+    .bind(season as i32)
+    .fetch_one(db.pool())
+    .await
+    .ok()?;
+    let earliest = earliest?;
+    let anchor = chrono::NaiveDate::parse_from_str(&earliest, "%Y-%m-%d").ok()?;
+
+    for days_back in 1..=10 {
+        let candidate = anchor - chrono::Duration::days(days_back);
+        let date_str = candidate.format("%Y-%m-%d").to_string();
+        let Ok(json) = nhl.get_standings_for_date(&date_str).await else {
+            continue;
+        };
+        let has_teams = json
+            .get("standings")
+            .and_then(|v| v.as_array())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        if has_teams {
+            tracing::debug!(
+                season,
+                standings_date = %date_str,
+                "calibrate: using historical standings"
+            );
+            return Some(json);
+        }
+    }
+    tracing::warn!(
+        season,
+        "calibrate: could not find non-empty historical standings within 10 days of playoff start; \
+         falling back to live standings"
+    );
+    nhl.get_standings_raw().await.ok()
 }
 
 fn placeholder_team() -> SimFantasyTeam {

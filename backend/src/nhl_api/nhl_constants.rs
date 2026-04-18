@@ -82,6 +82,21 @@ pub mod playoffs {
     }
 }
 
+/// Standings endpoints
+pub mod standings {
+    use super::NHL_API_BASE_URL;
+
+    /// Standings current (live).
+    pub const NOW: &str = "/v1/standings/now";
+
+    /// Standings as of a specific date. Useful for historical
+    /// calibration — passing the final day of a past regular season
+    /// returns that season's final standings.
+    pub fn on_date(date: &str) -> String {
+        format!("{}/v1/standings/{}", NHL_API_BASE_URL, date)
+    }
+}
+
 /// Game related endpoints
 pub mod games {
     use super::NHL_API_BASE_URL;
