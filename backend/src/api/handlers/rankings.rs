@@ -58,6 +58,26 @@ pub async fn get_daily_rankings(
     // Validate date format (has to be YYYY-MM-DD)
     let date = parse_date_param(params.date)?;
 
+    // Cache the response per (league, date, game_type). Without this,
+    // every page hit fans out N boxscore fetches (one per game that
+    // day) even for fully completed days — which both burns NHL rate
+    // limit and returns 500 when any one boxscore 429s. Short TTL so
+    // live-game updates still reach the page within a couple minutes.
+    let cache_key = format!(
+        "daily_rankings:{}:{}:{}",
+        league_id,
+        game_type(),
+        date
+    );
+    if let Some(cached) = state
+        .db
+        .cache()
+        .get_cached_response::<DailyRankingsResponse>(&cache_key)
+        .await?
+    {
+        return Ok(json_success(cached));
+    }
+
     // Fetch the games for the specified date
     let games_response = state.nhl_client.get_schedule_by_date(&date).await?;
 
@@ -140,10 +160,22 @@ pub async fn get_daily_rankings(
         .map(|r| r.into_response())
         .collect();
 
-    Ok(json_success(DailyRankingsResponse {
-        date,
+    let response = DailyRankingsResponse {
+        date: date.clone(),
         rankings: response_rankings,
-    }))
+    };
+
+    // Cache the computed response. The source-of-truth `daily_rankings`
+    // table is only updated twice per day by the scheduler (9am/3pm
+    // UTC), so serving a cached copy for the rest of the day matches
+    // the actual data cadence and stops N boxscore fetches per request.
+    let _ = state
+        .db
+        .cache()
+        .store_response(&cache_key, &date, &response)
+        .await;
+
+    Ok(json_success(response))
 }
 
 /// Compute playoff rankings — combines rankings, team bets, player rosters,

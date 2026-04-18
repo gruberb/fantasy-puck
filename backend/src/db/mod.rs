@@ -266,4 +266,45 @@ impl FantasyDb {
             .get_daily_ranking_stats(league_id)
             .await
     }
+
+    /// Read the cached playoff roster pool (16-team blob) if present.
+    /// Returns the JSONB payload; callers deserialize into their own shape.
+    pub async fn get_playoff_roster_cache(
+        &self,
+        season: i32,
+        game_type: i16,
+    ) -> Result<Option<serde_json::Value>> {
+        let row: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT rosters FROM playoff_roster_cache WHERE season = $1 AND game_type = $2",
+        )
+        .bind(season)
+        .bind(game_type)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Upsert the cached playoff roster pool.
+    pub async fn upsert_playoff_roster_cache(
+        &self,
+        season: i32,
+        game_type: i16,
+        rosters: &serde_json::Value,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO playoff_roster_cache (season, game_type, rosters, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (season, game_type) DO UPDATE
+              SET rosters = EXCLUDED.rosters,
+                  updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(season)
+        .bind(game_type)
+        .bind(rosters)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }

@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize services
     let nhl_client = NhlClient::new();
-    nhl_client.start_cache_cleanup(std::time::Duration::from_secs(300));
+    nhl_client.start_cache_cleanup(fantasy_hockey::tuning::nhl_client::CACHE_CLEANUP_INTERVAL);
     let db = FantasyDb::new(&config.database_url).await?;
 
     // Apply any pending database migrations on every boot. `sqlx::migrate!`

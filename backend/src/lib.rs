@@ -15,5 +15,6 @@ pub mod error;
 pub mod infra;
 pub mod models;
 pub mod nhl_api;
+pub mod tuning;
 pub mod utils;
 pub mod ws;

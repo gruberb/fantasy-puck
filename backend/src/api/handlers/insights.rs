@@ -29,13 +29,12 @@ pub async fn generate_and_cache_insights(
     let today = hockey_today();
     let cache_key = format!("insights:{}:{}:{}:{}", league_id, season(), game_type(), today);
 
-    // Check cache. Self-heal: if the cached narrative was built against
-    // an empty schedule (e.g. the 10am UTC prewarm ran before NHL
-    // published today's games), throw it out and regenerate. Otherwise
-    // the "No games on the slate today" copy sticks all day even after
-    // the schedule appears. Safe to skip on genuine off-days since those
-    // just regenerate against the empty schedule once per visit — cheap
-    // and correct.
+    // Check cache. Self-heal only on off-day responses: if the cached
+    // payload has no games (e.g. 10am UTC prewarm ran before NHL
+    // published today's schedule), regenerate. A cached response with
+    // games — even one with partial landing data — is served as-is
+    // for the rest of the hockey-date. Insights is a daily preview;
+    // users don't expect it to change after the page first loads.
     if let Some(cached) = state
         .db
         .cache()
@@ -59,22 +58,14 @@ pub async fn generate_and_cache_insights(
         signals,
     };
 
-    // Cache — but only if the response is complete. Two gates:
-    //   1. Schedule was non-empty (not an off-day or pre-publish gap).
-    //   2. Every game has *some* landing-derived signal. A failed
-    //      landing fetch leaves leaders/goalies all None for that
-    //      game, producing cards with empty sidebars all day; better
-    //      to regenerate on next visit until the NHL API rate window
-    //      reopens and the landings succeed. Cost: extra Claude
-    //      calls during the failure window (rare and short).
-    let all_games_have_landing_data = response.signals.todays_games.iter().all(|g| {
-        g.home_goalie.is_some()
-            || g.away_goalie.is_some()
-            || g.points_leaders.is_some()
-            || g.goals_leaders.is_some()
-            || g.assists_leaders.is_some()
-    });
-    if !response.signals.todays_games.is_empty() && all_games_have_landing_data {
+    // Cache whenever today has games. The previous version also gated
+    // on "every game has some landing signal," which meant one rate-
+    // limited landing fetch killed caching for the whole day and every
+    // visitor regenerated the entire payload (including a Claude call).
+    // A partial sidebar for one card is a far smaller problem than
+    // re-running this for every request. Off-day responses still fall
+    // through uncached so they regenerate once the schedule appears.
+    if !response.signals.todays_games.is_empty() {
         let _ = state
             .db
             .cache()
@@ -499,63 +490,24 @@ async fn compute_todays_games(
             None => (None, false),
         };
 
-        // Fetch rich landing data
-        let mut home_record = String::new();
-        let mut away_record = String::new();
-        let mut venue = String::new();
-        let mut points_leaders = None;
-        let mut goals_leaders = None;
-        let mut assists_leaders = None;
-        let mut home_goalie = None;
-        let mut away_goalie = None;
-
-        let landing_result = state.nhl_client.get_game_landing_raw(game.id).await;
-        if let Err(e) = &landing_result {
-            // Silent failure here previously produced game cards with
-            // no Players-to-Watch / goalie block while other cards on
-            // the same page rendered fully. Most common cause: a
-            // transient NHL API rate-limit on the first prewarm after
-            // a cold boot — all 8 landings fire at once and a few get
-            // 429'd past the retry budget. Log it so the gap is
-            // diagnosable; the `all_games_have_landing_data` guard on
-            // the cache write (below) prevents a partial payload from
-            // being served all day.
-            tracing::warn!(
-                game_id = game.id,
-                home = %home,
-                away = %away,
-                error = %e,
-                "insights: game landing fetch failed; leaders/goalies will be null"
-            );
-        }
-        if let Ok(landing) = landing_result {
-            venue = landing.get("venue").and_then(|v| v.get("default")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-            if let Some(matchup) = landing.get("matchup") {
-                if let Some(leaders) = matchup.get("skaterComparison").and_then(|s| s.get("leaders")).and_then(|l| l.as_array()) {
-                    for leader in leaders {
-                        let cat = leader.get("category").and_then(|c| c.as_str()).unwrap_or("");
-                        let al = extract_player_leader(leader, "awayLeader");
-                        let hl = extract_player_leader(leader, "homeLeader");
-                        if let (Some(a), Some(h)) = (al, hl) {
-                            match cat {
-                                "points" => points_leaders = Some((a, h)),
-                                "goals" => goals_leaders = Some((a, h)),
-                                "assists" => assists_leaders = Some((a, h)),
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-
-                if let Some(gc) = matchup.get("goalieComparison") {
-                    home_goalie = extract_goalie_stats(gc, "homeTeam");
-                    away_goalie = extract_goalie_stats(gc, "awayTeam");
-                    home_record = gc.get("homeTeam").and_then(|t| t.get("teamTotals")).and_then(|t| t.get("record")).and_then(|r| r.as_str()).unwrap_or("").to_string();
-                    away_record = gc.get("awayTeam").and_then(|t| t.get("teamTotals")).and_then(|t| t.get("record")).and_then(|r| r.as_str()).unwrap_or("").to_string();
-                }
-            }
-        }
+        // Fetch rich landing data, cached per-game. Pre-game matchup
+        // (leaders + goalies) only exists in the NHL landing response
+        // while the game is FUT; once puck drops the response shape
+        // swaps to live recap and the matchup block is gone. Capturing
+        // it once — ideally at the 10am UTC prewarm before any game
+        // starts — and never overwriting with an empty pull keeps the
+        // sidebar intact for games that go live later in the day.
+        let landing = get_or_fetch_landing_cached(state, game.id, hockey_today)
+            .await
+            .unwrap_or_else(LandingCached::default);
+        let venue = landing.venue;
+        let home_record = landing.home_record;
+        let away_record = landing.away_record;
+        let points_leaders = landing.points_leaders;
+        let goals_leaders = landing.goals_leaders;
+        let assists_leaders = landing.assists_leaders;
+        let home_goalie = landing.home_goalie;
+        let away_goalie = landing.away_goalie;
 
         // Standings context
         let (home_streak, home_l10) = standings_map
@@ -662,6 +614,138 @@ pub async fn enrich_games_with_ownership(
     }
 }
 
+/// Subset of the NHL game-landing response that Insights actually displays.
+/// Stored in `response_cache` as `insights_landing:{game_id}` with write-once
+/// semantics — see [`get_or_fetch_landing_cached`] — so that a game whose
+/// pre-game matchup was captured earlier in the day keeps its sidebar even
+/// after puck drop, when the live response no longer includes the block.
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
+struct LandingCached {
+    venue: String,
+    home_record: String,
+    away_record: String,
+    points_leaders: Option<(PlayerLeader, PlayerLeader)>,
+    goals_leaders: Option<(PlayerLeader, PlayerLeader)>,
+    assists_leaders: Option<(PlayerLeader, PlayerLeader)>,
+    home_goalie: Option<GoalieStats>,
+    away_goalie: Option<GoalieStats>,
+}
+
+impl LandingCached {
+    fn has_matchup(&self) -> bool {
+        self.points_leaders.is_some()
+            || self.goals_leaders.is_some()
+            || self.assists_leaders.is_some()
+            || self.home_goalie.is_some()
+            || self.away_goalie.is_some()
+    }
+}
+
+fn build_landing_from_raw(landing: &serde_json::Value) -> LandingCached {
+    let venue = landing
+        .get("venue")
+        .and_then(|v| v.get("default"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let mut out = LandingCached {
+        venue,
+        ..LandingCached::default()
+    };
+
+    let Some(matchup) = landing.get("matchup") else {
+        return out;
+    };
+
+    if let Some(leaders) = matchup
+        .get("skaterComparison")
+        .and_then(|s| s.get("leaders"))
+        .and_then(|l| l.as_array())
+    {
+        for leader in leaders {
+            let cat = leader.get("category").and_then(|c| c.as_str()).unwrap_or("");
+            let al = extract_player_leader(leader, "awayLeader");
+            let hl = extract_player_leader(leader, "homeLeader");
+            if let (Some(a), Some(h)) = (al, hl) {
+                match cat {
+                    "points" => out.points_leaders = Some((a, h)),
+                    "goals" => out.goals_leaders = Some((a, h)),
+                    "assists" => out.assists_leaders = Some((a, h)),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if let Some(gc) = matchup.get("goalieComparison") {
+        out.home_goalie = extract_goalie_stats(gc, "homeTeam");
+        out.away_goalie = extract_goalie_stats(gc, "awayTeam");
+        out.home_record = gc
+            .get("homeTeam")
+            .and_then(|t| t.get("teamTotals"))
+            .and_then(|t| t.get("record"))
+            .and_then(|r| r.as_str())
+            .unwrap_or("")
+            .to_string();
+        out.away_record = gc
+            .get("awayTeam")
+            .and_then(|t| t.get("teamTotals"))
+            .and_then(|t| t.get("record"))
+            .and_then(|r| r.as_str())
+            .unwrap_or("")
+            .to_string();
+    }
+
+    out
+}
+
+/// Return a cached landing if present (matchup populated), otherwise fetch
+/// from NHL. Caches only when the fetched matchup is populated — i.e. the
+/// game was still FUT at fetch time. Post-puck-drop fetches are returned to
+/// the caller for one-shot use but not written, so a later prewarm or
+/// request during a FUT window can still populate the cache correctly.
+async fn get_or_fetch_landing_cached(
+    state: &Arc<AppState>,
+    game_id: u32,
+    date: &str,
+) -> Option<LandingCached> {
+    let cache_key = format!("insights_landing:{}", game_id);
+
+    if let Ok(Some(cached)) = state
+        .db
+        .cache()
+        .get_cached_response::<LandingCached>(&cache_key)
+        .await
+    {
+        if cached.has_matchup() {
+            return Some(cached);
+        }
+    }
+
+    let landing = match state.nhl_client.get_game_landing_raw(game_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                game_id = game_id,
+                error = %e,
+                "insights: game landing fetch failed; leaders/goalies will be null"
+            );
+            return None;
+        }
+    };
+
+    let built = build_landing_from_raw(&landing);
+    if built.has_matchup() {
+        let _ = state
+            .db
+            .cache()
+            .store_response(&cache_key, date, &built)
+            .await;
+    }
+    Some(built)
+}
+
 fn extract_player_leader(leader: &serde_json::Value, side: &str) -> Option<PlayerLeader> {
     let p = leader.get(side)?;
     Some(PlayerLeader {
@@ -691,7 +775,7 @@ fn extract_goalie_stats(gc: &serde_json::Value, side: &str) -> Option<GoalieStat
 
 async fn scrape_headlines() -> Result<Vec<String>> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(crate::tuning::http::HEADLINE_SCRAPER_TIMEOUT)
         .build()
         .map_err(|e| crate::Error::Internal(format!("Failed to build HTTP client: {}", e)))?;
 
@@ -845,7 +929,7 @@ Return JSON with exactly these fields:
     });
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(crate::tuning::http::CLAUDE_TIMEOUT)
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 

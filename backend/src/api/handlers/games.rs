@@ -405,8 +405,27 @@ async fn process_games_extended(
         join_all(boxscore_futures),
         join_all(player_log_futures),
     );
-    let boxscore_cache: HashMap<u32, Option<GameBoxscore>> =
+    let mut boxscore_cache: HashMap<u32, Option<GameBoxscore>> =
         boxscore_results.into_iter().collect();
+
+    // Retry failed boxscores for live games once, sequentially. The
+    // parallel prefetch above can lose individual calls to a transient
+    // NHL rate-limit; without a retry, live games silently render as
+    // "0 pts" across every rostered skater. The retry runs serially so
+    // it doesn't re-burst the endpoint.
+    let live_game_ids_missing_boxscore: Vec<u32> = games_for_date
+        .iter()
+        .filter(|g| g.game_state.is_live())
+        .filter_map(|g| match boxscore_cache.get(&g.id) {
+            Some(Some(_)) => None,
+            _ => Some(g.id),
+        })
+        .collect();
+    for gid in live_game_ids_missing_boxscore {
+        if let Ok(bx) = state.nhl_client.get_game_boxscore(gid).await {
+            boxscore_cache.insert(gid, Some(bx));
+        }
+    }
 
     // Build game responses (with basic player data for per-game display)
     let mut game_responses = Vec::new();
@@ -457,6 +476,29 @@ async fn process_games_extended(
             }
         } else {
             (None, None)
+        };
+
+        // Live-game fallback: if neither the schedule nor the scores
+        // endpoint yielded a score (typically because both hit NHL rate
+        // limits), derive the score from the boxscore we already have
+        // cached. Sum of skater goals per side = team goals. Avoids the
+        // UI rendering "just the time" for a live game we know is live.
+        let (home_score, away_score) = if home_score.is_none() && away_score.is_none() {
+            match boxscore_cache.get(&game.id) {
+                Some(Some(bx)) => {
+                    let sum = |players: &[BoxscorePlayer]| -> i32 {
+                        players.iter().map(|p| p.goals.unwrap_or(0)).sum()
+                    };
+                    let h = sum(&bx.player_by_game_stats.home_team.forwards)
+                        + sum(&bx.player_by_game_stats.home_team.defense);
+                    let a = sum(&bx.player_by_game_stats.away_team.forwards)
+                        + sum(&bx.player_by_game_stats.away_team.defense);
+                    (Some(h), Some(a))
+                }
+                _ => (home_score, away_score),
+            }
+        } else {
+            (home_score, away_score)
         };
 
         let period = game.period_descriptor.as_ref().map(|p| {

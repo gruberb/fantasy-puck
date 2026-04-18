@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api/client";
+import { QUERY_INTERVALS } from "@/config";
 import { useLeague } from "@/contexts/LeagueContext";
 import {
   getFixedAnalysisDateString,
@@ -63,7 +64,7 @@ export function useGamesData(dateParam?: string) {
 
   useEffect(() => {
     if (!autoRefresh || !hasLiveGames) return;
-    const id = setInterval(() => refetchGames(), 30000);
+    const id = setInterval(() => refetchGames(), QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS);
     return () => clearInterval(id);
   }, [autoRefresh, hasLiveGames, refetchGames]);
 

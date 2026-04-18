@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { QUERY_INTERVALS } from "@/config";
 import { fetchApi } from "@/lib/api-client";
 import { useLeague } from "@/contexts/LeagueContext";
 import type { PulseResponse } from "../types";
@@ -11,7 +12,7 @@ export function usePulse() {
     queryFn: () =>
       fetchApi<PulseResponse>(`pulse?league_id=${activeLeagueId}`),
     enabled: !!activeLeagueId,
-    staleTime: 60_000,
+    staleTime: QUERY_INTERVALS.PULSE_STALE_MS,
   });
 
   return {

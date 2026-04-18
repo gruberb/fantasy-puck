@@ -1,10 +1,23 @@
 /**
- * Gets a fixed date as a string for end-of-season analysis.
- * During active season, returns yesterday's date. During offseason,
- * returns the last day of the most recent playoffs.
+ * Default date for navigation links ("Today's Games") — today in
+ * local time. Games for today exist in the NHL schedule all day, so
+ * today is the right starting point for the games view.
  */
 export function getFixedAnalysisDateString(): string {
   return toLocalDateString();
+}
+
+/**
+ * Default date for the daily fantasy rankings table. Rankings only
+ * populate after a game-day completes (scheduler runs 9am & 3pm UTC
+ * against yesterday), so defaulting to today produces "No daily
+ * rankings available" during every in-progress slate. Yesterday is
+ * the most recent day with real data.
+ */
+export function getMostRecentRankingsDate(): string {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  return toLocalDateString(yesterday);
 }
 
 /**

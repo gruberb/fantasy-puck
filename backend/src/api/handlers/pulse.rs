@@ -239,7 +239,7 @@ The frame: speak TO the caller (second person — "you", "your team"). This is t
     });
 
     let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(crate::tuning::http::CLAUDE_TIMEOUT)
         .build()
     {
         Ok(c) => c,

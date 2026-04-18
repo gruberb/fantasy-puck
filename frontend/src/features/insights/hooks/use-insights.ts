@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { API_URL } from "@/config";
+import { API_URL, QUERY_INTERVALS } from "@/config";
 import { useLeague } from "@/contexts/LeagueContext";
 
 export interface HotPlayerSignal {
@@ -127,7 +127,7 @@ export function useInsights() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["insights", activeLeagueId],
     queryFn: () => fetchInsights(activeLeagueId || undefined),
-    staleTime: 15 * 60 * 1000, // 15 minutes
+    staleTime: QUERY_INTERVALS.INSIGHTS_STALE_MS,
     gcTime: 60 * 60 * 1000, // 1 hour
     retry: 1,
   });

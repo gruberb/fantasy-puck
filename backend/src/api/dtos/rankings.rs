@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::api::dtos::stats::PlayerHighlightResponse;
@@ -14,13 +14,13 @@ pub struct RankingResponse {
     pub total_points: i32,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct DailyRankingsResponse {
     pub date: String,
     pub rankings: Vec<DailyFantasyRankingResponse>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyFantasyRankingResponse {
     pub rank: usize,

@@ -9,10 +9,13 @@ use tracing::{error, info};
 use crate::api::handlers::insights::generate_and_cache_insights;
 use crate::api::handlers::race_odds::generate_and_cache_race_odds;
 use crate::api::routes::AppState;
+use crate::api::{game_type, season};
 use crate::db::FantasyDb;
 use crate::error::Result;
 use crate::models::fantasy::{DailyRanking, TeamDailyPerformance};
+use crate::tuning::scheduler as tuning;
 use crate::utils::fantasy::process_game_performances;
+use crate::utils::player_pool::refresh_playoff_roster_cache;
 use crate::utils::playoff_ingest::ingest_playoff_games_for_date;
 use crate::ws::draft_hub::DraftHub;
 use crate::{Error, NhlClient};
@@ -211,6 +214,17 @@ pub async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
         draft_hub: DraftHub::new(),
     });
 
+    // Playoff roster pool — 16 team rosters written into Postgres so
+    // every downstream cold read is one SELECT instead of 16 parallel
+    // NHL calls. Failures are logged but non-fatal; the cached fetch
+    // path falls back to the NHL fanout on first read.
+    if game_type() == 3 {
+        match refresh_playoff_roster_cache(db, nhl_client, season(), game_type()).await {
+            Ok(n) => info!("Pre-warmed playoff roster cache ({} players)", n),
+            Err(e) => error!("Failed to pre-warm playoff roster cache: {}", e),
+        }
+    }
+
     // Global (no-league) payloads.
     match generate_and_cache_insights(&state, "").await {
         Ok(_) => info!("Pre-warmed global insights"),
@@ -265,7 +279,7 @@ pub async fn init_rankings_scheduler(
     let nhl_client_clone_insights = nhl_client.clone();
 
     // Schedule job for 9am UTC
-    let morning_job = Job::new_async("0 9 * * * *", move |_, _| {
+    let morning_job = Job::new_async(tuning::MORNING_RANKINGS_CRON, move |_, _| {
         let db = db_clone_morning.clone();
         let nhl_client = nhl_client_clone_morning.clone();
         Box::pin(async move {
@@ -279,8 +293,11 @@ pub async fn init_rankings_scheduler(
 
             process_daily_rankings_all_leagues(&db, &nhl_client, &yesterday).await;
 
-            // Clean up old cache entries (older than 7 days)
-            let week_ago = (Utc::now() - Duration::days(7)).format("%Y-%m-%d").to_string();
+            // Prune cache rows older than `tuning::CACHE_RETENTION`.
+            let retention_days = tuning::CACHE_RETENTION.as_secs() as i64 / 86_400;
+            let week_ago = (Utc::now() - Duration::days(retention_days))
+                .format("%Y-%m-%d")
+                .to_string();
             if let Err(e) = sqlx::query("DELETE FROM response_cache WHERE date IS NOT NULL AND date < $1")
                 .bind(&week_ago)
                 .execute(db.pool())
@@ -295,7 +312,7 @@ pub async fn init_rankings_scheduler(
     .map_err(|e| Error::Internal(format!("Failed to create morning job: {}", e)))?;
 
     // Schedule job for 3pm UTC
-    let afternoon_job = Job::new_async("0 15 * * * *", move |_, _| {
+    let afternoon_job = Job::new_async(tuning::AFTERNOON_RANKINGS_CRON, move |_, _| {
         let db = db_clone_afternoon.clone();
         let nhl_client = nhl_client_clone_afternoon.clone();
         Box::pin(async move {
@@ -315,7 +332,7 @@ pub async fn init_rankings_scheduler(
     // Schedule derived-payload pre-warming at 10am UTC daily. Ingest
     // yesterday's completed playoff box scores first so the downstream
     // race-odds prewarm reads fresh player facts.
-    let insights_job = Job::new_async("0 10 * * * *", move |_, _| {
+    let insights_job = Job::new_async(tuning::DAILY_PREWARM_CRON, move |_, _| {
         let db = db_clone_insights.clone();
         let nhl_client = nhl_client_clone_insights.clone();
         Box::pin(async move {

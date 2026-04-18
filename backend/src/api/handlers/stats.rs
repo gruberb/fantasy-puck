@@ -44,11 +44,14 @@ pub async fn get_top_skaters(
 
     // Playoffs: skater-stats-leaders is empty until games are played, so source
     // the pool from the 16 playoff team rosters instead. Stats fields are zero
-    // (callers search by name/team/position, not by stat values).
+    // (callers search by name/team/position, not by stat values). Cached in
+    // Postgres so a cold hit doesn't fan out 16 roster calls to NHL.
     if game_type == 3 {
-        let pool = crate::utils::player_pool::fetch_playoff_roster_pool(
+        let pool = crate::utils::player_pool::fetch_playoff_roster_pool_cached(
+            &state.db,
             &state.nhl_client,
             *season,
+            game_type,
         )
         .await?;
         let players = pool

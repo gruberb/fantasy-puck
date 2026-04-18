@@ -28,22 +28,19 @@ impl CacheEntry {
     }
 }
 
-// TTL constants for different NHL API endpoint types
+// TTLs and client tuning live in `crate::tuning::nhl_client`. This
+// local alias keeps the call sites below readable without leaking the
+// tuning module into every use statement.
+use crate::tuning::nhl_client as tuning;
 mod ttl {
-    use std::time::Duration;
-
-    pub const SKATER_STATS: Duration = Duration::from_secs(300); // 5 min
-    pub const SCHEDULE: Duration = Duration::from_secs(120); // 2 min
-    pub const GAME_CENTER: Duration = Duration::from_secs(120); // 2 min
-    pub const BOXSCORE_LIVE: Duration = Duration::from_secs(60); // 1 min
-    pub const BOXSCORE_FINAL: Duration = Duration::from_secs(86400); // 24 hr
-    pub const PLAYOFF_CAROUSEL: Duration = Duration::from_secs(900); // 15 min
-    pub const PLAYER_GAME_LOG: Duration = Duration::from_secs(600); // 10 min
-    pub const PLAYER_DETAILS: Duration = Duration::from_secs(1800); // 30 min
-    pub const STANDINGS: Duration = Duration::from_secs(1800); // 30 min
-    pub const ROSTER: Duration = Duration::from_secs(1800); // 30 min
-    pub const EDGE: Duration = Duration::from_secs(1800); // 30 min
-    pub const SCORES: Duration = Duration::from_secs(120); // 2 min
+    pub use crate::tuning::nhl_client::{
+        BOXSCORE_FINAL_TTL as BOXSCORE_FINAL, BOXSCORE_LIVE_TTL as BOXSCORE_LIVE,
+        EDGE_TTL as EDGE, GAME_CENTER_TTL as GAME_CENTER,
+        PLAYER_DETAILS_TTL as PLAYER_DETAILS, PLAYER_GAME_LOG_TTL as PLAYER_GAME_LOG,
+        PLAYOFF_CAROUSEL_TTL as PLAYOFF_CAROUSEL, ROSTER_TTL as ROSTER,
+        SCHEDULE_TTL as SCHEDULE, SCORES_TTL as SCORES,
+        SKATER_STATS_TTL as SKATER_STATS, STANDINGS_TTL as STANDINGS,
+    };
 }
 
 /// NHL API client with built-in rate limiting and in-memory response caching
@@ -61,22 +58,18 @@ impl Default for NhlClient {
 }
 
 impl NhlClient {
-    /// Create a new NHL API client (max 10 concurrent requests, retry on 429).
-    ///
-    /// The 10-concurrent limit was 5 through v1.15. Bumped in v1.17 to
-    /// halve cold-load time on the Games page, where ~60-100 unique
-    /// `player-game-log` calls fire on playoff nights. The NHL API
-    /// tolerates this comfortably in practice — the existing 429 retry
-    /// logic covers the rare overshoot.
+    /// Construct the client with the concurrency, timeout, and retry
+    /// budget declared in [`crate::tuning::nhl_client`]. All tuning
+    /// lives in that module; this constructor reads it.
     pub fn new() -> Self {
         let client = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(tuning::REQUEST_TIMEOUT)
             .build()
             .unwrap_or_default();
 
         Self {
             client,
-            semaphore: Arc::new(Semaphore::new(10)),
+            semaphore: Arc::new(Semaphore::new(tuning::MAX_CONCURRENT_REQUESTS)),
             cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -118,8 +111,9 @@ impl NhlClient {
             .await
             .map_err(|e| Error::NhlApi(format!("Semaphore error: {}", e)))?;
 
-        let mut retries = 0;
-        let max_retries = 3;
+        // Retry budget and base delay live in `crate::tuning::nhl_client`.
+        // The backoff doubles each retry, starting from RETRY_INITIAL_DELAY.
+        let mut retries: u32 = 0;
 
         loop {
             info!("Fetching from NHL API: {}", url);
@@ -133,12 +127,13 @@ impl NhlClient {
 
             if response.status() == 429 {
                 retries += 1;
-                if retries > max_retries {
+                if retries > tuning::MAX_RETRIES {
                     return Err(Error::NhlApi(
                         "NHL API rate limit exceeded after retries".to_string(),
                     ));
                 }
-                let delay = Duration::from_millis(500 * retries);
+                let base = tuning::RETRY_INITIAL_DELAY.as_millis() as u64;
+                let delay = Duration::from_millis(base << (retries - 1));
                 warn!("NHL API rate limited (429), retrying in {:?}...", delay);
                 tokio::time::sleep(delay).await;
                 continue;

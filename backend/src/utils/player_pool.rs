@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use futures::future::try_join_all;
 use serde_json::Value;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::api::dtos::PlayoffCarouselResponse;
+use crate::db::FantasyDb;
 use crate::error::{Error, Result};
 use crate::nhl_api::nhl::NhlClient;
 
@@ -86,6 +87,71 @@ pub async fn fetch_playoff_roster_pool(client: &NhlClient, season: u32) -> Resul
         }
     }
     Ok(map)
+}
+
+/// Playoff roster pool with a Postgres cache in front.
+///
+/// Cold reads cost 16 parallel `get_team_roster` calls to NHL — enough to
+/// burst the rate limit when the in-memory client cache expires (30m TTL)
+/// or on every restart. The scheduler's 10:00 UTC prewarm refreshes this
+/// row, and every subsequent read is a single SELECT.
+///
+/// Cache miss semantics: fetch from NHL, warm the row, return. Even if
+/// the NHL fetch fails we propagate the error to the caller — we'd
+/// rather a stale but present cache, which `refresh_playoff_roster_cache`
+/// is responsible for. In practice the scheduler prewarm keeps it fresh.
+pub async fn fetch_playoff_roster_pool_cached(
+    db: &FantasyDb,
+    client: &NhlClient,
+    season: u32,
+    game_type: u8,
+) -> Result<PoolMap> {
+    if let Some(cached) = db
+        .get_playoff_roster_cache(season as i32, game_type as i16)
+        .await?
+    {
+        if let Ok(map) = serde_json::from_value::<PoolMap>(cached) {
+            return Ok(map);
+        }
+        warn!(
+            "playoff_roster_cache row for (season={}, game_type={}) failed to deserialize; falling back to NHL fetch",
+            season, game_type
+        );
+    }
+
+    let map = fetch_playoff_roster_pool(client, season).await?;
+    if let Ok(value) = serde_json::to_value(&map) {
+        if let Err(e) = db
+            .upsert_playoff_roster_cache(season as i32, game_type as i16, &value)
+            .await
+        {
+            warn!("Failed to persist playoff_roster_cache: {}", e);
+        }
+    }
+    Ok(map)
+}
+
+/// Force-refresh the playoff roster cache row. Called from the 10:00 UTC
+/// prewarm and from the admin prewarm endpoint. Returns the count of
+/// players written for logging.
+pub async fn refresh_playoff_roster_cache(
+    db: &FantasyDb,
+    client: &NhlClient,
+    season: u32,
+    game_type: u8,
+) -> Result<usize> {
+    let map = fetch_playoff_roster_pool(client, season).await?;
+    let value = serde_json::to_value(&map)
+        .map_err(|e| Error::Internal(format!("Failed to serialize roster pool: {}", e)))?;
+    db.upsert_playoff_roster_cache(season as i32, game_type as i16, &value)
+        .await?;
+    info!(
+        season,
+        game_type,
+        players = map.len(),
+        "Refreshed playoff_roster_cache"
+    );
+    Ok(map.len())
 }
 
 /// Returns 16 playoff team abbreviations. Prefers the carousel endpoint;

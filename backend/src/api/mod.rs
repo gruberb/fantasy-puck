@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::http::{header, Method};
 use tower_http::compression::CompressionLayer;
@@ -66,7 +65,7 @@ pub async fn run_server(
     let app = routes::create_router(db, nhl_client, config)
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(1024 * 1024)) // 1 MB
-        .layer(TimeoutLayer::new(Duration::from_secs(30)))
+        .layer(TimeoutLayer::new(crate::tuning::http::AXUM_REQUEST_TIMEOUT))
         .layer(CompressionLayer::new());
 
     // Create a TCP listener for our address

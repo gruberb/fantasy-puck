@@ -31,7 +31,7 @@ async fn handle_draft_ws(socket: WebSocket, session_id: String, state: Arc<AppSt
 
     let mut rx = state.draft_hub.subscribe(&session_id).await;
     let (mut ws_sender, mut ws_receiver) = socket.split();
-    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    let mut ping_interval = tokio::time::interval(crate::tuning::http::WS_PING_INTERVAL);
 
     loop {
         tokio::select! {

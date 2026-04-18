@@ -7,7 +7,7 @@ import { getNHLTeamFullName, getNHLTeamLogoUrl } from "@/utils/nhlTeams";
 import LoadingSpinner from "@/components/common/LoadingSpinner";
 import ErrorMessage from "@/components/common/ErrorMessage";
 import PageHeader from "@/components/common/PageHeader";
-import { APP_CONFIG } from "@/config";
+import { APP_CONFIG, QUERY_INTERVALS } from "@/config";
 import {
   useLeagueMembers,
   useDraftSession,
@@ -214,7 +214,7 @@ const DraftPage = () => {
 
   useEffect(() => {
     if (session?.status !== "active") { setElapsed(0); return; }
-    const interval = setInterval(() => setElapsed((e) => e + 1), 1000);
+    const interval = setInterval(() => setElapsed((e) => e + 1), QUERY_INTERVALS.DRAFT_ELAPSED_TICK_MS);
     return () => clearInterval(interval);
   }, [session?.status, session?.currentPickIndex]);
 

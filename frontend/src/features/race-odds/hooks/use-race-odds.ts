@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { QUERY_INTERVALS } from "@/config";
 import { fetchApi } from "@/lib/api-client";
 import { useLeague } from "@/contexts/LeagueContext";
 
@@ -29,7 +30,7 @@ export function useRaceOdds({ myTeamId }: UseRaceOddsOptions = {}) {
   return useQuery({
     queryKey: ["race-odds", leagueKey, myTeamId ?? null],
     queryFn: () => fetchApi<RaceOddsResponse>(buildEndpoint(activeLeagueId, myTeamId)),
-    staleTime: 15 * 60 * 1000,
+    staleTime: QUERY_INTERVALS.RACE_ODDS_STALE_MS,
     gcTime: 60 * 60 * 1000,
     retry: 1,
   });

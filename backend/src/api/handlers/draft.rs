@@ -12,14 +12,16 @@ use crate::api::{game_type, season};
 use crate::auth::middleware::AuthUser;
 use crate::db::draft::{DraftPickRow, DraftSessionRow, PlayerPoolRow};
 use crate::error::{Error, Result};
-use crate::utils::player_pool::{fetch_playoff_roster_pool, fetch_stats_leader_pool, PoolMap};
+use crate::utils::player_pool::{
+    fetch_playoff_roster_pool_cached, fetch_stats_leader_pool, PoolMap,
+};
 use crate::ws::draft_hub::DraftEvent;
 
 /// Branch on configured game_type to build the pool.
 /// Playoffs (3) use the 16-team rosters; everything else uses the stats-leader endpoint.
 async fn build_player_pool(state: &AppState) -> Result<PoolMap> {
     if game_type() == 3 {
-        fetch_playoff_roster_pool(&state.nhl_client, season()).await
+        fetch_playoff_roster_pool_cached(&state.db, &state.nhl_client, season(), game_type()).await
     } else {
         fetch_stats_leader_pool(&state.nhl_client, season(), game_type()).await
     }

@@ -4,6 +4,30 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.18.0 — 2026-04-18 (backend) / v1.11.0 (frontend)
+
+### Fixed — rate-limit cascades during playoff slates
+
+The playoff traffic pattern produced sustained NHL API 429 errors. Multiple devices loading `/games` or `/rankings` concurrently caused the same game IDs to appear in `NHL API rate limit exceeded after retries` errors every 2–4 minutes, with knock-on failures: Insights "Players to Watch" sidebar blank on games that went live before first generation, `/rankings/daily` returning 500s when any single boxscore 429'd, live game rows showing "just the time" and 0 pts for skaters whose points had already arrived.
+
+Changes:
+
+- `response_cache` row added for `GET /api/fantasy/rankings/daily` (`daily_rankings:*`). Previously the handler re-fanned N boxscore calls per request.
+- Per-game pre-game landing cache (`insights_landing:{game_id}`) with write-once semantics. First successful FUT-state fetch locks in the matchup block; later LIVE-state fetches never overwrite.
+- Playoff roster pool persisted to Postgres (`playoff_roster_cache`, new migration `20260419000000_playoff_roster_cache.sql`). Refreshed by the 10:00 UTC prewarm. Replaces the 16-team parallel `try_join_all` fanout on cold `/stats` or `/draft` hits.
+- Games extended-mode: retry failed live-game boxscores once sequentially; derive `home_score`/`away_score` from the boxscore when schedule + `get_game_scores` both return null.
+- NhlClient retry budget: 3 linear retries (max 1.5 s) → 5 exponential retries (500 ms → 8 s, ~15 s total).
+- Insights cache write gate removed. The previous "only cache when every game's landing succeeded" rule meant one rate-limited landing killed caching for the entire day, so every visitor re-ran the full signal compute plus the Claude call.
+- Insights response cache self-heals only on an empty-schedule response; partial-landing responses are now cached and served for the day.
+- Frontend rankings widget defaults to yesterday via new `getMostRecentRankingsDate()`. The previous default (today) always showed "No daily rankings available for this date" during live slates.
+
+### Added — centralised tuning module and data-pipeline plan
+
+- `backend/src/tuning.rs`: every timeout, retry count, cron schedule, cache TTL, and (reserved) poller cadence the service uses. Grouped by subsystem (`nhl_client`, `scheduler`, `http`, `live_mirror`) with per-constant rationale. Replaces scattered literals in `nhl_api/nhl.rs`, `utils/scheduler.rs`, `main.rs`, `api/mod.rs`, `api/handlers/insights.rs`, `api/handlers/pulse.rs`, and `ws/handler.rs`.
+- `frontend/src/config.ts`: new `QUERY_INTERVALS` object centralises React Query `staleTime`, the Games-page auto-refresh interval, Pulse / Insights / Race-Odds per-hook overrides, and the draft-room elapsed-time tick. Call sites updated in `lib/react-query.ts`, `features/games/hooks/use-games-data.ts`, `features/insights/hooks/use-insights.ts`, `features/race-odds/hooks/use-race-odds.ts`, `features/pulse/hooks/use-pulse.ts`, and `pages/DraftPage.tsx`.
+- `TECHNICAL-CACHING.md` at repo root: current caching architecture (two cache layers, per-endpoint flow, data freshness table, scheduled jobs, frontend refresh patterns, rate-limit offenders and post-fix status).
+- `docs/DATA-PIPELINE-REDESIGN.md`: proposed follow-on redesign — NHL mirror tables, metadata + live pollers, pure DB reads in every handler, 60-second live update cadence flowing through Pulse / Rankings / Stats / Sleepers. Migration `20260420000000_nhl_mirror.sql` lands now; the pollers and handler rewrites are a separate PR.
+
 ## v1.17.0 — 2026-04-18
 
 ### Changed — halved Games-page cold-load time

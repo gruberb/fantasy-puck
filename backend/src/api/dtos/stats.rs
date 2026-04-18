@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::api::dtos::common::{FantasyTeamInfo, PlayerForm};
 
@@ -23,7 +23,7 @@ pub struct ConsolidatedPlayerStats {
     pub form: Option<PlayerForm>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerHighlightResponse {
     pub player_name: String,

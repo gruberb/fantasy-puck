@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import { getFixedAnalysisDateString, dateStringToLocalDate } from "@/utils/timezone";
+import { getMostRecentRankingsDate, dateStringToLocalDate } from "@/utils/timezone";
 import { PlayoffFantasyTeamRanking } from "@/types/rankings";
 import { TeamStats } from "@/types/teamStats";
 
 export function useRankingsData(leagueId: string | null) {
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    return getFixedAnalysisDateString();
+    return getMostRecentRankingsDate();
   });
 
   const enabled = !!leagueId;
