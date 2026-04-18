@@ -145,6 +145,57 @@ async fn ingest_single_game(
     let away_abbrev = game.away_team.abbrev.clone();
     let home_abbrev = game.home_team.abbrev.clone();
 
+    // Upsert the team-level result row (playoff Elo replays off this).
+    // Prefer the schedule's reported score; fall back to summing the
+    // boxscore's player goals if the score is missing.
+    let (home_score, away_score) = match &game.game_score {
+        Some(s) => (s.home, s.away),
+        None => {
+            let sum_goals = |team: &crate::models::nhl::TeamGameStats| -> i32 {
+                team.forwards.iter().chain(team.defense.iter())
+                    .map(|p| p.goals.unwrap_or(0))
+                    .sum()
+            };
+            (
+                sum_goals(&box_score.player_by_game_stats.home_team),
+                sum_goals(&box_score.player_by_game_stats.away_team),
+            )
+        }
+    };
+    let winner = if home_score > away_score {
+        home_abbrev.clone()
+    } else {
+        away_abbrev.clone()
+    };
+    let round_i16: Option<i16> = game.series_status.as_ref().map(|s| s.round as i16);
+    sqlx::query(
+        r#"
+        INSERT INTO playoff_game_results (
+            season, game_type, game_id, game_date,
+            home_team, away_team, home_score, away_score, winner, round
+        )
+        VALUES ($1, $2, $3, $4::date, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (game_id) DO UPDATE SET
+            home_score = EXCLUDED.home_score,
+            away_score = EXCLUDED.away_score,
+            winner     = EXCLUDED.winner,
+            round      = EXCLUDED.round
+        "#,
+    )
+    .bind(season_i32)
+    .bind(game_type_i16)
+    .bind(game_id_i64)
+    .bind(&game_date_str)
+    .bind(&home_abbrev)
+    .bind(&away_abbrev)
+    .bind(home_score)
+    .bind(away_score)
+    .bind(&winner)
+    .bind(round_i16)
+    .execute(db.pool())
+    .await
+    .map_err(crate::error::Error::Database)?;
+
     let mut rows: Vec<SkaterRow> = Vec::with_capacity(40);
     for p in &box_score.player_by_game_stats.away_team.forwards {
         rows.push(boxscore_to_row(p, &away_abbrev, &home_abbrev, false));

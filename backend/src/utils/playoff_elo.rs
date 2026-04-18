@@ -1,0 +1,313 @@
+//! Dynamic playoff Elo — a team-strength rating that updates after every
+//! completed playoff game instead of freezing at the regular-season mark.
+//!
+//! Algorithm:
+//! 1. Seed each team's Elo from regular-season standings points:
+//!    `elo_0 = BASE + POINTS_SCALE * (season_points - league_avg_points)`.
+//!    For a 25-point RS spread at `POINTS_SCALE = 6` that's a ±75-point
+//!    Elo window around the base 1500 — roughly how the public NHL Elo
+//!    trackers seed.
+//! 2. Replay every completed playoff game in chronological order,
+//!    applying the standard logistic-Elo update with home-ice added to
+//!    the home team's pre-game rating:
+//!      `p_home = 1 / (1 + 10^(-(elo_home - elo_away + HOME_ICE_ADV) / 400))`
+//!      `elo_new = elo_old + K * ln(|goal_diff| + 1) * (result - p_home)`
+//!    The `ln(goal_diff + 1)` factor is the Silver-style blowout bonus
+//!    so a 6-1 win moves ratings more than a 2-1 win, but with
+//!    diminishing returns.
+//!
+//! The module is game-log driven: no model state is persisted. Each call
+//! to [`compute_current_elo`] replays from scratch. Cheap enough at
+//! current volumes (~100 playoff games over a run, ~500 rows per-team
+//! cap) that we don't need an incremental update path yet.
+//!
+//! Designed to replace `team_ratings::from_standings` as the input to
+//! `race_sim` during `game_type == 3`. The regular-season blend still
+//! feeds this module (as the seeding term), so RS context is never lost.
+
+use std::collections::HashMap;
+
+use tracing::debug;
+
+use crate::db::FantasyDb;
+use crate::error::{Error, Result};
+
+/// Starting Elo for a league-average team.
+pub const BASE_ELO: f32 = 1500.0;
+/// How many Elo points per RS-standings-point of separation above / below
+/// the league average. 6.0 gives a ~150-point window across the RS, which
+/// yields round-1 win probabilities within a few points of public models.
+pub const POINTS_SCALE: f32 = 6.0;
+/// Home-ice rating bonus applied to the home team before each game's
+/// probability draw. 35 points ≈ 54/46 home/road split at equal Elo.
+pub const HOME_ICE_ADV: f32 = 35.0;
+/// Base update rate. Scaled per-game by `ln(|goal_diff| + 1)` so a 1-goal
+/// win moves ratings by ~K and a 5-goal win by ~K·ln(6) ≈ 1.8·K.
+pub const K_FACTOR: f32 = 6.0;
+
+/// Seed each team's Elo from the NHL standings feed. Teams missing from
+/// the feed get `BASE_ELO`. Returns `abbrev → elo`.
+pub fn seed_from_standings(standings: &serde_json::Value) -> HashMap<String, f32> {
+    let Some(arr) = standings.get("standings").and_then(|v| v.as_array()) else {
+        return HashMap::new();
+    };
+    let points: Vec<(String, f32)> = arr
+        .iter()
+        .filter_map(|entry| {
+            let abbrev = entry
+                .get("teamAbbrev")
+                .and_then(|a| a.get("default"))
+                .and_then(|a| a.as_str())?
+                .to_string();
+            let pts = entry.get("points").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            Some((abbrev, pts))
+        })
+        .collect();
+    if points.is_empty() {
+        return HashMap::new();
+    }
+    let avg: f32 = points.iter().map(|(_, p)| *p).sum::<f32>() / points.len() as f32;
+    points
+        .into_iter()
+        .map(|(abbrev, pts)| (abbrev, BASE_ELO + POINTS_SCALE * (pts - avg)))
+        .collect()
+}
+
+/// A single completed game as the Elo updater needs it. Thin mirror of
+/// the `playoff_game_results` columns we care about.
+#[derive(Debug, Clone)]
+pub struct GameResult {
+    pub home_team: String,
+    pub away_team: String,
+    pub home_score: i32,
+    pub away_score: i32,
+}
+
+/// Apply a single game update in place. Exposed for tests and the
+/// backtest harness; production callers use [`compute_current_elo`].
+pub fn apply_game(ratings: &mut HashMap<String, f32>, game: &GameResult) {
+    let elo_home = *ratings.get(&game.home_team).unwrap_or(&BASE_ELO);
+    let elo_away = *ratings.get(&game.away_team).unwrap_or(&BASE_ELO);
+    let diff = elo_home - elo_away + HOME_ICE_ADV;
+    let p_home = 1.0 / (1.0 + (10.0_f32).powf(-diff / 400.0));
+
+    let home_won = game.home_score > game.away_score;
+    let result_home: f32 = if home_won { 1.0 } else { 0.0 };
+    let goal_diff = (game.home_score - game.away_score).abs() as f32;
+    let margin_mult = (goal_diff + 1.0).ln();
+
+    let delta = K_FACTOR * margin_mult * (result_home - p_home);
+    ratings.insert(game.home_team.clone(), elo_home + delta);
+    ratings.insert(game.away_team.clone(), elo_away - delta);
+}
+
+/// Load every completed playoff game for the season, chronologically,
+/// and return the current Elo map. Seeded from `standings` before
+/// replay, so teams with no completed games still get their RS-based
+/// starting rating.
+pub async fn compute_current_elo(
+    db: &FantasyDb,
+    standings: &serde_json::Value,
+    season: u32,
+) -> Result<HashMap<String, f32>> {
+    let mut ratings = seed_from_standings(standings);
+
+    let rows: Vec<(String, String, i32, i32)> = sqlx::query_as(
+        r#"
+        SELECT home_team, away_team, home_score, away_score
+        FROM playoff_game_results
+        WHERE season = $1
+        ORDER BY game_date ASC, game_id ASC
+        "#,
+    )
+    .bind(season as i32)
+    .fetch_all(db.pool())
+    .await
+    .map_err(Error::Database)?;
+
+    let game_count = rows.len();
+    for (home_team, away_team, home_score, away_score) in rows {
+        apply_game(
+            &mut ratings,
+            &GameResult {
+                home_team,
+                away_team,
+                home_score,
+                away_score,
+            },
+        );
+    }
+    debug!(games = game_count, teams = ratings.len(), "playoff Elo replayed");
+    Ok(ratings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn entry(abbrev: &str, points: i64) -> serde_json::Value {
+        json!({
+            "teamAbbrev": { "default": abbrev },
+            "points": points,
+        })
+    }
+
+    #[test]
+    fn seed_centers_on_base_with_league_average() {
+        let root = json!({
+            "standings": [
+                entry("A", 100),
+                entry("B", 110),
+                entry("C", 90),
+            ],
+        });
+        let seed = seed_from_standings(&root);
+        // Average is 100; each team's Elo = 1500 + 6 * (pts - 100).
+        assert!((seed["A"] - BASE_ELO).abs() < 1e-3);
+        assert!((seed["B"] - (BASE_ELO + 60.0)).abs() < 1e-3);
+        assert!((seed["C"] - (BASE_ELO - 60.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn seed_handles_empty_and_missing_fields() {
+        let empty = seed_from_standings(&json!({}));
+        assert!(empty.is_empty());
+        let no_standings = seed_from_standings(&json!({ "standings": [] }));
+        assert!(no_standings.is_empty());
+    }
+
+    #[test]
+    fn apply_game_rewards_upset_winner_more() {
+        let mut small_upset = HashMap::new();
+        small_upset.insert("BOS".into(), 1600.0);
+        small_upset.insert("BUF".into(), 1400.0);
+        apply_game(
+            &mut small_upset,
+            &GameResult {
+                home_team: "BUF".into(),
+                away_team: "BOS".into(),
+                home_score: 3,
+                away_score: 2,
+            },
+        );
+        let buf_gain = small_upset["BUF"] - 1400.0;
+
+        let mut expected = HashMap::new();
+        expected.insert("BOS".into(), 1600.0);
+        expected.insert("BUF".into(), 1400.0);
+        apply_game(
+            &mut expected,
+            &GameResult {
+                home_team: "BOS".into(),
+                away_team: "BUF".into(),
+                home_score: 3,
+                away_score: 2,
+            },
+        );
+        let bos_gain = expected["BOS"] - 1600.0;
+
+        // Underdog winning gains more than favorite winning — this is
+        // the whole point of an Elo over a fixed strength rating.
+        assert!(
+            buf_gain > bos_gain,
+            "upset should pay more: upset_gain={buf_gain}, favorite_gain={bos_gain}"
+        );
+    }
+
+    #[test]
+    fn apply_game_rewards_bigger_blowout() {
+        let mut close = HashMap::new();
+        close.insert("A".into(), 1500.0);
+        close.insert("B".into(), 1500.0);
+        apply_game(
+            &mut close,
+            &GameResult {
+                home_team: "A".into(),
+                away_team: "B".into(),
+                home_score: 3,
+                away_score: 2,
+            },
+        );
+        let close_gain = close["A"] - 1500.0;
+
+        let mut blowout = HashMap::new();
+        blowout.insert("A".into(), 1500.0);
+        blowout.insert("B".into(), 1500.0);
+        apply_game(
+            &mut blowout,
+            &GameResult {
+                home_team: "A".into(),
+                away_team: "B".into(),
+                home_score: 7,
+                away_score: 1,
+            },
+        );
+        let blowout_gain = blowout["A"] - 1500.0;
+
+        assert!(
+            blowout_gain > close_gain,
+            "6-goal blowout should move Elo more than 1-goal win: \
+             blowout={blowout_gain}, close={close_gain}"
+        );
+    }
+
+    #[test]
+    fn elo_is_zero_sum_within_a_game() {
+        let mut ratings = HashMap::new();
+        ratings.insert("X".into(), 1500.0);
+        ratings.insert("Y".into(), 1500.0);
+        apply_game(
+            &mut ratings,
+            &GameResult {
+                home_team: "X".into(),
+                away_team: "Y".into(),
+                home_score: 4,
+                away_score: 2,
+            },
+        );
+        let total = ratings["X"] + ratings["Y"];
+        assert!(
+            (total - 3000.0).abs() < 1e-3,
+            "winner gain + loser loss must net to zero, got {total}"
+        );
+    }
+
+    #[test]
+    fn home_ice_advantage_helps_the_home_team() {
+        // At equal pre-game Elo, a home win earns less than an away win
+        // (the home team was already favored by HOME_ICE_ADV).
+        let mut home_win = HashMap::new();
+        home_win.insert("A".into(), 1500.0);
+        home_win.insert("B".into(), 1500.0);
+        apply_game(
+            &mut home_win,
+            &GameResult {
+                home_team: "A".into(),
+                away_team: "B".into(),
+                home_score: 3,
+                away_score: 2,
+            },
+        );
+        let home_gain = home_win["A"] - 1500.0;
+
+        let mut away_win = HashMap::new();
+        away_win.insert("A".into(), 1500.0);
+        away_win.insert("B".into(), 1500.0);
+        apply_game(
+            &mut away_win,
+            &GameResult {
+                home_team: "A".into(),
+                away_team: "B".into(),
+                home_score: 2,
+                away_score: 3,
+            },
+        );
+        let away_gain = away_win["B"] - 1500.0;
+        assert!(
+            away_gain > home_gain,
+            "away winner should gain more than home winner at equal Elo: \
+             away={away_gain}, home={home_gain}"
+        );
+    }
+}

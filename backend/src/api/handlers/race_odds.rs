@@ -31,10 +31,21 @@ use crate::api::{game_type, season};
 use crate::error::Result;
 use crate::models::fantasy::FantasyTeamInGame;
 use crate::models::nhl::{PlayoffCarousel, StatsLeaders};
+use crate::utils::player_projection::{project_players, PlayerInput, Projection};
+use crate::utils::playoff_elo::compute_current_elo;
 use crate::utils::race_sim::{
     simulate, BracketState, RaceSimInput, RaceSimOutput, SeriesState, SimFantasyTeam, SimPlayer,
     TeamOdds, TeamRating, DEFAULT_K_FACTOR, DEFAULT_PPG, DEFAULT_TRIALS,
 };
+
+/// Logistic scale applied when the input ratings are on the Elo scale
+/// (~1500-centered, ~±300 spread). Matches the standard Elo formula
+/// `p = 1 / (1 + 10^(-Δ/400))` via the identity
+/// `sigmoid(x · ln10 / 400) == 1 / (1 + 10^(-x/400))`. The older
+/// standings-points path still uses `DEFAULT_K_FACTOR` because its
+/// ratings are ~40-point-spread; using 0.010 against Elo would pin
+/// every series outcome to the favorite.
+const ELO_K_FACTOR: f32 = std::f32::consts::LN_10 / 400.0;
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -219,25 +230,158 @@ async fn build_league_input(
     let carousel = carousel_res.ok().flatten();
     let playoff_stats = playoff_stats_res.ok();
     let regular_stats = regular_stats_res.ok();
-    let ratings = ratings_from_standings(standings_res.ok().as_ref());
+    let standings_json = standings_res.ok();
 
     let bracket = bracket_from_carousel(carousel.as_ref());
-    // Still needed by `player_ppg` to decide when to switch from RS-PPG to
-    // playoff-PPG — has nothing to do with the sim's remaining-games logic,
-    // which now derives from the bracket directly.
+    // Still needed by the pre-playoff `player_ppg` path and as the team-
+    // games-played input for player_projection. Has nothing to do with
+    // the sim's remaining-games logic, which derives from the bracket.
     let games_played_so_far = games_played_from_carousel(carousel.as_ref());
 
-    let fantasy_teams = teams
-        .into_iter()
-        .map(|t| fantasy_team_to_sim(t, playoff_stats.as_ref(), regular_stats.as_ref(), &games_played_so_far))
-        .collect();
+    let is_playoffs = game_type_val == 3;
+    let (ratings, k_factor) = resolve_ratings(
+        &state.db,
+        season_val,
+        is_playoffs,
+        standings_json.as_ref(),
+    )
+    .await;
+
+    let fantasy_teams = if is_playoffs {
+        build_fantasy_teams_playoff(
+            &state.db,
+            season_val,
+            teams,
+            playoff_stats.as_ref(),
+            regular_stats.as_ref(),
+            &games_played_so_far,
+        )
+        .await?
+    } else {
+        teams
+            .into_iter()
+            .map(|t| {
+                fantasy_team_to_sim(
+                    t,
+                    playoff_stats.as_ref(),
+                    regular_stats.as_ref(),
+                    &games_played_so_far,
+                )
+            })
+            .collect()
+    };
 
     Ok(RaceSimInput {
         bracket,
         ratings,
-        k_factor: DEFAULT_K_FACTOR,
+        k_factor,
         fantasy_teams,
     })
+}
+
+/// Compute the ratings map + matching logistic k-factor. Playoff path
+/// uses the game-log-driven Elo; pre-playoff falls back to the blended
+/// standings rating that the codebase has always used.
+async fn resolve_ratings(
+    db: &crate::db::FantasyDb,
+    season_val: u32,
+    is_playoffs: bool,
+    standings_json: Option<&serde_json::Value>,
+) -> (HashMap<String, TeamRating>, f32) {
+    if is_playoffs {
+        if let Some(standings) = standings_json {
+            match compute_current_elo(db, standings, season_val).await {
+                Ok(elo) => {
+                    let map: HashMap<String, TeamRating> =
+                        elo.into_iter().map(|(k, v)| (k, TeamRating(v))).collect();
+                    return (map, ELO_K_FACTOR);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "playoff Elo fetch failed; falling back to standings blend"
+                    );
+                }
+            }
+        } else {
+            tracing::warn!("standings fetch empty; cannot compute playoff Elo");
+        }
+    }
+    (ratings_from_standings(standings_json), DEFAULT_K_FACTOR)
+}
+
+/// Build SimFantasyTeams using the Bayesian `player_projection` path.
+/// Batches all rostered players into one DB round-trip and assembles the
+/// team structures off the returned projection map.
+async fn build_fantasy_teams_playoff(
+    db: &crate::db::FantasyDb,
+    season_val: u32,
+    teams: Vec<FantasyTeamInGame>,
+    playoff_stats: Option<&StatsLeaders>,
+    regular_stats: Option<&StatsLeaders>,
+    games_played_so_far: &HashMap<String, u32>,
+) -> Result<Vec<SimFantasyTeam>> {
+    // Flatten rostered players across all fantasy teams into one input
+    // list, deduped by nhl_id. Goalies are skipped here to match the
+    // pre-existing pipeline.
+    let mut inputs: Vec<PlayerInput> = Vec::new();
+    let mut seen: HashSet<i64> = HashSet::new();
+    for team in &teams {
+        for p in &team.players {
+            if p.position.eq_ignore_ascii_case("G") {
+                continue;
+            }
+            if !seen.insert(p.nhl_id) {
+                continue;
+            }
+            let rs_points = regular_stats
+                .and_then(|s| s.points.iter().find(|x| x.id as i64 == p.nhl_id))
+                .map(|x| x.value as i32)
+                .unwrap_or(0);
+            inputs.push(PlayerInput {
+                nhl_id: p.nhl_id,
+                player_name: p.player_name.clone(),
+                nhl_team: p.nhl_team.clone(),
+                rs_points,
+            });
+        }
+    }
+
+    let projections: HashMap<i64, Projection> =
+        project_players(db, season_val, &inputs, games_played_so_far).await?;
+
+    Ok(teams
+        .into_iter()
+        .map(|team| {
+            let mut local_seen: HashSet<i64> = HashSet::new();
+            let players = team
+                .players
+                .into_iter()
+                .filter(|p| local_seen.insert(p.nhl_id))
+                .filter(|p| !p.position.eq_ignore_ascii_case("G"))
+                .map(|p| {
+                    let ppg = projections
+                        .get(&p.nhl_id)
+                        .map(|proj| proj.ppg)
+                        .unwrap_or(DEFAULT_PPG);
+                    SimPlayer {
+                        nhl_id: p.nhl_id,
+                        name: p.player_name.clone(),
+                        nhl_team: p.nhl_team.clone(),
+                        position: p.position.clone(),
+                        playoff_points_so_far: playoff_points_for(playoff_stats, p.nhl_id),
+                        ppg,
+                        image_url: None,
+                    }
+                })
+                .collect();
+            SimFantasyTeam {
+                team_id: team.team_id,
+                team_name: team.team_name,
+                players,
+            }
+        })
+        .collect())
 }
 
 async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
@@ -253,10 +397,14 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
     let carousel = carousel_res.ok().flatten();
     let playoff_stats = playoff_stats_res.ok();
     let regular_stats = regular_stats_res.ok();
-    let ratings = ratings_from_standings(standings_res.ok().as_ref());
+    let standings_json = standings_res.ok();
 
     let bracket = bracket_from_carousel(carousel.as_ref());
     let games_played_so_far = games_played_from_carousel(carousel.as_ref());
+
+    let is_playoffs = game_type_val == 3;
+    let (ratings, k_factor) =
+        resolve_ratings(&state.db, season_val, is_playoffs, standings_json.as_ref()).await;
 
     // Build a flat Fantasy Champion pool: top 40 regular-season skaters by
     // points. Treat each as its own one-player "team" so the simulator's
@@ -265,7 +413,7 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
         return Ok(RaceSimInput {
             bracket,
             ratings,
-            k_factor: DEFAULT_K_FACTOR,
+            k_factor,
             fantasy_teams: Vec::new(),
         });
     };
@@ -279,6 +427,27 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
     leaders.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
     leaders.truncate(40);
 
+    // Playoff path: batch-project all 40 leaders through the Bayesian
+    // blend. Off-playoff path retains the legacy `player_ppg` fallback.
+    let projections: HashMap<i64, Projection> = if is_playoffs {
+        let inputs: Vec<PlayerInput> = leaders
+            .iter()
+            .map(|p| PlayerInput {
+                nhl_id: p.id as i64,
+                player_name: format!(
+                    "{} {}",
+                    p.first_name.get("default").cloned().unwrap_or_default(),
+                    p.last_name.get("default").cloned().unwrap_or_default(),
+                ),
+                nhl_team: p.team_abbrev.clone(),
+                rs_points: p.value as i32,
+            })
+            .collect();
+        project_players(&state.db, season_val, &inputs, &games_played_so_far).await?
+    } else {
+        HashMap::new()
+    };
+
     let fantasy_teams = leaders
         .into_iter()
         .map(|p| {
@@ -289,13 +458,20 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
                 p.last_name.get("default").cloned().unwrap_or_default(),
             );
             let playoff_points_so_far = playoff_points_for(playoff_stats.as_ref(), nhl_id);
-            let ppg = player_ppg(
-                nhl_id,
-                &p.team_abbrev,
-                playoff_stats.as_ref(),
-                regular_stats.as_ref(),
-                &games_played_so_far,
-            );
+            let ppg = if is_playoffs {
+                projections
+                    .get(&nhl_id)
+                    .map(|proj| proj.ppg)
+                    .unwrap_or(DEFAULT_PPG)
+            } else {
+                player_ppg(
+                    nhl_id,
+                    &p.team_abbrev,
+                    playoff_stats.as_ref(),
+                    regular_stats.as_ref(),
+                    &games_played_so_far,
+                )
+            };
             let sim_player = SimPlayer {
                 nhl_id,
                 name: name.clone(),
@@ -316,7 +492,7 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
     Ok(RaceSimInput {
         bracket,
         ratings,
-        k_factor: DEFAULT_K_FACTOR,
+        k_factor,
         fantasy_teams,
     })
 }

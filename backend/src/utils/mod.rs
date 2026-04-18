@@ -3,6 +3,8 @@ pub mod fantasy;
 pub mod historical_seed;
 pub mod nhl;
 pub mod player_pool;
+pub mod player_projection;
+pub mod playoff_elo;
 pub mod playoff_ingest;
 pub mod race_sim;
 pub mod scheduler;
