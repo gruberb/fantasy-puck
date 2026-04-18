@@ -99,43 +99,59 @@ function TeamForecastRow({
     team.cells.length > 0 &&
     team.cells.every((c) => c.wins === 0 && c.opponentWins === 0);
 
-  return (
-    <div
-      className={`p-4 md:p-5 ${
-        isMine ? "bg-[var(--color-you-tint)] border-l-4 border-[var(--color-you)]" : ""
-      }`}
-    >
-      <div className="flex items-start justify-between gap-4 mb-3">
-        <div>
-          <h3 className="text-base md:text-lg font-extrabold uppercase tracking-wider">
-            {team.teamName}
-            {isMine && (
-              <span className="ml-2 text-[10px] bg-[var(--color-you)] text-[#1A1A1A] px-1.5 py-0.5 tracking-widest">
-                YOU
-              </span>
-            )}
-          </h3>
-          <p
-            className={`text-xs mt-1 ${
-              hasRisk ? "text-[var(--color-error)] font-bold" : "text-[var(--color-ink-muted)]"
-            }`}
-          >
-            {team.totalPlayers} player{team.totalPlayers !== 1 ? "s" : ""}
-            {headline && ` — ${headline}`}
-          </p>
-        </div>
-      </div>
-
-      {allTied ? (
-        <MatchupChipList cells={team.cells} />
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
-          {team.cells.map((cell, i) => (
-            <PlayerCell key={`${team.teamId}-${i}`} cell={cell} />
-          ))}
-        </div>
-      )}
+  const headerBlock = (
+    <div className="flex-1 min-w-0">
+      <h3 className="text-base md:text-lg font-extrabold uppercase tracking-wider">
+        {team.teamName}
+        {isMine && (
+          <span className="ml-2 text-[10px] bg-[var(--color-you)] text-[#1A1A1A] px-1.5 py-0.5 tracking-widest">
+            YOU
+          </span>
+        )}
+      </h3>
+      <p
+        className={`text-xs mt-1 ${
+          hasRisk ? "text-[var(--color-error)] font-bold" : "text-[var(--color-ink-muted)]"
+        }`}
+      >
+        {team.totalPlayers} player{team.totalPlayers !== 1 ? "s" : ""}
+        {headline && ` — ${headline}`}
+      </p>
     </div>
+  );
+
+  const body = allTied ? (
+    <MatchupChipList cells={team.cells} />
+  ) : (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+      {team.cells.map((cell, i) => (
+        <PlayerCell key={`${team.teamId}-${i}`} cell={cell} />
+      ))}
+    </div>
+  );
+
+  if (isMine) {
+    return (
+      <div className="p-4 md:p-5 bg-[var(--color-you-tint)] border-l-4 border-[var(--color-you)]">
+        <div className="flex items-start justify-between gap-4 mb-3">
+          {headerBlock}
+        </div>
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <details className="group p-4 md:p-5 [&_summary::-webkit-details-marker]:hidden">
+      <summary className="cursor-pointer list-none flex items-start justify-between gap-4">
+        {headerBlock}
+        <span className="shrink-0 text-[10px] uppercase tracking-widest font-bold text-[var(--color-ink-muted)] border border-[var(--color-ink-muted)] px-2 py-0.5 group-hover:border-[#1A1A1A] group-hover:text-[#1A1A1A]">
+          <span className="group-open:hidden">Expand</span>
+          <span className="hidden group-open:inline">Collapse</span>
+        </span>
+      </summary>
+      <div className="mt-3">{body}</div>
+    </details>
   );
 }
 

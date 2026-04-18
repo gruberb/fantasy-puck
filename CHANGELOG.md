@@ -4,7 +4,15 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
-## v1.7.3 — 2026-04-17
+## v1.7.4 — 2026-04-18
+
+### Changed
+- **Pulse page reordered** — new `Tonight` section (merged "Today's Pulse" + "My Players In Action") moves to the top so the caller's first view is standing + games today, not the narrative. `Where You Stand` drops below it with a bigger yellow header matching the weight of the other section titles.
+- **"Today" → "Last day" for points** — the `points_today` value is actually the last completed `daily_rankings` day (usually yesterday), not live scoring. Pulse StatCol now labels it `Last day`; League Live Board column renames `Today → Last`. The Claude narrative prompt (`pulse.rs`) gained an explicit rule: "points_today is the last completed scoring day, never 'today's points'" and the headline data line now reads `pts from the last completed scoring day` instead of `{} today`, so the columnist voice stops writing "pulling 3 today" on mornings where no games have happened.
+- **Series Rosters: non-mine teams collapsible** — other fantasy teams' rosters now render as `<details>` collapsed by default with an Expand/Collapse pill; the caller's team stays pinned open with the yellow `YOU` border. The page is scannable in 14-team leagues again.
+
+### Backend
+- `backend/src/api/handlers/pulse.rs` narrative prompt reworded to prevent false "today's points" phrasing.
 
 ### Changed
 - **Dashboard Overall Rankings shows all teams** — removed the 7-team cap; the home board now renders every fantasy team in the league. In a 10+ team league the old cap hid the bottom half of the standings behind a View All click.

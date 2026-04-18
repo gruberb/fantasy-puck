@@ -38,14 +38,63 @@ const PulsePage = () => {
         </div>
       )}
 
-      {/* Personal Pulse narrative from Claude Sonnet 4.6. Hero position —
-          frames the rest of the page. Hidden if the LLM call failed. */}
+      {/* Tonight — merged "today's team snapshot" + "my players in action".
+          First thing the caller sees: their standing + which of their players
+          are playing today. */}
+      {myTeam && (
+        <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
+          <header className="bg-[#1A1A1A] text-white px-6 py-3">
+            <h2 className="font-extrabold uppercase tracking-wider text-sm">
+              Tonight
+            </h2>
+          </header>
+          <div className="p-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <Link
+                to={`${lp}/teams/${myTeam.teamId}`}
+                className="text-xl font-extrabold uppercase tracking-wider hover:text-[#2563EB]"
+              >
+                {myTeam.teamName}
+              </Link>
+              <p className="text-sm text-gray-500 mt-1">
+                {myTeam.playersActiveToday}/{myTeam.totalRosterSize} players have an NHL game today
+              </p>
+            </div>
+            <div className="flex items-center gap-6 text-right">
+              <StatCol label="Rank" value={`#${myTeam.rank}`} />
+              <StatCol label="Total" value={myTeam.totalPoints.toString()} />
+              <StatCol
+                label="Last day"
+                value={myTeam.pointsToday.toString()}
+                accent
+              />
+            </div>
+          </div>
+          {hasGamesToday && myGamesTonight.length > 0 ? (
+            <div className="p-4 border-t-2 border-[#1A1A1A] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {myGamesTonight.map((g) => (
+                <GameTonightCard key={g.gameId} game={g} />
+              ))}
+            </div>
+          ) : (
+            <div className="border-t-2 border-[#1A1A1A] p-6 text-center">
+              <p className="text-gray-500 text-sm uppercase tracking-wider">
+                No games scheduled today
+              </p>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Personal Pulse narrative from Claude Sonnet 4.6. Yellow header to
+          signal "this is your personal read"; visual weight now matches the
+          other major sections. Hidden if the LLM call failed. */}
       {narrative && (
         <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-          <header className="bg-[var(--color-you)] px-6 py-2">
-            <span className="text-[10px] uppercase tracking-widest text-[#1A1A1A] font-bold">
+          <header className="bg-[var(--color-you)] px-6 py-3">
+            <h2 className="font-extrabold uppercase tracking-wider text-sm text-[#1A1A1A]">
               Where You Stand
-            </span>
+            </h2>
           </header>
           <div className="p-6">
             <PulseNarrative text={narrative} />
@@ -54,9 +103,7 @@ const PulsePage = () => {
       )}
 
       {/* Rivalry hero line: compact head-to-head framing against the closest
-          rival by projected mean. Uses the same yellow/slate divergent bar as
-          the full Insights card so the two surfaces read as continuous, not
-          competing, framings of the same data. */}
+          rival by projected mean. */}
       {raceOdds?.rivalry && (
         <div className="bg-white border-2 border-[#1A1A1A] px-6 py-4">
           <p className="text-[10px] uppercase tracking-widest text-[var(--color-ink-muted)] font-bold mb-2">
@@ -66,8 +113,7 @@ const PulsePage = () => {
         </div>
       )}
 
-      {/* Race Odds — per-league Monte Carlo projections (moved from Insights
-          because fantasy-race content is personal, not NHL-generic). */}
+      {/* Race Odds — per-league Monte Carlo projections. */}
       <RaceOddsSection myTeamId={myTeam?.teamId ?? null} />
 
       {/* My Stakes — "which NHL series am I rooting for?" — every NHL team
@@ -90,69 +136,11 @@ const PulsePage = () => {
       )}
 
       {/* Series Rosters — each fantasy team's players grouped by NHL series.
-          The component file keeps its legacy name (SeriesForecastHero) for
-          internal API stability; the user-facing header is "Series Rosters". */}
+          Non-mine teams are collapsed by default. */}
       <SeriesForecastHero
         forecasts={seriesForecast}
         myTeamId={myTeam?.teamId ?? null}
       />
-
-      {/* Today's Pulse — quick stats */}
-      {myTeam && (
-        <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-          <header className="bg-white px-6 py-3 border-b-2 border-[#1A1A1A]">
-            <h2 className="font-extrabold uppercase tracking-wider text-sm">
-              Today's Pulse
-            </h2>
-          </header>
-          <div className="p-6 flex items-center justify-between">
-            <div>
-              <Link
-                to={`${lp}/teams/${myTeam.teamId}`}
-                className="text-xl font-extrabold uppercase tracking-wider hover:text-[#2563EB]"
-              >
-                {myTeam.teamName}
-              </Link>
-              <p className="text-sm text-gray-500 mt-1">
-                {myTeam.playersActiveToday}/{myTeam.totalRosterSize} players active today
-              </p>
-            </div>
-            <div className="flex items-center gap-6 text-right">
-              <StatCol label="Rank" value={`#${myTeam.rank}`} />
-              <StatCol label="Total" value={myTeam.totalPoints.toString()} />
-              <StatCol
-                label="Today"
-                value={myTeam.pointsToday.toString()}
-                accent
-              />
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* My Games Tonight */}
-      {hasGamesToday && myGamesTonight.length > 0 && (
-        <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-          <header className="bg-white px-6 py-3 border-b-2 border-[#1A1A1A]">
-            <h2 className="font-extrabold uppercase tracking-wider text-sm">
-              My Players In Action
-            </h2>
-          </header>
-          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {myGamesTonight.map((g) => (
-              <GameTonightCard key={g.gameId} game={g} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {!hasGamesToday && (
-        <div className="bg-white border-2 border-gray-200 p-6 text-center">
-          <p className="text-gray-500 text-sm uppercase tracking-wider">
-            No games scheduled today
-          </p>
-        </div>
-      )}
 
       {/* League Live Board with sparklines */}
       {leagueBoard.length > 0 && (
@@ -168,7 +156,7 @@ const PulsePage = () => {
               <span>Team</span>
               <span className="text-right">Total</span>
               <span className="text-right">Active</span>
-              <span className="text-right">Today</span>
+              <span className="text-right">Last</span>
               <span className="text-right">5-day</span>
             </div>
             {leagueBoard.map((team) => (

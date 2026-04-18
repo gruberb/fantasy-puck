@@ -165,7 +165,7 @@ async fn generate_pulse_narrative(response: &PulseResponse) -> Option<String> {
     let mut headline = String::new();
     if let Some(t) = &response.my_team {
         headline.push_str(&format!(
-            "Caller's team: {} · Rank #{} · {} total pts · {} today · {}/{} active today.\n",
+            "Caller's team: {} · Rank #{} · {} total pts · {} pts from the last completed scoring day · {}/{} players have an NHL game scheduled today.\n",
             t.team_name,
             t.rank,
             t.total_points,
@@ -204,6 +204,7 @@ Rules:
 - Never invent numbers.
 - Wrap player names and fantasy-team names in **double asterisks** for bold.
 - 4–7 sentences. Start on the verdict, not the weather.
+- `points_today` / "pts from the last completed scoring day" is yesterday's daily total (or the last day whose games were processed), NOT live scoring from games happening right now. If today is day 1 of a new round, treat those numbers as the trailing day's work, never as "today's points". Phrases like "pulling X today" or "generating X off Y active players today" are wrong — say "came into today with X" or "closed the last day with X".
 
 The frame: speak TO the caller (second person — "you", "your team"). This is their Pulse page, not a broadcast. Anchor on their rank, their gap to first, their closest threat, what today's slate means for them specifically, and any obvious read on which of their rostered NHL teams is carrying them. Be honest if the verdict isn't good."#,
         "messages": [
