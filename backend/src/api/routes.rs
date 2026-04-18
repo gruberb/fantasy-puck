@@ -239,6 +239,10 @@ pub fn create_router(db: FantasyDb, nhl_client: NhlClient, config: Arc<Config>) 
             get(handlers::admin::backfill_historical_playoffs),
         )
         .route(
+            "/api/admin/rebackfill-carousel",
+            get(handlers::admin::rebackfill_carousel),
+        )
+        .route(
             "/api/admin/calibrate",
             get(handlers::admin::calibrate),
         )

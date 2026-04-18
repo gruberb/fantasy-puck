@@ -257,6 +257,46 @@ pub struct GoalieStats {
     pub pim: i32,
 }
 
+/// A single game entry under the
+/// `/schedule/playoff-series/{season}/{letter}` endpoint. The response
+/// reliably contains `id`, `startTimeUTC`, scored `homeTeam`/`awayTeam`,
+/// and `gameState` for every game in the series — unlike the
+/// `/schedule/{date}` path, which intermittently drops late-round games
+/// when queried retroactively.
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayoffSeriesGames {
+    pub round: Option<i64>,
+    pub season: Option<i64>,
+    pub series_letter: Option<String>,
+    #[serde(default)]
+    pub games: Vec<PlayoffSeriesGame>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayoffSeriesGame {
+    pub id: u32,
+    #[serde(default)]
+    pub game_type: i64,
+    #[serde(rename = "startTimeUTC", default)]
+    pub start_time_utc: Option<String>,
+    #[serde(default)]
+    pub game_state: GameState,
+    pub home_team: PlayoffSeriesTeam,
+    pub away_team: PlayoffSeriesTeam,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayoffSeriesTeam {
+    #[serde(default)]
+    pub id: i64,
+    pub abbrev: String,
+    #[serde(default)]
+    pub score: Option<i32>,
+}
+
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayoffCarousel {
@@ -353,7 +393,7 @@ pub struct CommonName {
     pub default: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum GameState {
     Live,
@@ -362,6 +402,7 @@ pub enum GameState {
     Crit,
     Preview,
     Fut,
+    #[default]
     #[serde(other)]
     Unknown,
 }

@@ -481,6 +481,21 @@ impl NhlClient {
         self.make_request_cached(&url, ttl::PLAYOFF_CAROUSEL).await
     }
 
+    /// Fetch all games of one playoff series by its letter (A-O-ish).
+    /// Season is the 4-digit year of the playoffs' end (e.g. `2023` for
+    /// the 2022-23 playoffs). This endpoint returns every game in the
+    /// series with scored home/away teams, game IDs, and start times —
+    /// reliably for historical seasons where `/schedule/{date}` drops
+    /// games.
+    pub async fn get_playoff_series_games(
+        &self,
+        season: u32,
+        letter: &str,
+    ) -> Result<crate::models::nhl::PlayoffSeriesGames> {
+        let url = endpoints::playoffs::series_games(season, letter);
+        self.make_request_cached(&url, ttl::PLAYOFF_CAROUSEL).await
+    }
+
     /// Get the full landing/preview data for a game (matchup stats, goalies, etc.)
     pub async fn get_game_landing_raw(&self, game_id: u32) -> Result<serde_json::Value> {
         let url = endpoints::games::game_center(game_id);

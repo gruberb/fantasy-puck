@@ -4,6 +4,29 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.12.0 — 2026-04-18
+
+### Added — carousel-driven re-backfill for historical playoffs
+
+New admin endpoint `GET /api/admin/rebackfill-carousel?season=20222023`. Walks the playoff carousel + `/v1/schedule/playoff-series/{short_year}/{letter}` for each series and upserts every completed game's team-level row into `playoff_game_results`. This bypasses the date-iteration schedule endpoint that dropped Cup Finals and conference-finals games when queried retroactively.
+
+**Why this endpoint is better for historical data**: the `/schedule/{date}` response for a date in 2023 doesn't reliably include the playoff games that happened that day — the NHL API's retroactive `series_status` population is spotty. `/schedule/playoff-series/{year}/{letter}` is keyed by series, not by date, and reliably returns every game in that series with ID, start-time, home/away teams, scores, and game state. One call per series × 15 series per season = 75 calls for 5 historical seasons. Fast, clean, idempotent.
+
+**Scope**: team-level only — populates `playoff_game_results`. Skater-level data for past seasons (`playoff_skater_game_stats`) is not written here because (a) the per-game-boxscore fetch multiplies the call count by ~40× and (b) the current `player_projection` module only reads the current season's skater game log, so historical skater stats don't unblock anything immediate. A future pass can layer skater ingest on top of the same series walker if needed.
+
+**New types**: `PlayoffSeriesGames`, `PlayoffSeriesGame`, `PlayoffSeriesTeam` in `models::nhl`, plus `NhlClient::get_playoff_series_games(season, letter)`. `GameState` now derives `Default` (Unknown).
+
+**Usage**: for each backfilled season, call the endpoint once. Example via curl:
+
+```
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://fantasy-puck-api.fly.dev/api/admin/rebackfill-carousel?season=20222023"
+```
+
+Returns `"Rebackfilled N completed playoff games for season 20222023"`. Repeat for each season.
+
+After all 5 seasons are re-backfilled, `/api/admin/calibrate?season=…` should produce correct realized outcomes for R1–Cup Final, and the Brier scores will finally reflect how well the *model* predicts (instead of just how lossy the training data is).
+
 ## v1.11.1 — 2026-04-18
 
 ### Fixed — calibration scoring vs corrupt realized outcomes

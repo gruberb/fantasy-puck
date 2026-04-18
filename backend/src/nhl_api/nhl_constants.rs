@@ -66,6 +66,19 @@ pub mod playoffs {
     pub fn carousel_for_season(season: String) -> String {
         format!("{}{}{}", NHL_API_BASE_URL, CAROUSEL, season)
     }
+
+    /// Get the games list for one playoff series. Season is the
+    /// 4-digit year of the second half (e.g. `2023` for 2022-23);
+    /// letter is lowercase (`a`..`m` etc., values from the carousel's
+    /// `seriesLetter`).
+    pub fn series_games(season: u32, letter: &str) -> String {
+        format!(
+            "{}/v1/schedule/playoff-series/{}/{}",
+            NHL_API_BASE_URL,
+            season,
+            letter.to_lowercase()
+        )
+    }
 }
 
 /// Game related endpoints

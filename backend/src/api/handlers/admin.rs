@@ -12,7 +12,9 @@ use crate::api::routes::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::{Error, Result};
 use crate::infra::calibrate::{calibrate_season, CalibrationReport};
-use crate::utils::playoff_ingest::ingest_playoff_games_for_range;
+use crate::utils::playoff_ingest::{
+    ingest_playoff_games_for_range, rebackfill_playoff_season_via_carousel,
+};
 use crate::utils::scheduler;
 
 pub async fn process_rankings(
@@ -116,6 +118,45 @@ pub async fn backfill_historical_playoffs(
     Ok(json_success(format!(
         "Backfilled {} skater rows for playoff games between {} and {}",
         rows, params.start, params.end
+    )))
+}
+
+#[derive(Deserialize)]
+pub struct RebackfillParams {
+    /// 8-digit season, e.g. 20222023.
+    season: u32,
+}
+
+/// Re-backfill a past season's `playoff_game_results` by walking the
+/// playoff carousel + playoff-series-games endpoints instead of
+/// iterating `/schedule/{date}`. The by-series endpoint reliably
+/// returns every completed game for historical seasons, whereas the
+/// schedule endpoint drops late-round games. Fixes the missing Cup
+/// Final / conference-finals gaps that broke calibration ground truth.
+///
+/// `short_year` is derived automatically from the 8-digit season
+/// (e.g. 20222023 → 2023) since that's what the series-games URL needs.
+pub async fn rebackfill_carousel(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<RebackfillParams>,
+) -> Result<Json<ApiResponse<String>>> {
+    if !auth.is_admin {
+        return Err(Error::Forbidden("Admin access required".into()));
+    }
+    let short_year = params.season % 10_000;
+    let nhl = Arc::new(state.nhl_client.clone());
+    let rows = rebackfill_playoff_season_via_carousel(
+        &state.db,
+        &nhl,
+        params.season,
+        short_year,
+    )
+    .await?;
+    info!(season = params.season, rows, "carousel-driven rebackfill complete");
+    Ok(json_success(format!(
+        "Rebackfilled {} completed playoff games for season {}",
+        rows, params.season
     )))
 }
 

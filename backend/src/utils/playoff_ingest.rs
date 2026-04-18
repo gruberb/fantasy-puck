@@ -121,6 +121,112 @@ pub async fn is_playoff_skater_game_stats_empty(db: &FantasyDb) -> Result<bool> 
     Ok(count == 0)
 }
 
+/// Re-backfill a season's `playoff_game_results` via the playoff-series
+/// endpoint instead of date-by-date schedule iteration. For each series
+/// in the carousel we fetch the full games list (which reliably contains
+/// every game's ID, home/away, and score even for historical seasons)
+/// and upsert team-level rows.
+///
+/// Skater-level stats (`playoff_skater_game_stats`) are not populated
+/// here — this path is team-level only and aimed at fixing the
+/// calibration ground truth. Running this on a season that already has
+/// data is safe (upserts are idempotent).
+///
+/// `season` is the 8-digit season string (e.g. `20222023`), matching the
+/// shape `playoff_game_results.season` stores. `short_year` is the
+/// 4-digit calendar year of the playoff end, which the series-games
+/// endpoint expects in its URL (e.g. `2023` for the 20222023 playoffs).
+pub async fn rebackfill_playoff_season_via_carousel(
+    db: &FantasyDb,
+    nhl: &Arc<NhlClient>,
+    season: u32,
+    short_year: u32,
+) -> Result<usize> {
+    let carousel = nhl
+        .get_playoff_carousel(season.to_string())
+        .await?
+        .ok_or_else(|| crate::error::Error::Validation(format!(
+            "No playoff carousel for season {season}"
+        )))?;
+
+    let mut total: usize = 0;
+    for round in &carousel.rounds {
+        for series in &round.series {
+            let games = match nhl
+                .get_playoff_series_games(short_year, &series.series_letter)
+                .await
+            {
+                Ok(g) => g,
+                Err(e) => {
+                    warn!(
+                        season,
+                        letter = %series.series_letter,
+                        error = %e,
+                        "series-games fetch failed; skipping series"
+                    );
+                    continue;
+                }
+            };
+            for game in games.games {
+                if !game.game_state.is_completed() {
+                    continue;
+                }
+                let (Some(home_score), Some(away_score)) =
+                    (game.home_team.score, game.away_team.score)
+                else {
+                    continue;
+                };
+                let Some(ref start) = game.start_time_utc else {
+                    continue;
+                };
+                // Derive game_date from the start-time ISO string
+                // (YYYY-MM-DDThh:mm:ssZ).
+                let game_date = &start[..10];
+                let winner = if home_score > away_score {
+                    &game.home_team.abbrev
+                } else {
+                    &game.away_team.abbrev
+                };
+                let round_i16 = round.round_number as i16;
+
+                sqlx::query(
+                    r#"
+                    INSERT INTO playoff_game_results (
+                        season, game_type, game_id, game_date,
+                        home_team, away_team, home_score, away_score, winner, round
+                    )
+                    VALUES ($1, 3, $2, $3::date, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (game_id) DO UPDATE SET
+                        game_date  = EXCLUDED.game_date,
+                        home_team  = EXCLUDED.home_team,
+                        away_team  = EXCLUDED.away_team,
+                        home_score = EXCLUDED.home_score,
+                        away_score = EXCLUDED.away_score,
+                        winner     = EXCLUDED.winner,
+                        round      = EXCLUDED.round
+                    "#,
+                )
+                .bind(season as i32)
+                .bind(game.id as i64)
+                .bind(game_date)
+                .bind(&game.home_team.abbrev)
+                .bind(&game.away_team.abbrev)
+                .bind(home_score)
+                .bind(away_score)
+                .bind(winner)
+                .bind(round_i16)
+                .execute(db.pool())
+                .await
+                .map_err(crate::error::Error::Database)?;
+
+                total += 1;
+            }
+        }
+    }
+    info!(season, rows = total, "carousel-driven backfill complete");
+    Ok(total)
+}
+
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
