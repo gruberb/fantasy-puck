@@ -4,6 +4,31 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.9.0 — 2026-04-18
+
+### Refactored — prediction engine isolated in `domain/prediction/`
+
+The race-odds Monte Carlo, playoff Elo, player-projection blend, team ratings, series-state classifier, and backtest helpers now live under `backend/src/domain/prediction/` as pure-domain code with zero framework dependencies (no `sqlx`, no `axum`, no `reqwest`). The two DB-backed wrappers that used to live mixed-in — `compute_current_elo` and `project_players` — moved to `backend/src/infra/prediction.rs` and call into the pure domain helpers. Aligns the backend with the layered shape from [bulletproof-rust-web](https://github.com/gruberb/bulletproof-rust-web); sets up the extraction work sketched in `PREDICTION_SERVICE.md` at the repo root, which lays out how to lift the engine into a standalone crate or HTTP service later for re-use across products (e.g. a prediction-market frontend).
+
+### Fixed — Games page loading latency
+
+`/api/games?detail=extended` was serial end-to-end on cold loads: box-scores fetched in a for-loop one at a time, then per-team / per-player `get_player_game_log` calls also sequential inside the loop. On a 16-game slate with ~20 rostered players per team, that's ~640 sequential NHL round-trips. Fixed:
+
+- **Box-score pre-load now parallel** via `join_all`. The NhlClient's 5-concurrent semaphore still throttles, so we don't burst NHL; we just stop serializing when we don't need to.
+- **Pre-warm player-game-log cache** by firing every rostered skater's `get_player_game_log` in parallel before the sequential post-processing runs. The serial calls downstream then hit the in-memory cache instead of doing network. ~640 serial → ~130 parallel → 5 concurrent at the NHL boundary.
+
+Cold-load "Loading Games Data…" falls from multi-second to sub-second on most date navigations.
+
+### Fixed — iOS team names truncating to empty
+
+**Pulse > League Live Board**: the grid was sized `[2rem_1fr_4rem_4rem_4rem_5rem]` regardless of viewport. On a 375px iPhone minus padding/gaps the fixed tracks summed to more than the viewport width, so the `1fr` Team column collapsed to zero. Now uses a tighter `[1.5rem_minmax(0,1fr)_2.5rem_2.5rem_2.5rem]` on mobile (5-day sparkline column hidden), widens to the full 6-track layout at `sm:`. "Yesterday" column header also shortens to `Y'day` on mobile.
+
+**Insights > Stanley Cup Odds**: team rows rendered `getNHLTeamShortName(abbrev)` (`HURRICANES`, `PANTHERS`, …) into a narrow truncating cell that on iPhone clipped to near-nothing. Mobile now shows the 3-letter `abbrev` (`CAR`, `FLA`); desktop keeps the long name.
+
+### Added — PREDICTION_SERVICE.md
+
+Plan doc at the repo root for extracting the prediction engine into a standalone crate or HTTP service. Covers current state, motivations (reuse, independent scaling, calibration isolation), three architecture options (workspace crate / standalone HTTP / gRPC), the JSON data contract for `/simulate`, and a phased migration path.
+
 ## v1.8.1 — 2026-04-18
 
 ### Fixed

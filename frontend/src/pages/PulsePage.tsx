@@ -151,18 +151,21 @@ const PulsePage = () => {
             </h2>
           </header>
           <div className="divide-y divide-gray-100">
-            <div className="grid grid-cols-[2rem_1fr_4rem_4rem_4rem_5rem] gap-2 px-4 py-2 text-[10px] uppercase tracking-wider text-gray-400 font-bold">
+            <div className="grid grid-cols-[1.5rem_minmax(0,1fr)_2.5rem_2.5rem_2.5rem] sm:grid-cols-[2rem_minmax(0,1fr)_4rem_4rem_4rem_5rem] gap-2 px-3 sm:px-4 py-2 text-[10px] uppercase tracking-wider text-gray-400 font-bold">
               <span>#</span>
               <span>Team</span>
               <span className="text-right">Total</span>
               <span className="text-right">Active</span>
-              <span className="text-right">Yesterday</span>
-              <span className="text-right">5-day</span>
+              <span className="text-right">
+                <span className="sm:hidden">Y'day</span>
+                <span className="hidden sm:inline">Yesterday</span>
+              </span>
+              <span className="text-right hidden sm:block">5-day</span>
             </div>
             {leagueBoard.map((team) => (
               <div
                 key={team.teamId}
-                className={`grid grid-cols-[2rem_1fr_4rem_4rem_4rem_5rem] gap-2 px-4 py-2.5 text-sm items-center ${
+                className={`grid grid-cols-[1.5rem_minmax(0,1fr)_2.5rem_2.5rem_2.5rem] sm:grid-cols-[2rem_minmax(0,1fr)_4rem_4rem_4rem_5rem] gap-2 px-3 sm:px-4 py-2.5 text-sm items-center ${
                   team.isMyTeam
                     ? "bg-[#FACC15]/10 border-l-4 border-[#FACC15]"
                     : ""
@@ -196,7 +199,7 @@ const PulsePage = () => {
                 >
                   {team.pointsToday}
                 </span>
-                <span className="flex justify-end">
+                <span className="hidden sm:flex justify-end">
                   <Sparkbars values={team.sparkline} label="last 5 days" />
                 </span>
               </div>

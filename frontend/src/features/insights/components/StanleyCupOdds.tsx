@@ -110,7 +110,8 @@ function TeamCell({
       />
       <div className="min-w-0 flex-1">
         <p className="text-xs font-bold uppercase tracking-wider truncate text-[#1A1A1A]">
-          {getNHLTeamShortName(abbrev)}
+          <span className="md:hidden">{abbrev}</span>
+          <span className="hidden md:inline">{getNHLTeamShortName(abbrev)}</span>
         </p>
         {series && series.rosteredTags.length > 0 && (
           <div className="mt-0.5">
