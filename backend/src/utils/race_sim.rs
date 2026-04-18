@@ -202,6 +202,18 @@ pub const DEFAULT_K_FACTOR: f32 = 0.010;
 /// Default fantasy PPG prior when a skater's regular-season rate is unknown.
 pub const DEFAULT_PPG: f32 = 0.45;
 
+/// Negative-Binomial dispersion parameter for the per-player scoring
+/// distribution. NHL fantasy scoring is overdispersed relative to
+/// Poisson (mean == variance is too tight for a skater who alternates
+/// blank nights with 3-point games). We model it as a Gamma-Poisson
+/// mixture with mean λ and variance λ + λ²/r.
+///
+/// `r = 4.0` gives variance ≈ 1.25·λ at λ=1 and ≈ 2.5·λ at λ=5, which
+/// roughly matches empirical per-game point spread for top skaters. A
+/// future P4.2 hyperparameter pass will retune this against historical
+/// scoring variance.
+pub const NB_DISPERSION: f32 = 4.0;
+
 // ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
@@ -307,8 +319,13 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
 
     let mut team_samples: Vec<Vec<f32>> = vec![Vec::with_capacity(trials); n_teams];
     let mut player_samples: Vec<Vec<f32>> = vec![Vec::with_capacity(trials); n_players];
-    let mut team_wins: Vec<u32> = vec![0; n_teams];
-    let mut team_top3: Vec<u32> = vec![0; n_teams];
+    // Fractional accumulators: ties split credit evenly across the
+    // tied teams so `win_prob` always sums to 1.0 (or close to it,
+    // floating-point) even when a seed produces tied totals. The old
+    // integer-counter version gave full credit to whichever team
+    // happened to sort first.
+    let mut team_wins: Vec<f32> = vec![0.0; n_teams];
+    let mut team_top3: Vec<f32> = vec![0.0; n_teams];
     // head_to_head_wins[i][j] = count of trials where team i's total > team j's.
     // Strict inequality: ties contribute to neither side.
     let mut h2h_wins: Vec<Vec<u32>> = vec![vec![0; n_teams]; n_teams];
@@ -445,7 +462,10 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
         for (pi, player) in players.iter().enumerate() {
             let rg = *remaining_games.get(&player.nhl_team).unwrap_or(&0);
             let sim_pts = if rg > 0 && player.ppg > 0.0 {
-                sample_poisson(player.ppg * rg as f32, rng)
+                // Negative-Binomial widens the tails vs plain Poisson so
+                // p10/p90 / head-to-head reflect real playoff variance
+                // instead of the Poisson mean-equals-variance straitjacket.
+                sample_negbin(player.ppg * rg as f32, NB_DISPERSION, rng)
             } else {
                 0
             };
@@ -463,12 +483,46 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
             ranking.push((i, t));
         }
         ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        for (rank, (team_idx, _)) in ranking.iter().enumerate() {
-            if rank == 0 {
-                team_wins[*team_idx] += 1;
-            }
-            if rank < 3 {
-                team_top3[*team_idx] += 1;
+
+        // Win credit: fractional split across all teams tied for the
+        // top score. `top_score` is the sort leader; count how many
+        // entries equal it.
+        let top_score = ranking.first().map(|(_, s)| *s).unwrap_or(0.0);
+        let tied_for_first = ranking
+            .iter()
+            .take_while(|(_, s)| (*s - top_score).abs() < 1e-6)
+            .count()
+            .max(1);
+        let win_share = 1.0 / tied_for_first as f32;
+        for (team_idx, _) in ranking.iter().take(tied_for_first) {
+            team_wins[*team_idx] += win_share;
+        }
+
+        // Top-3: split credit across whichever teams overlap the 3rd
+        // rank. If teams 3, 4, 5 all have the same score as rank 3,
+        // split the *remaining* (3 - fully_earned) credit among them.
+        if !ranking.is_empty() {
+            // Everyone ranked above the 3rd distinct score earns a full
+            // 1.0. Teams tied at the 3rd distinct score share the
+            // remaining credit (3 - earned_so_far).
+            let mut earned_so_far = 0.0f32;
+            let mut i = 0usize;
+            while i < ranking.len() && earned_so_far + 1e-6 < 3.0 {
+                let score_i = ranking[i].1;
+                let j = i
+                    + ranking[i..]
+                        .iter()
+                        .take_while(|(_, s)| (*s - score_i).abs() < 1e-6)
+                        .count();
+                // This group's slice is [i, j). Give them (remaining / group_size).
+                let group_size = (j - i) as f32;
+                let remaining = (3.0 - earned_so_far).max(0.0);
+                let share = (remaining.min(group_size)) / group_size;
+                for (team_idx, _) in &ranking[i..j] {
+                    team_top3[*team_idx] += share;
+                }
+                earned_so_far += share * group_size;
+                i = j;
             }
         }
 
@@ -687,6 +741,60 @@ fn sample_poisson(lambda: f32, rng: &mut SmallRng) -> i32 {
             return k - 1;
         }
     }
+}
+
+/// Sample from Gamma(shape, scale) using Marsaglia & Tsang's method
+/// (shape ≥ 1) with the `Gamma(r, θ) = Gamma(r+1, θ) * U^(1/r)` boost
+/// for shape < 1. Mean = shape·scale, variance = shape·scale². Kept
+/// dependency-free for the same reason as `sample_poisson`: tiny usage
+/// surface, no point pulling in `rand_distr` for one draw.
+fn sample_gamma(shape: f32, scale: f32, rng: &mut SmallRng) -> f32 {
+    if shape <= 0.0 || scale <= 0.0 {
+        return 0.0;
+    }
+    if shape < 1.0 {
+        // Boost: X ~ Gamma(shape) == Gamma(shape+1) * U^(1/shape).
+        let u: f32 = rng.r#gen::<f32>().max(f32::MIN_POSITIVE);
+        return sample_gamma(shape + 1.0, scale, rng) * u.powf(1.0 / shape);
+    }
+    // Marsaglia–Tsang
+    let d = shape - 1.0 / 3.0;
+    let c = 1.0 / (9.0 * d).sqrt();
+    loop {
+        // Sample standard normal via Box–Muller (one draw per iteration
+        // is fine; acceptance rate is ~96%).
+        let u1: f32 = rng.r#gen::<f32>().max(f32::MIN_POSITIVE);
+        let u2: f32 = rng.r#gen::<f32>();
+        let n = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos();
+        let v = (1.0 + c * n).powi(3);
+        if v <= 0.0 {
+            continue;
+        }
+        let u: f32 = rng.r#gen::<f32>().max(f32::MIN_POSITIVE);
+        let x2 = n * n;
+        if u < 1.0 - 0.0331 * x2 * x2 {
+            return d * v * scale;
+        }
+        if u.ln() < 0.5 * x2 + d - d * v + d * v.ln() {
+            return d * v * scale;
+        }
+    }
+}
+
+/// Negative-Binomial via Gamma-Poisson mixture. Mean is `lambda`;
+/// variance is `lambda + lambda²/dispersion`. As `dispersion → ∞` the
+/// distribution collapses to plain Poisson.
+fn sample_negbin(lambda: f32, dispersion: f32, rng: &mut SmallRng) -> i32 {
+    if lambda <= 0.0 {
+        return 0;
+    }
+    if dispersion <= 0.0 || !dispersion.is_finite() {
+        return sample_poisson(lambda, rng);
+    }
+    // Gamma(shape = dispersion, scale = lambda / dispersion) has
+    // mean = lambda and variance = lambda²/dispersion.
+    let theta = sample_gamma(dispersion, lambda / dispersion, rng);
+    sample_poisson(theta, rng)
 }
 
 fn summarise(samples: &[f32]) -> (f32, f32, f32, f32) {
@@ -1001,6 +1109,54 @@ mod tests {
     }
 
     #[test]
+    fn ties_split_win_credit_fractionally() {
+        // Four fantasy teams, each with an empty roster → every trial
+        // ends in a 4-way tie at 0 points. Each team must get exactly
+        // 0.25 win_prob (a previous integer-counter version would have
+        // given 1.0 to whichever team happened to sort first).
+        let input = RaceSimInput {
+            bracket: baseline_bracket(),
+            ratings: HashMap::new(),
+            k_factor: DEFAULT_K_FACTOR,
+            fantasy_teams: vec![
+                SimFantasyTeam {
+                    team_id: 1,
+                    team_name: "A".into(),
+                    players: vec![],
+                },
+                SimFantasyTeam {
+                    team_id: 2,
+                    team_name: "B".into(),
+                    players: vec![],
+                },
+                SimFantasyTeam {
+                    team_id: 3,
+                    team_name: "C".into(),
+                    players: vec![],
+                },
+                SimFantasyTeam {
+                    team_id: 4,
+                    team_name: "D".into(),
+                    players: vec![],
+                },
+            ],
+        };
+        let out = simulate_with_seed(&input, 200, 1);
+        let total: f32 = out.teams.iter().map(|t| t.win_prob).sum();
+        assert!(
+            (total - 1.0).abs() < 1e-4,
+            "win probs must still sum to 1.0 under ties, got {total}"
+        );
+        for t in &out.teams {
+            assert!(
+                (t.win_prob - 0.25).abs() < 1e-4,
+                "each tied team must get exactly 1/4 of the win credit, got {}",
+                t.win_prob
+            );
+        }
+    }
+
+    #[test]
     fn in_progress_late_round_is_respected() {
         // A team up 3-0 in an R2 series should advance to the Conference
         // Finals near-deterministically (clamp caps at 0.95 per game, so
@@ -1136,6 +1292,58 @@ mod tests {
             (mean - 2.0).abs() < 0.15,
             "empirical mean {} should be within 0.15 of lambda=2.0",
             mean
+        );
+    }
+
+    #[test]
+    fn gamma_mean_and_variance_match_formula() {
+        // Gamma(shape, scale): mean = shape·scale, variance = shape·scale².
+        let mut rng = SmallRng::seed_from_u64(11);
+        let shape = 4.0f32;
+        let scale = 1.5f32;
+        let samples: Vec<f32> = (0..8000).map(|_| sample_gamma(shape, scale, &mut rng)).collect();
+        let mean = samples.iter().sum::<f32>() / samples.len() as f32;
+        let var = samples.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / samples.len() as f32;
+        let expected_mean = shape * scale;
+        let expected_var = shape * scale * scale;
+        assert!(
+            (mean - expected_mean).abs() < 0.2,
+            "empirical mean {} vs expected {}",
+            mean,
+            expected_mean
+        );
+        assert!(
+            (var - expected_var).abs() < 1.0,
+            "empirical variance {} vs expected {}",
+            var,
+            expected_var
+        );
+    }
+
+    #[test]
+    fn negbin_variance_exceeds_poisson() {
+        // At lambda = 5, dispersion = 4, variance should be ~5 + 25/4 ≈
+        // 11.25 — well over Poisson's 5. The empirical variance from
+        // enough draws should clearly exceed the Poisson's lambda.
+        let mut rng = SmallRng::seed_from_u64(13);
+        let lambda = 5.0f32;
+        let n = 8000;
+        let nb_samples: Vec<i32> = (0..n)
+            .map(|_| sample_negbin(lambda, 4.0, &mut rng))
+            .collect();
+        let nb_mean = nb_samples.iter().map(|x| *x as f32).sum::<f32>() / n as f32;
+        let nb_var = nb_samples
+            .iter()
+            .map(|x| (*x as f32 - nb_mean).powi(2))
+            .sum::<f32>()
+            / n as f32;
+        // Mean matches lambda; variance exceeds lambda substantially.
+        assert!((nb_mean - lambda).abs() < 0.3, "nb_mean {}", nb_mean);
+        assert!(
+            nb_var > lambda * 1.5,
+            "NB variance {} should exceed 1.5·λ = {} (Poisson variance is λ)",
+            nb_var,
+            lambda * 1.5
         );
     }
 

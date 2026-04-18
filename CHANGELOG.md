@@ -6,24 +6,70 @@ All notable changes to Fantasy Puck are documented here.
 
 ## v1.8.0 — 2026-04-18
 
-### Fixed — race-odds bracket-state correctness (P0)
+Race-odds rework: the Monte Carlo engine was sound but the inputs it ran on were blunt. This release restructures the sim to be correct end-to-end across the bracket, switches from frozen-RS team strength to a game-log-driven playoff Elo, replaces the crude `rs_points/82` PPG with a Bayesian blend that leans on a real playoff history, and widens the per-player tails with a Negative-Binomial draw.
 
-The race-odds sim was only bracket-state-aware for round 1. Once round 2 starts (~April 29), the old `RaceSimInput { round1: Vec<CurrentSeries>, ... }` + `pair_and_simulate(from 0-0)` path would have re-opened partially- or fully-decided R2+ series while `games_played_from_carousel` was already summing R2+ games into `games_played_so_far`. Net effect: a team up 3-0 in R2 would still be simulated as roughly 50/50 to advance, and the fantasy-points Poisson draw would see an inconsistent `remaining = team_games - already_played` that silently saturated to zero. This was invisible on day 1 of playoffs (only R1 active) but would have manifested mid-second-round.
+### Fixed — bracket-state correctness
 
-**Changes**
-- **New `SeriesState` enum** in `backend/src/utils/race_sim.rs`: `Future | InProgress { top_team, top_wins, bottom_team, bottom_wins } | Completed { winner, loser, total_games }`. Every slot in the bracket is tagged with one of these three and the sim resolves each differently per trial.
-- **New `BracketState` struct** — the full playoff tree as `rounds: Vec<Vec<SeriesState>>`, positional pairing (`rounds[r+1][i]` fed by `rounds[r][2i]` and `rounds[r][2i+1]`). Matches the NHL's static-bracket format.
-- **`RaceSimInput.round1: Vec<CurrentSeries>` → `RaceSimInput.bracket: BracketState`**. `games_played_so_far` dropped from the input — the sim now tracks `remaining_games` per trial directly, no subtraction confusion. `games_played_so_far` is still computed in `race_odds.rs` but only for the `player_ppg` tier-1 decision (switch from RS-PPG to playoff-PPG).
-- **New `bracket_from_carousel`** in `backend/src/api/handlers/race_odds.rs`: walks all four rounds of the NHL playoff carousel, classifies each series by its win totals (4+ wins → Completed, both teams present → InProgress, otherwise Future), and pads missing rounds/slots with `Future` so the sim always sees a depth-4 tree.
-- **`expected_games` semantics preserved**: still "average total games this team plays across the run," computed as `already_played + mean(remaining_games across trials)`. `MyStakes` / `StanleyCupOdds` frontends continue to read it as a total.
+The sim was only bracket-state-aware for round 1. Once round 2 starts (~Apr 29), the old `RaceSimInput { round1: Vec<CurrentSeries>, ... }` + `pair_and_simulate(from 0-0)` path would have re-opened partially- or fully-decided R2+ series while `games_played_from_carousel` was already summing R2+ games into `games_played_so_far`. A team up 3-0 in R2 would still be simulated as ~50/50 to advance, and the fantasy-points Poisson draw would see an inconsistent `remaining = team_games - already_played` that silently saturated to zero. Invisible on day 1 of playoffs; would have corrupted projections mid-second-round.
 
-**Tests** (`backend/src/utils/race_sim.rs`, `backend/src/api/handlers/race_odds.rs`)
-- `completed_r1_series_propagate_winner_deterministically` — Completed R1 series honour their real winner in 100% of trials; losers never advance R1.
-- `completed_series_add_zero_remaining_games` — a fully-Completed bracket projects exactly the locked-in `playoff_points_so_far` with no sampled points on top.
-- `in_progress_late_round_is_respected` — a team up 3-0 in an R2 series after winning R1 reaches the Conference Finals in ≥90% of trials (old code: ~50%). A team down 0-3 reaches the CF in ≤15% of trials.
-- `bracket_from_carousel_pads_missing_rounds_with_future` — a carousel with only R1 populated still yields a 4-round bracket with R2/R3/F filled with `Future` slots.
-- `bracket_from_carousel_classifies_series_state` — 4-1 → Completed (winner, loser, 5 games); 2-1 → InProgress with live wins; 0-0 with both teams present → InProgress (not Future).
-- `bracket_from_carousel_absent_returns_empty` — None carousel yields zero-depth bracket (sim runs, contributes zero points, no panic).
+- **New `SeriesState` enum** in `backend/src/utils/race_sim.rs`: `Future | InProgress { top_team, top_wins, bottom_team, bottom_wins } | Completed { winner, loser, total_games }`. Every slot in the bracket is tagged and the sim resolves each differently per trial.
+- **New `BracketState` struct** — full playoff tree as `rounds: Vec<Vec<SeriesState>>`, positional pairing (`rounds[r+1][i]` fed by `rounds[r][2i]` and `rounds[r][2i+1]`).
+- **`RaceSimInput.round1` → `RaceSimInput.bracket`**. `games_played_so_far` dropped from the sim's input; per-trial tracking is now `remaining_games` only.
+- **`bracket_from_carousel`** in `backend/src/api/handlers/race_odds.rs` walks all four rounds of the NHL carousel and pads missing slots with `Future`.
+- **`expected_games` semantics preserved** as "average total games across the run" = `already_played + mean(remaining)`.
+
+### Added — persisted playoff facts
+
+The input pipeline can't improve without per-game data. Two new tables plus a nightly ingest:
+
+- **`playoff_skater_game_stats`** — one row per `(game_id, player_id)` with goals, assists, points, shots, pp_points, team, opponent, home flag.
+- **`playoff_game_results`** — one row per `game_id` with team scores, winner, round. Chronological-replay index for the Elo update loop.
+- **`utils/playoff_ingest`** — nightly ingest of yesterday's completed box scores (10am UTC scheduler step, before the existing insights + race-odds prewarm). Same module handles the startup backfill from `playoff_start` → today if the table is empty. Goalies skipped. Upsert-on-conflict keeps re-runs idempotent.
+
+### Added — 5-year historical seed
+
+- **`historical_playoff_skater_totals`** table (keyed `(player_name, born)` to disambiguate the real-world duplicate "Sebastian Aho").
+- **`backend/scripts/parse_historical_playoff_skaters.py`** parses the tab-separated hockey-reference export. Handles TOT (traded) rows that split across two physical lines and drops repeated-header artifacts. Output: 600 rows, ~36 KB CSV at `backend/data/historical_playoff_skater_totals.csv`.
+- **`utils/historical_seed`** embeds the CSV with `include_str!` so the Fly binary stays self-contained, then runs an idempotent UNNEST-driven bulk INSERT once at startup.
+
+### Added — dynamic playoff Elo
+
+Replaces `team_ratings::from_standings` as the sim's team-strength source when `game_type == 3`:
+
+- **`utils/playoff_elo`** — seeds `elo_0 = 1500 + 6·(season_points − league_avg)` from the NHL standings, replays every completed playoff game chronologically with the standard logistic-Elo update, `+35` home-ice advantage, and a `ln(|goal_diff|+1)` blowout multiplier. K=6. Missing-team policy falls back to last persisted rating (or surfaces the failure rather than silently flattening at 0.0).
+- **New `ELO_K_FACTOR = ln(10)/400 ≈ 0.00576`** in `race_odds.rs` for the Elo rating scale. Applying the old `k = 0.010` (tuned for the RS-points scale) to Elo would pin every series outcome to the favorite.
+
+### Added — Bayesian player projection
+
+- **`utils/player_projection`** — replaces `race_odds::player_ppg` when on the playoff path. Shrinkage blend of four signals:
+  ```
+  projected_ppg = (α·rs_ppg + po_gp·blended_po_ppg + β·hist_ppg) / (α + po_gp + β)
+  blended_po_ppg = 0.65·po_ppg + 0.35·recent_ppg
+  recent_ppg     = Σ 2^(−i/4) · points_i / Σ 2^(−i/4)   over the last 10 team games
+  ```
+  `α = 10`, `β = 4` (games-equivalent prior strengths). Historical prior resolved by name match. Availability multiplier `0.3` mutes a player who's absent from all playoff games after their team has played ≥3.
+- **`project_players` loads every rostered skater's signals in one DB round-trip.** `build_fantasy_teams_playoff` (new in `race_odds.rs`) flattens across fantasy teams, batches the query, and assembles `SimFantasyTeam` off the returned map. Same path for `build_champion_input`'s top-40 global leaderboard.
+
+### Changed — simulation polish
+
+- **Negative-Binomial sampling** replaces plain Poisson for per-player point draws. Gamma-Poisson mixture with dispersion `r = 4`: variance `= λ + λ²/r`. Bridges the "Poisson is too tight" gap in `p10/p90`, head-to-head pairwise, and top-3 tails. Mean unchanged. `DEFAULT_K_FACTOR` / `ELO_K_FACTOR` independent, so upstream calibration is not affected.
+- **Fractional tie-splitting in `win_prob` / `top3_prob`**. Teams tied for first now share `1 / tied_count` each. Top-3 credit splits at the rank-3 boundary. Ensures `Σ win_prob ≈ 1.0` in small leagues where ties are possible; previously one team got full credit by sort order.
+- **Model version in cache key**: `race_odds:v2:...` so deploys don't serve stale same-day odds under the old model.
+
+### Added — backtest scaffolding
+
+- **`utils/backtest`** exposes `brier_score`, `log_loss`, `calibration_curve`, `mae`, `rmse`, `interval_coverage`, and `reconstruct_bracket_from_results` (group completed games into series, pad missing slots with `Future`). Enough to measure calibration against realized outcomes once enough games accrue. A full historical-day simulation loop is the next step but is gated on ingesting 2021-2025 box scores into `playoff_game_results`.
+
+### Tests
+
+Lib suite at **52 passing** (was 11 before the rework). New coverage:
+- 3 bracket-state correctness regressions.
+- 3 carousel-to-BracketState classification tests.
+- 6 playoff-Elo tests (seeding, upset payoff, blowout scaling, zero-sum, home-ice).
+- 6 player-projection tests (cold start, heavy sample override, historical anchor, recency weighting, absent multiplier, empty input).
+- 1 tie-splitting test (four empty rosters must each get 0.25 win-prob).
+- 2 distribution tests (Gamma mean/variance, NegBin variance exceeds Poisson).
+- 9 backtest helpers (Brier, log-loss, calibration, MAE/RMSE, interval coverage, bracket reconstruction).
 
 ## v1.7.4 — 2026-04-18
 

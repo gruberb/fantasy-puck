@@ -1,4 +1,5 @@
 pub mod api;
+pub mod backtest;
 pub mod fantasy;
 pub mod historical_seed;
 pub mod nhl;
