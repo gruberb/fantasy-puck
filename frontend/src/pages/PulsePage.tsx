@@ -11,7 +11,7 @@ import { getNHLTeamLogoUrl, getNHLTeamShortName, nhlPlayerProfileUrl } from "@/u
 import type { MyGameTonight } from "@/features/pulse";
 
 const PulsePage = () => {
-  const { pulse, isLoading, error, hasLive } = usePulse();
+  const { pulse, isLoading, error } = usePulse();
   const { activeLeagueId } = useLeague();
   const lp = activeLeagueId ? `/league/${activeLeagueId}` : "";
 
@@ -27,12 +27,6 @@ const PulsePage = () => {
 
   return (
     <div className="space-y-6">
-      {hasLive && (
-        <div className="bg-[#DC2626] text-white px-4 py-1.5 text-[10px] uppercase tracking-widest font-bold text-center">
-          Live — auto-refreshing every 30s
-        </div>
-      )}
-
       {/* Tonight — merged "today's team snapshot" + "my players in action".
           First thing the caller sees: their standing + which of their players
           are playing today. */}

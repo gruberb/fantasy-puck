@@ -4,6 +4,14 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## frontend v1.10.2 — 2026-04-18
+
+### Removed — Pulse 30s auto-refresh
+
+`usePulse` was polling every 30 seconds while a game was live, and `PulsePage` rendered a red "LIVE — AUTO-REFRESHING EVERY 30S" banner to tell the user about it. Playoff data does not change quickly enough to justify that cadence, and v1.15's richer race-odds path means every Pulse refresh now does a heavier server-side sim. Removed both the `setInterval` and the banner. React Query's default `refetchOnWindowFocus` still produces a fresh fetch when the user returns to the tab; `staleTime` bumped from 15s → 60s to match.
+
+Games-page auto-refresh (same 30s cadence) is untouched — that's the box-score view where mid-period score changes genuinely matter.
+
 ## frontend v1.10.1 — 2026-04-18
 
 ### Fixed — stale Stanley Cup Odds methodology blurb
