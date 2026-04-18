@@ -2,4 +2,5 @@
 //! database and external APIs. Handlers depend on `infra`; `domain`
 //! never does.
 
+pub mod calibrate;
 pub mod prediction;

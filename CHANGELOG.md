@@ -4,7 +4,24 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
-## v1.10.0 — 2026-04-18
+## v1.11.0 — 2026-04-18
+
+### Added — calibration admin endpoint (P4.2 MVP)
+
+New `GET /api/admin/calibrate?season=20222023` endpoint measures how calibrated the current race-odds model is against a completed historical season's realized outcomes. Requires the season to be backfilled first via `/api/admin/backfill-historical`.
+
+How it works (`backend/src/infra/calibrate.rs`):
+1. Loads every completed game for the requested season from `playoff_game_results`.
+2. Folds the games through `backtest::reconstruct_bracket_from_results` to get the realized bracket — who actually advanced out of each round.
+3. Rebuilds the day-1 `BracketState` (same R1 pairings, wins reset to 0-0, later rounds `Future`).
+4. Seeds Elo from the NHL standings endpoint, applies the current production hyperparameters (`ELO_K_FACTOR`, home-ice bonus, NB dispersion), runs 5000 Monte Carlo trials.
+5. Scores the predicted round-advancement probabilities against the `{0, 1}` realized outcomes per team with **Brier score** and **log-loss**, per round (R1 / CF / Cup Final / Cup).
+
+The response includes per-team `predicted_advance_r1 / _r2 / _r3 / _cup_win` alongside the realized outcome, plus aggregate metrics per round. A reasonable Brier on R1 is ≤ 0.22 (the "always predict 50%" baseline is 0.25, a perfect model is 0); the further out you look, the higher the irreducible noise — Cup-winner Brier near 1/16 × 15/16 ≈ 0.06 is already "can't really do better."
+
+This is the minimum-viable instrument. If one-season Brier looks off, a follow-up lands a grid-search tuning pass; if not, tuning is low-leverage and we move on.
+
+**Caveat**: the MVP seeds Elo from the *current* standings snapshot (NHL API doesn't expose historical standings at the right date without extra plumbing). For the most recently completed season the bias is small; for 2021 it's larger. Worth remembering when interpreting the numbers.
 
 ### Added — per-team home-ice advantage
 

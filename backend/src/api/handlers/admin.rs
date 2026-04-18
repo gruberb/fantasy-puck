@@ -11,6 +11,7 @@ use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::{Error, Result};
+use crate::infra::calibrate::{calibrate_season, CalibrationReport};
 use crate::utils::playoff_ingest::ingest_playoff_games_for_range;
 use crate::utils::scheduler;
 
@@ -116,4 +117,38 @@ pub async fn backfill_historical_playoffs(
         "Backfilled {} skater rows for playoff games between {} and {}",
         rows, params.start, params.end
     )))
+}
+
+#[derive(Deserialize)]
+pub struct CalibrateParams {
+    /// 8-digit season, e.g. 20222023.
+    season: u32,
+}
+
+/// Score the current race-odds model against a completed historical
+/// season's realized outcomes. Returns per-team predicted-vs-outcome
+/// deltas plus aggregate Brier / log-loss per round.
+///
+/// The season must already be backfilled via
+/// `/api/admin/backfill-historical`. The sim runs with today's
+/// production hyperparameters (Elo k, home-ice bonus, NB dispersion,
+/// …) — if the aggregate Brier looks off, that's the signal we need
+/// to invest in grid-search tuning.
+pub async fn calibrate(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<CalibrateParams>,
+) -> Result<Json<ApiResponse<CalibrationReport>>> {
+    if !auth.is_admin {
+        return Err(Error::Forbidden("Admin access required".into()));
+    }
+    let report = calibrate_season(&state.db, &state.nhl_client, params.season).await?;
+    info!(
+        season = params.season,
+        teams = report.teams_evaluated,
+        brier_r1 = report.brier_r1,
+        brier_cup = report.brier_cup,
+        "calibration run complete"
+    );
+    Ok(json_success(report))
 }
