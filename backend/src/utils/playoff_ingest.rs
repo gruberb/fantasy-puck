@@ -150,6 +150,7 @@ pub async fn rebackfill_playoff_season_via_carousel(
         )))?;
 
     let mut total: usize = 0;
+    let mut per_series_log: Vec<String> = Vec::new();
     for round in &carousel.rounds {
         for series in &round.series {
             let games = match nhl
@@ -158,25 +159,31 @@ pub async fn rebackfill_playoff_season_via_carousel(
             {
                 Ok(g) => g,
                 Err(e) => {
-                    warn!(
-                        season,
-                        letter = %series.series_letter,
-                        error = %e,
-                        "series-games fetch failed; skipping series"
-                    );
-                    continue;
+                    // Surface rather than silently swallow — silent
+                    // failures were masking a real NHL-side problem and
+                    // made the whole backfill look like a no-op.
+                    return Err(crate::error::Error::NhlApi(format!(
+                        "series {} ({}): {}",
+                        series.series_letter, short_year, e
+                    )));
                 }
             };
+            let games_count = games.games.len();
+            let mut accepted = 0;
+            let mut skipped_reasons: Vec<&'static str> = Vec::new();
             for game in games.games {
                 if !game.game_state.is_completed() {
+                    skipped_reasons.push("not_completed");
                     continue;
                 }
                 let (Some(home_score), Some(away_score)) =
                     (game.home_team.score, game.away_team.score)
                 else {
+                    skipped_reasons.push("no_score");
                     continue;
                 };
                 let Some(ref start) = game.start_time_utc else {
+                    skipped_reasons.push("no_start_time");
                     continue;
                 };
                 // Derive game_date from the start-time ISO string
@@ -219,11 +226,21 @@ pub async fn rebackfill_playoff_season_via_carousel(
                 .await
                 .map_err(crate::error::Error::Database)?;
 
+                accepted += 1;
                 total += 1;
             }
+            per_series_log.push(format!(
+                "{}[r{}] {} games in feed, {} accepted, skipped={:?}",
+                series.series_letter, round.round_number, games_count, accepted, skipped_reasons
+            ));
         }
     }
-    info!(season, rows = total, "carousel-driven backfill complete");
+    info!(
+        season,
+        rows = total,
+        detail = per_series_log.join(" | "),
+        "carousel-driven backfill complete"
+    );
     Ok(total)
 }
 

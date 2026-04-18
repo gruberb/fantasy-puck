@@ -4,7 +4,21 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
-## v1.12.0 — 2026-04-18
+## v1.12.1 — 2026-04-18
+
+### Fixed — Pulse "No games scheduled today" stuck after schedule landed
+
+Same bug pattern I already fixed in Insights in v1.10.0: Pulse caches the response by hockey-date. If the morning prewarm (or any early visit) ran before the NHL schedule was published, the cached response has `has_games_today: false` and sticks all day. Today's Pulse incorrectly showed "NO GAMES SCHEDULED TODAY" and the narrative referenced no-games-today even while the Games page showed 3 real games.
+
+**Fix**: on cache hit, if `cached.has_games_today` is false, throw it out and regenerate. On store, only cache responses with `has_games_today: true` — empty-schedule responses regenerate cheaply each visit (the NhlClient caches the upstream schedule fetch anyway).
+
+### Changed — rebackfill surfaces errors instead of swallowing them
+
+v1.12.0's `/api/admin/rebackfill-carousel` silently logged-and-continued on any `get_playoff_series_games` failure. The user's first runs returned `"Rebackfilled 0 ..."` across every season, with no indication of what went wrong. Now the endpoint:
+- Propagates the first series-fetch error as a 500-ish response with the actual error message (NHL rate limit, JSON parse failure, or HTTP error).
+- Logs per-series diagnostics to the backend log: `A[r1] 5 games in feed, 5 accepted, skipped=[]` etc. When `skipped=["no_score"]` or `["not_completed"]` shows up, we know what filtering dropped the game.
+
+Re-run the rebackfill; if it still reports 0 rows, the logs + error message will tell us exactly why.
 
 ### Added — carousel-driven re-backfill for historical playoffs
 

@@ -65,22 +65,28 @@ pub async fn get_pulse(
         .get_cached_response::<PulseResponse>(&cache_key)
         .await?
     {
-        // If the cache was generated earlier and no games were live back then,
-        // it's safe to reuse regardless of time of day. If live games are
-        // possible (checked on miss), return the cached value too — the
-        // frontend auto-refresh pattern will invalidate us.
-        return Ok(json_success(cached));
+        // Self-heal: if the cached response was built when the NHL
+        // schedule hadn't yet been published (empty games list), throw
+        // it out and regenerate. Otherwise the "no games today" copy
+        // sticks all day after the schedule lands.
+        if cached.has_games_today {
+            return Ok(json_success(cached));
+        }
     }
 
     let response = generate_pulse(&state, &league_id, my_team_id, &today).await?;
 
-    // Cache for today; scheduler cleans stale keys after 7 days. Short TTL is
-    // handled implicitly by date-keyed invalidation.
-    let _ = state
-        .db
-        .cache()
-        .store_response(&cache_key, &today, &response)
-        .await;
+    // Only cache when the response has real content. Empty-schedule
+    // responses regenerate cheaply each visit (NhlClient caches the
+    // upstream schedule fetch anyway) rather than committing a
+    // misleading "no games today" narrative for the rest of the day.
+    if response.has_games_today {
+        let _ = state
+            .db
+            .cache()
+            .store_response(&cache_key, &today, &response)
+            .await;
+    }
 
     Ok(json_success(response))
 }
