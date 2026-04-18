@@ -798,13 +798,13 @@ This page is NHL-centric — the league-race narrative lives elsewhere. Stay out
 
 Return JSON with exactly these fields:
 
-- **todays_watch**: 1–2 sentences on the slate's big picture. No preamble.
+- **todays_watch**: 1–2 sentences previewing TODAY'S games specifically (the matchups listed under "TODAY'S GAMES" in the user message, {num_games} of them). Call out the biggest storyline of tonight's slate — a hot player, a lopsided matchup, an elimination game. Do NOT write about the full playoff bracket, the Cup race, or season-long team ratings; that belongs in `bracket`. If and only if `{num_games}` is 0, write exactly "No games on the slate today." — otherwise NEVER use that phrase.
 
 - **game_narratives**: an array of exactly {num_games} strings, one per game in the same order. 2–3 sentences previewing each matchup — who's hot, where the edge is, what's at stake. Do NOT repeat the team names in the prefix; the header shows them.
 
 - **hot_players**: 3–4 sentences on the hottest skaters. Cite form numbers and NHL Edge data when present. Respect the `hotColdIsRegularSeason` flag: call it "regular-season points" when true.
 
-- **bracket**: 3–4 sentences on the playoff picture — who's favored, where the upsets could come from, which team's Stanley Cup path looks easiest or hardest. Lean on series state + team ratings from the data."#),
+- **bracket**: 3–4 sentences on the playoff picture — who's favored, where the upsets could come from, which team's Stanley Cup path looks easiest or hardest. Lean on series state + team ratings from the data. This is the one field where full-bracket / season-long talk belongs — everything else should stay game-scoped or player-scoped."#),
         "messages": [
             {
                 "role": "user",
