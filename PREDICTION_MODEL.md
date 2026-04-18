@@ -2,7 +2,7 @@
 
 Technical reference for the Fantasy Puck race-odds / playoff-odds Monte Carlo system. Covers the full pipeline from NHL API ingest through bracket simulation to the `GET /api/race-odds` response, plus the admin endpoints, data model, tunable constants, calibration state, and known gaps.
 
-Current versions at the time of writing: **backend 1.13.0, frontend 1.10.0** (2026-04-18).
+Current versions at the time of writing: **backend 1.14.0, frontend 1.10.0** (2026-04-18).
 
 ---
 
@@ -305,25 +305,42 @@ The forward sim (`race_sim::simulate_series`) reads `TeamRating.home_bonus` and 
 
 ### 5.3 Player projection — `player_projection.rs`
 
-Bayesian shrinkage blend of four signals:
+Since v1.14.0, the projection consumes a per-game `GameStats { goals, assists, shots, pp_points, toi_seconds }` struct rather than bare point totals. Two signals on top of the Bayesian blend:
+
+1. **Shot-volume stabilisation** of the observed playoff goal rate.
+2. **TOI-ratio multiplier** for lineup-role changes (demotions / promotions).
 
 ```
 rs_ppg         = rs_points / 82
-po_gp          = len(points_desc)
-po_ppg         = Σ points / po_gp
-recent_ppg     = Σ 2^(−i/H) · points_i / Σ 2^(−i/H)      over last N (most-recent-first)
-blended_po_ppg = W · po_ppg + (1 − W) · recent_ppg
+po_gp          = len(game_log)
+
+# Stabilised playoff rate (replaces raw points/gp)
+obs_goals_rate = Σ goals_i / po_gp
+shots_rate     = Σ shots_i / po_gp                       # when shot data is available
+expected_goals = shots_rate · LEAGUE_SH_PCT
+stable_goals   = (1 − w_s)·obs_goals_rate + w_s·expected_goals
+po_rate        = stable_goals + Σ assists_i / po_gp      # stabilised goals + raw assists
+
+recent_rate    = Σ 2^(−i/H) · points_i / Σ 2^(−i/H)      over last N (most-recent-first)
+blended_po     = W · po_rate + (1 − W) · recent_rate
 hist_ppg       = hist_points / hist_gp
 
-projected_ppg  = (ALPHA·rs_ppg + po_gp·blended_po_ppg + BETA·hist_ppg)
+projected_ppg  = (ALPHA·rs_ppg + po_gp·blended_po + BETA·hist_ppg)
                  / (ALPHA + po_gp + BETA)
+
+# TOI-role multiplier (applied after the blend)
+recent_toi_avg = mean(toi_seconds over most-recent TOI_RATIO_RECENT_WINDOW games)
+older_toi_avg  = mean(toi_seconds over earlier games)
+toi_mult       = (recent_toi_avg / older_toi_avg).clamp(
+                   TOI_RATIO_DERATE_FLOOR, TOI_RATIO_BOOST_CAP)
+                 # 1.0 when either window lacks enough non-null TOI data
 
 if team_games_played >= MIN_APPEARANCE_TEAM_GAMES and po_gp == 0:
     availability = ABSENT_MULTIPLIER
 else:
     availability = 1.0
 
-final_ppg      = projected_ppg · availability
+final_ppg      = projected_ppg · toi_mult · availability
 ```
 
 Constants (`player_projection.rs`):
@@ -334,8 +351,13 @@ Constants (`player_projection.rs`):
 - `RECENT_WINDOW = 10` (`N`)
 - `ABSENT_MULTIPLIER = 0.3`
 - `MIN_APPEARANCE_TEAM_GAMES = 3`
+- `LEAGUE_SH_PCT = 0.095` — NHL league-average shooting percentage, anchor for goal-rate regression.
+- `SHOT_STABILIZATION_WEIGHT = 0.40` (`w_s`)
+- `TOI_RATIO_RECENT_WINDOW = 3` — games defining "recent TOI".
+- `TOI_RATIO_BASELINE_MIN = 3` — minimum non-null older-TOI games before the ratio activates.
+- `TOI_RATIO_DERATE_FLOOR = 0.70`, `TOI_RATIO_BOOST_CAP = 1.10` — asymmetric clamp, demotions matter more than promotions.
 
-`rs_points / 82` is used because the `StatsLeaders` leaderboard the crate consumes does not carry GP per player; this slightly under-projects players who missed RS games.
+`rs_points / 82` is still used because the `StatsLeaders` leaderboard the crate consumes does not carry GP per player; this slightly under-projects players who missed RS games. See §10.
 
 ### 5.4 k_factor
 

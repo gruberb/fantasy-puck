@@ -15,7 +15,7 @@ use tracing::debug;
 use crate::db::FantasyDb;
 use crate::domain::prediction::{
     playoff_elo::{self, GameResult},
-    player_projection::{self, PlayerInput, Projection},
+    player_projection::{self, GameStats, PlayerInput, Projection},
 };
 use crate::error::{Error, Result};
 
@@ -78,27 +78,41 @@ pub async fn project_players(
     let player_ids: Vec<i64> = players.iter().map(|p| p.nhl_id).collect();
     // Order lets us slice per-player sub-ranges without rehashing —
     // game_date DESC so the "last N" window is already at the front.
-    let stat_rows: Vec<(i64, i32)> = sqlx::query_as(
-        r#"
-        SELECT player_id, points
-        FROM playoff_skater_game_stats
-        WHERE season = $1
-          AND player_id = ANY($2::bigint[])
-        ORDER BY player_id ASC, game_date DESC, game_id DESC
-        "#,
-    )
-    .bind(season as i32)
-    .bind(&player_ids)
-    .fetch_all(db.pool())
-    .await
-    .map_err(Error::Database)?;
+    //
+    // Since v1.14.0 the query pulls the richer columns the projection
+    // now uses: goals/assists (separate from total points), shots for
+    // volume-stabilised goal rate, pp_points for future PP-weighting,
+    // and toi_seconds for the lineup-role multiplier. `shots`,
+    // `pp_points`, and `toi_seconds` are nullable at the schema level
+    // because older boxscores occasionally omit them.
+    let stat_rows: Vec<(i64, i32, i32, Option<i32>, Option<i32>, Option<i32>)> =
+        sqlx::query_as(
+            r#"
+            SELECT player_id, goals, assists, shots, pp_points, toi_seconds
+            FROM playoff_skater_game_stats
+            WHERE season = $1
+              AND player_id = ANY($2::bigint[])
+            ORDER BY player_id ASC, game_date DESC, game_id DESC
+            "#,
+        )
+        .bind(season as i32)
+        .bind(&player_ids)
+        .fetch_all(db.pool())
+        .await
+        .map_err(Error::Database)?;
 
     // Bucket stat rows by player for per-player aggregation. Preserves
     // the ORDER BY — game_date DESC — so the first elements are the
     // most recent games.
-    let mut by_player: HashMap<i64, Vec<i32>> = HashMap::with_capacity(players.len());
-    for (pid, pts) in stat_rows {
-        by_player.entry(pid).or_default().push(pts);
+    let mut by_player: HashMap<i64, Vec<GameStats>> = HashMap::with_capacity(players.len());
+    for (pid, goals, assists, shots, pp_points, toi_seconds) in stat_rows {
+        by_player.entry(pid).or_default().push(GameStats {
+            goals,
+            assists,
+            shots,
+            pp_points,
+            toi_seconds,
+        });
     }
 
     let names: Vec<&str> = players.iter().map(|p| p.player_name.as_str()).collect();
@@ -122,11 +136,11 @@ pub async fn project_players(
     let mut out: HashMap<i64, Projection> = HashMap::with_capacity(players.len());
     for p in players {
         let team_gp = team_games_played.get(&p.nhl_team).copied().unwrap_or(0);
-        let pts_rows = by_player.get(&p.nhl_id).cloned().unwrap_or_default();
+        let game_log = by_player.get(&p.nhl_id).cloned().unwrap_or_default();
         let projection = player_projection::project_one(
             p,
             team_gp,
-            &pts_rows,
+            &game_log,
             historical.get(&p.player_name),
         );
         out.insert(p.nhl_id, projection);

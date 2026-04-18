@@ -4,6 +4,21 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.14.0 — 2026-04-18
+
+### Changed — player projection now uses shots and TOI, not just points
+
+`infra::prediction::project_players` was selecting only `(player_id, points)` from `playoff_skater_game_stats`, throwing away the `goals`, `assists`, `shots`, `pp_points`, and `toi_seconds` columns the ingest has been populating for months. `project_one` now consumes a `&[GameStats]` carrying all six.
+
+Two new signals feed the projection:
+
+- **Shot-volume stabilisation of goal rate.** Observed playoff goals-per-game is blended 60/40 with `shots_per_game × LEAGUE_SH_PCT` (0.095) when shot data is available. A high-volume shooter with zero goals over three games used to project 0 goals/game until the points-blend's RS prior eventually pulled them back up. Now they regress toward expected finishing inside two or three games. Symmetric pull: a shooter going 3-for-3 on shots gets regressed down instead of sustaining a 100% shooting-pct projection.
+- **TOI-ratio lineup multiplier.** After ≥ 3 recent + 3 older games with non-null `toi_seconds`, the ratio `recent_avg / older_avg` clamps to `[0.70, 1.10]` and multiplies the final PPG. A 4th-line demotion (18 min → 9 min) now derates projections 30%; a 3rd-pair → 1st-pair promotion caps at +10% (asymmetric because one high-TOI overtime game can fake a promotion signal). Exposed on `Projection.toi_multiplier` for future UI badges.
+
+Blend shape (ALPHA/BETA Bayesian weights, recency half-life, availability multiplier) unchanged. `Projection` gains `toi_multiplier: f32` alongside the existing `ppg` and `active_prob`; additive, not breaking.
+
+Not in this release (deliberate scope cut): formal split of `rs_goals`/`rs_assists` from total `rs_points` in `PlayerInput`. The `StatsLeaders` feed the crate consumes only exposes category leaderboards (top-N per stat), not per-player breakdowns — adding this would require cross-referencing the `goals` and `assists` categories plus a league-fraction fallback for non-top-N skaters. Shot-stabilisation above captures the dominant signal for skater-level improvement without touching the ingest.
+
 ## v1.13.0 — 2026-04-18
 
 ### Added — calibration sweep harness
