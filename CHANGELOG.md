@@ -14,11 +14,9 @@ Same bug pattern I already fixed in Insights in v1.10.0: Pulse caches the respon
 
 ### Changed — rebackfill surfaces errors instead of swallowing them
 
-v1.12.0's `/api/admin/rebackfill-carousel` silently logged-and-continued on any `get_playoff_series_games` failure. The user's first runs returned `"Rebackfilled 0 ..."` across every season, with no indication of what went wrong. Now the endpoint:
-- Propagates the first series-fetch error as a 500-ish response with the actual error message (NHL rate limit, JSON parse failure, or HTTP error).
-- Logs per-series diagnostics to the backend log: `A[r1] 5 games in feed, 5 accepted, skipped=[]` etc. When `skipped=["no_score"]` or `["not_completed"]` shows up, we know what filtering dropped the game.
-
-Re-run the rebackfill; if it still reports 0 rows, the logs + error message will tell us exactly why.
+v1.12.0's `/api/admin/rebackfill-carousel` silently logged-and-continued on any `get_playoff_series_games` failure, making the response `"Rebackfilled 0 ..."` with no indication of what went wrong. The handler now:
+- Propagates the first series-fetch error as a 500 with the real NHL-side message (rate limit, JSON parse failure, HTTP error).
+- Emits per-series diagnostics to the backend log including the game-count in the feed, the count accepted, and per-game skip reasons (`not_completed`, `no_score`, `no_start_time`).
 
 ### Added — carousel-driven re-backfill for historical playoffs
 
@@ -29,17 +27,6 @@ New admin endpoint `GET /api/admin/rebackfill-carousel?season=20222023`. Walks t
 **Scope**: team-level only — populates `playoff_game_results`. Skater-level data for past seasons (`playoff_skater_game_stats`) is not written here because (a) the per-game-boxscore fetch multiplies the call count by ~40× and (b) the current `player_projection` module only reads the current season's skater game log, so historical skater stats don't unblock anything immediate. A future pass can layer skater ingest on top of the same series walker if needed.
 
 **New types**: `PlayoffSeriesGames`, `PlayoffSeriesGame`, `PlayoffSeriesTeam` in `models::nhl`, plus `NhlClient::get_playoff_series_games(season, letter)`. `GameState` now derives `Default` (Unknown).
-
-**Usage**: for each backfilled season, call the endpoint once. Example via curl:
-
-```
-curl -H "Authorization: Bearer $TOKEN" \
-  "https://fantasy-puck-api.fly.dev/api/admin/rebackfill-carousel?season=20222023"
-```
-
-Returns `"Rebackfilled N completed playoff games for season 20222023"`. Repeat for each season.
-
-After all 5 seasons are re-backfilled, `/api/admin/calibrate?season=…` should produce correct realized outcomes for R1–Cup Final, and the Brier scores will finally reflect how well the *model* predicts (instead of just how lossy the training data is).
 
 ## v1.11.1 — 2026-04-18
 
@@ -57,9 +44,7 @@ v1.11.0's `/api/admin/calibrate` produced Brier scores worse than coinflip becau
 
 `ResultRow` grew a `game_date: String` field so the reconstruction can sort chronologically. The `round` field is kept but explicitly documented as ignored. Two new tests cover the topology-only path: one asserting a lying `round = 99` on R2 rows is ignored, one asserting Cup Final falls out of R3 winners across a full 16-team bracket.
 
-**Still expected**: Cup Final data is genuinely missing from the DB for 4 of 5 backfilled seasons (NHL schedule endpoint didn't return those games). Fix A can't recover rows that aren't there. A separate re-backfill using the `playoff-series/carousel/{season}` endpoint (which lists every game by ID) is queued as the follow-up — `/api/admin/backfill-historical` was fine for in-season but won't catch games the schedule endpoint drops.
-
-After this deploys, re-run `GET /api/admin/calibrate?season=20222023` — R3 advancement should now correctly credit VGK for the WCF win, though `wonCup` will still be false for every team on 4 of 5 seasons until the re-backfill lands.
+**Still expected**: Cup Final data is genuinely missing from the DB for 4 of 5 backfilled seasons — the NHL schedule endpoint didn't return those games during the original backfill. Fix A can't recover rows that aren't there; a separate re-backfill path via the `playoff-series/carousel/{season}` endpoint is queued as a follow-up.
 
 ### Added — calibration admin endpoint (P4.2 MVP)
 
