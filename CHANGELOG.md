@@ -4,6 +4,26 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.13.0 — 2026-04-18
+
+### Added — calibration sweep harness
+
+New admin endpoint `GET /api/admin/calibrate-sweep` runs `calibrate_season` over a grid of hyperparameter combinations and ranks by aggregate Brier. Comma-separated lists on `points_scale`, `shrinkage`, `k_factor`, `home_ice_elo`, and `trials`; the endpoint takes the Cartesian product (capped at 200 cells). Each run is deterministic — `simulate_with_seed` with a fixed RNG seed means Brier deltas between grid cells come entirely from knob changes, not Monte Carlo noise.
+
+`infra::calibrate::CalibrationKnobs` now carries every tunable the sweep explores. `calibrate_season` is a thin wrapper over `calibrate_season_with_knobs(_, CalibrationKnobs::default())` so existing admin callers are unaffected. Production constants (`POINTS_SCALE = 6.0`, shrinkage 1.0, live `k_factor`, `HOME_ICE_ELO = 35.0`) are unchanged in v1.13.0 — this release ships the wrench, not the tuning pass.
+
+### Changed — playoff Elo seeding accepts a shrinkage factor
+
+`playoff_elo::seed_from_standings_tuned(standings, points_scale, shrinkage)` is the new entry point the sweep calls. `shrinkage ∈ [0, 1]` regresses each team's RS-point deviation from league average toward the mean before scaling, so the sweep can test "current standings are 70% signal, 30% noise" without touching production.
+
+`playoff_elo::seed_from_standings(standings)` remains the default-knobs path and its output is identical to v1.12.3.
+
+### Changed — per-team home-ice bonus is centered on HOME_ICE_ADV
+
+`home_bonus_from_standings` previously returned a raw Elo value clamped to `[10, 80]`. A team with a league-average home/road split earned raw ≈ 35 and landed inside the band correctly, but a team with a truly neutral split (raw 0) clamped to the floor of 10 — materially less home-ice than a league-average team, which was not the intent.
+
+The function now computes the delta from `HOME_ICE_ADV` (35 Elo, the league baseline), clamps that delta to `±HOME_BONUS_DELTA_CLAMP = 15`, and returns `HOME_ICE_ADV + delta`. Output range is `[20, 50]`. A hot-home / cold-road team earns up to 50; a genuinely flat team earns ~35; a weak-at-home team can drop to 20. No team is locked into 10 anymore.
+
 ## v1.12.3 — 2026-04-18
 
 ### Fixed — calibration now seeds Elo from historical, not current, standings

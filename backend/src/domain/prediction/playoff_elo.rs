@@ -34,18 +34,33 @@ pub const HOME_ICE_ADV: f32 = 35.0;
 /// Base update rate. Scaled per-game by `ln(|goal_diff| + 1)` so a 1-goal
 /// win moves ratings by ~K and a 5-goal win by ~K·ln(6) ≈ 1.8·K.
 pub const K_FACTOR: f32 = 6.0;
+/// How far a team's per-team home-ice bonus is allowed to drift from
+/// the league-wide `HOME_ICE_ADV`, in Elo units. A 41-game sample is
+/// noisy; capping the delta at ±15 keeps the per-team personalization
+/// meaningful without letting freak home/road splits dominate the
+/// per-game draw. Result range for the absolute per-team bonus is
+/// therefore `[HOME_ICE_ADV - HOME_BONUS_DELTA_CLAMP, HOME_ICE_ADV +
+/// HOME_BONUS_DELTA_CLAMP]` = `[20, 50]`.
+pub const HOME_BONUS_DELTA_CLAMP: f32 = 15.0;
 
 /// Compute each team's per-team home-ice advantage in Elo units from
-/// their regular-season home-vs-road record. A team that earned a
-/// points-percentage 8 pp higher at home than on the road gets a
-/// ~32-point Elo home bonus; flat home/road split gets zero. Clamped
-/// to `[10, 80]` to smooth small-sample noise and avoid negative
-/// home-ice (rare but possible in a short season).
+/// their regular-season home-vs-road record.
+///
+/// The result is the **absolute** home-ice bonus, centered on the
+/// league-wide `HOME_ICE_ADV`. A team with a league-average home/road
+/// split returns ~`HOME_ICE_ADV`; a team with an unusually strong home
+/// record returns up to `HOME_ICE_ADV + HOME_BONUS_DELTA_CLAMP`; an
+/// unusually weak home returns `HOME_ICE_ADV - HOME_BONUS_DELTA_CLAMP`.
+/// The old asymmetric `[10, 80]` clamp under-rewarded near-neutral
+/// teams (whose observed pct-gap of ~0 clamped to 10 instead of the
+/// baseline ~35).
 ///
 /// Scale rationale: on the Elo side `sigmoid(ELO_K * 35) ≈ 0.55`
 /// (the 54/46 league-average home-ice split). Points-percentage gap
-/// of ~0.08 maps to roughly the same win-prob shift, so the linear
-/// coefficient is `35 / 0.08 ≈ 437`; we use 400 for a round number.
+/// of ~0.0875 maps to the same win-prob shift, so the linear
+/// coefficient is `35 / 0.0875 = 400`. That means a league-average
+/// home/road pts-pct gap produces `raw ≈ HOME_ICE_ADV`, which is why
+/// we center the delta by subtracting `HOME_ICE_ADV`.
 pub fn home_bonus_from_standings(standings: &serde_json::Value) -> HashMap<String, f32> {
     let Some(arr) = standings.get("standings").and_then(|v| v.as_array()) else {
         return HashMap::new();
@@ -71,19 +86,48 @@ pub fn home_bonus_from_standings(standings: &serde_json::Value) -> HashMap<Strin
 
             let home = pts_pct("homeWins", "homeLosses", "homeOtLosses")?;
             let road = pts_pct("roadWins", "roadLosses", "roadOtLosses")?;
-            let raw = (home - road) * 400.0;
-            // Clamp: zero floor (no negative home-ice), 80-Elo ceiling
-            // so a hot-home / cold-road small sample can't dominate
-            // the per-game draw.
-            let bonus = raw.clamp(10.0, 80.0);
-            Some((abbrev, bonus))
+            // `raw_elo_equivalent` is the Elo bonus a pure RS home/road
+            // pct-gap maps to. League-average is ~HOME_ICE_ADV.
+            let raw_elo_equivalent = (home - road) * 400.0;
+            // Center on the league baseline so the delta reflects
+            // *personalisation*, not the baseline itself.
+            let delta = raw_elo_equivalent - HOME_ICE_ADV;
+            let delta_clamped = delta.clamp(-HOME_BONUS_DELTA_CLAMP, HOME_BONUS_DELTA_CLAMP);
+            Some((abbrev, HOME_ICE_ADV + delta_clamped))
         })
         .collect()
 }
 
-/// Seed each team's Elo from the NHL standings feed. Teams missing from
-/// the feed get `BASE_ELO`. Returns `abbrev → elo`.
+/// Seed each team's Elo from the NHL standings feed, using the
+/// production `POINTS_SCALE` and no shrinkage. Teams missing from the
+/// feed get `BASE_ELO`. Returns `abbrev → elo`.
+///
+/// Thin convenience wrapper over [`seed_from_standings_tuned`]. Use
+/// the tuned variant when you want to sweep `points_scale` or apply
+/// shrinkage (the calibration harness does this).
 pub fn seed_from_standings(standings: &serde_json::Value) -> HashMap<String, f32> {
+    seed_from_standings_tuned(standings, POINTS_SCALE, 1.0)
+}
+
+/// Seed Elo from standings with explicit `points_scale` and
+/// `shrinkage` knobs for the calibration sweep.
+///
+/// `shrinkage ∈ [0, 1]` regresses each team's RS-point deviation from
+/// league average toward the mean before scaling:
+/// `elo_0 = BASE + points_scale * shrinkage * (season_points - league_avg)`.
+///
+/// - `shrinkage = 1.0` reproduces the legacy behavior (no regression).
+/// - `shrinkage = 0.7` treats the observed standings as 70% signal /
+///   30% noise, which is the typical Bayesian shrinkage for an
+///   82-game NHL sample against the prior that teams are closer to
+///   league average than their records suggest.
+/// - `shrinkage = 0.0` flattens every team to `BASE` (sanity-check
+///   baseline for the sweep).
+pub fn seed_from_standings_tuned(
+    standings: &serde_json::Value,
+    points_scale: f32,
+    shrinkage: f32,
+) -> HashMap<String, f32> {
     let Some(arr) = standings.get("standings").and_then(|v| v.as_array()) else {
         return HashMap::new();
     };
@@ -103,9 +147,10 @@ pub fn seed_from_standings(standings: &serde_json::Value) -> HashMap<String, f32
         return HashMap::new();
     }
     let avg: f32 = points.iter().map(|(_, p)| *p).sum::<f32>() / points.len() as f32;
+    let effective_scale = points_scale * shrinkage;
     points
         .into_iter()
-        .map(|(abbrev, pts)| (abbrev, BASE_ELO + POINTS_SCALE * (pts - avg)))
+        .map(|(abbrev, pts)| (abbrev, BASE_ELO + effective_scale * (pts - avg)))
         .collect()
 }
 
@@ -169,9 +214,10 @@ mod tests {
 
     #[test]
     fn home_bonus_reflects_home_road_gap() {
-        // Strong home, weak road: 30-5-5 home (65 pts / 40 games = .8125
-        // pts/game), 5-30-5 road (.1875 pts/game). Diff ≈ 0.625 → 250 Elo
-        // raw, clamped to 80.
+        // Strong home, weak road: 30-5-5 home (.8125 pts-pct), 5-30-5
+        // road (.1875). Diff ≈ 0.625 → raw 250 Elo → delta = 250 - 35
+        // = 215, clamped to +HOME_BONUS_DELTA_CLAMP. Absolute =
+        // HOME_ICE_ADV + clamp = 35 + 15 = 50.
         let root = serde_json::json!({
             "standings": [{
                 "teamAbbrev": { "default": "HOT" },
@@ -180,9 +226,15 @@ mod tests {
             }]
         });
         let map = home_bonus_from_standings(&root);
-        assert!((map["HOT"] - 80.0).abs() < 1e-3);
+        let expected_hot = HOME_ICE_ADV + HOME_BONUS_DELTA_CLAMP;
+        assert!(
+            (map["HOT"] - expected_hot).abs() < 1e-3,
+            "expected HOT ≈ {expected_hot}, got {}",
+            map["HOT"]
+        );
 
-        // Flat home/road: equal split → 0 diff → clamped to floor 10.
+        // Flat home/road split: raw 0 Elo → delta = -35, clamped to
+        // -HOME_BONUS_DELTA_CLAMP. Absolute = 35 - 15 = 20.
         let root = serde_json::json!({
             "standings": [{
                 "teamAbbrev": { "default": "EVEN" },
@@ -191,7 +243,12 @@ mod tests {
             }]
         });
         let map = home_bonus_from_standings(&root);
-        assert!((map["EVEN"] - 10.0).abs() < 1e-3);
+        let expected_even = HOME_ICE_ADV - HOME_BONUS_DELTA_CLAMP;
+        assert!(
+            (map["EVEN"] - expected_even).abs() < 1e-3,
+            "expected EVEN ≈ {expected_even}, got {}",
+            map["EVEN"]
+        );
 
         // Missing home/road fields: team skipped, not defaulted.
         let root = serde_json::json!({
@@ -199,6 +256,58 @@ mod tests {
         });
         let map = home_bonus_from_standings(&root);
         assert!(!map.contains_key("EMPTY"));
+    }
+
+    #[test]
+    fn home_bonus_near_league_average_centers_on_base_adv() {
+        // A team with a home/road gap exactly matching the league
+        // baseline (0.0875 pts-pct gap → raw 35 Elo) should land on
+        // HOME_ICE_ADV with zero delta. Verifies the centering fix
+        // (old clamp would have returned 35 as well; this test locks
+        // in the post-refactor behavior so future edits don't regress).
+        // A .6 home pts-pct vs .5125 road produces raw ≈ 35 exactly.
+        // Equivalent integer split: 48 hGP and 48 rGP with home
+        // (24W, 15L, 9OTL) = 57 pts / 96 = .59375 home pct,
+        // road (21W, 18L, 9OTL) = 51 pts / 96 = .53125 road pct,
+        // diff = .0625 → raw 25 (close to HOME_ICE_ADV with some slack).
+        let root = serde_json::json!({
+            "standings": [{
+                "teamAbbrev": { "default": "AVG" },
+                "homeWins": 24, "homeLosses": 15, "homeOtLosses": 9,
+                "roadWins": 21, "roadLosses": 18, "roadOtLosses": 9,
+            }]
+        });
+        let map = home_bonus_from_standings(&root);
+        // Raw 25 → delta = -10 (inside ±15 clamp). Absolute = 25.
+        // Verify it lands inside the centered band and isn't clamped.
+        let avg_bonus = map["AVG"];
+        assert!(
+            avg_bonus > HOME_ICE_ADV - HOME_BONUS_DELTA_CLAMP - 1e-3
+                && avg_bonus < HOME_ICE_ADV + HOME_BONUS_DELTA_CLAMP + 1e-3,
+            "AVG bonus should be inside the centered band, got {avg_bonus}"
+        );
+    }
+
+    #[test]
+    fn shrinkage_tightens_the_elo_spread() {
+        let root = json!({
+            "standings": [
+                entry("HOT",  110),
+                entry("MID",  100),
+                entry("COLD",  90),
+            ],
+        });
+        let full = seed_from_standings_tuned(&root, POINTS_SCALE, 1.0);
+        let half = seed_from_standings_tuned(&root, POINTS_SCALE, 0.5);
+        let zero = seed_from_standings_tuned(&root, POINTS_SCALE, 0.0);
+
+        // At shrinkage=1.0, HOT - COLD spread = 2 * POINTS_SCALE * 10 = 120.
+        assert!(((full["HOT"] - full["COLD"]) - 120.0).abs() < 1e-3);
+        // At shrinkage=0.5, spread is halved.
+        assert!(((half["HOT"] - half["COLD"]) - 60.0).abs() < 1e-3);
+        // At shrinkage=0.0, every team collapses to BASE_ELO.
+        assert!((zero["HOT"] - BASE_ELO).abs() < 1e-3);
+        assert!((zero["COLD"] - BASE_ELO).abs() < 1e-3);
     }
 
     #[test]

@@ -246,6 +246,10 @@ pub fn create_router(db: FantasyDb, nhl_client: NhlClient, config: Arc<Config>) 
             "/api/admin/calibrate",
             get(handlers::admin::calibrate),
         )
+        .route(
+            "/api/admin/calibrate-sweep",
+            get(handlers::admin::calibrate_sweep_handler),
+        )
         // ---------------------------------------------------------------
         // WebSocket
         // ---------------------------------------------------------------

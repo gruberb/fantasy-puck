@@ -11,7 +11,9 @@ use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::auth::middleware::AuthUser;
 use crate::error::{Error, Result};
-use crate::infra::calibrate::{calibrate_season, CalibrationReport};
+use crate::infra::calibrate::{
+    calibrate_season, calibrate_sweep, CalibrationGrid, CalibrationReport, SweepReport,
+};
 use crate::utils::playoff_ingest::{
     ingest_playoff_games_for_range, rebackfill_playoff_season_via_carousel,
 };
@@ -184,6 +186,101 @@ pub async fn calibrate(
         brier_r1 = report.brier_r1,
         brier_cup = report.brier_cup,
         "calibration run complete"
+    );
+    Ok(json_success(report))
+}
+
+#[derive(Deserialize)]
+pub struct CalibrateSweepParams {
+    /// 8-digit season, e.g. 20222023.
+    season: u32,
+    /// Comma-separated list of `POINTS_SCALE` values to try.
+    /// Omitted/empty → production default.
+    #[serde(default)]
+    points_scale: Option<String>,
+    /// Comma-separated list of shrinkage factors in `[0, 1]`.
+    #[serde(default)]
+    shrinkage: Option<String>,
+    /// Comma-separated list of Elo `k_factor` values.
+    #[serde(default)]
+    k_factor: Option<String>,
+    /// Comma-separated list of league-wide home-ice Elo bonuses.
+    #[serde(default)]
+    home_ice_elo: Option<String>,
+    /// Comma-separated list of Monte Carlo trial counts.
+    #[serde(default)]
+    trials: Option<String>,
+}
+
+fn parse_f32_list(s: Option<&str>) -> std::result::Result<Vec<f32>, String> {
+    let Some(s) = s else {
+        return Ok(Vec::new());
+    };
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(Vec::new());
+    }
+    s.split(',')
+        .map(|piece| {
+            piece
+                .trim()
+                .parse::<f32>()
+                .map_err(|e| format!("invalid float '{piece}': {e}"))
+        })
+        .collect()
+}
+
+fn parse_usize_list(s: Option<&str>) -> std::result::Result<Vec<usize>, String> {
+    let Some(s) = s else {
+        return Ok(Vec::new());
+    };
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(Vec::new());
+    }
+    s.split(',')
+        .map(|piece| {
+            piece
+                .trim()
+                .parse::<usize>()
+                .map_err(|e| format!("invalid usize '{piece}': {e}"))
+        })
+        .collect()
+}
+
+/// Grid-search calibration over a set of hyperparameter combinations.
+/// One-off tool: you run it a handful of times to find winning knobs,
+/// then bake the winners into the production constants and ship.
+/// Not meant to be called from production code — it can spend minutes
+/// of CPU and is not cached.
+///
+/// Grid is capped at 200 cells to keep a misconfigured sweep from
+/// pegging the server for hours.
+pub async fn calibrate_sweep_handler(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<CalibrateSweepParams>,
+) -> Result<Json<ApiResponse<SweepReport>>> {
+    if !auth.is_admin {
+        return Err(Error::Forbidden("Admin access required".into()));
+    }
+    let grid = CalibrationGrid {
+        points_scale: parse_f32_list(params.points_scale.as_deref())
+            .map_err(Error::Validation)?,
+        shrinkage: parse_f32_list(params.shrinkage.as_deref()).map_err(Error::Validation)?,
+        k_factor: parse_f32_list(params.k_factor.as_deref()).map_err(Error::Validation)?,
+        home_ice_elo: parse_f32_list(params.home_ice_elo.as_deref())
+            .map_err(Error::Validation)?,
+        trials: parse_usize_list(params.trials.as_deref()).map_err(Error::Validation)?,
+    };
+    let report = calibrate_sweep(&state.db, &state.nhl_client, params.season, &grid).await?;
+    info!(
+        season = params.season,
+        grid_size = report.grid_size,
+        best_brier_aggregate = report.best.brier_aggregate,
+        best_brier_r1 = report.best.brier_r1,
+        best_brier_cup = report.best.brier_cup,
+        "calibration sweep complete"
     );
     Ok(json_success(report))
 }
