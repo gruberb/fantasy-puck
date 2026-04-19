@@ -426,6 +426,14 @@ pub enum GameState {
     Off,
     Crit,
     Preview,
+    /// NHL pre-game warm-up — returned as `"PRE"` by the schedule
+    /// endpoint, which wasn't covered by `Preview`. Without the
+    /// explicit rename, `"PRE"` fell through to [`GameState::Unknown`]
+    /// and the live poller (which filters on `LIVE/CRIT/PRE`) never
+    /// selected those games even once they were seconds from puck
+    /// drop.
+    #[serde(rename = "PRE")]
+    Pre,
     Fut,
     #[default]
     #[serde(other)]
@@ -442,7 +450,7 @@ impl GameState {
     }
 
     pub fn is_upcoming(&self) -> bool {
-        matches!(self, GameState::Preview | GameState::Fut)
+        matches!(self, GameState::Preview | GameState::Pre | GameState::Fut)
     }
 }
 
@@ -457,6 +465,7 @@ impl FromStr for GameState {
             "CRIT" => Ok(GameState::Crit),
             "FUT" => Ok(GameState::Fut),
             "PREVIEW" => Ok(GameState::Preview),
+            "PRE" => Ok(GameState::Pre),
             _ => Ok(GameState::Unknown),
         }
     }

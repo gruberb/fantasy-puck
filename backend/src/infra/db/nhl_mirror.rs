@@ -284,6 +284,42 @@ pub async fn upsert_boxscore_players(
         upsert_boxscore_player(&mut tx, game_id, team_abbrev, p).await?;
         count += 1;
     }
+
+    // Derive the scoreboard line from the boxscore itself. The NHL
+    // schedule endpoint drops `game_score` for completed playoff
+    // games, and `get_game_data` can 404 mid-game — both would leave
+    // nhl_games.home_score / away_score NULL even though the boxscore
+    // we just wrote has every skater's goal tally. Summing skater +
+    // defense goals per side produces the team total, which is the
+    // same number the NHL scoreboard shows (goalies score 0).
+    let home_goals: i32 = home
+        .forwards
+        .iter()
+        .chain(home.defense.iter())
+        .map(|p| p.goals.unwrap_or(0))
+        .sum();
+    let away_goals: i32 = away
+        .forwards
+        .iter()
+        .chain(away.defense.iter())
+        .map(|p| p.goals.unwrap_or(0))
+        .sum();
+    sqlx::query(
+        r#"
+        UPDATE nhl_games
+           SET home_score = $2,
+               away_score = $3,
+               updated_at = NOW()
+         WHERE game_id = $1
+        "#,
+    )
+    .bind(game_id)
+    .bind(home_goals)
+    .bind(away_goals)
+    .execute(&mut *tx)
+    .await
+    .map_err(Error::Database)?;
+
     tx.commit().await.map_err(Error::Database)?;
     Ok(count)
 }
