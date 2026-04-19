@@ -179,6 +179,59 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // --------------------------------------------------------------
+    // Cold-start auto-seed
+    // --------------------------------------------------------------
+    //
+    // The mirror tables exist as soon as migrations run, but they
+    // start empty. The pollers populate `nhl_games` (today's
+    // schedule) and `nhl_player_game_stats` (live games only) as
+    // they tick — but they never re-fetch boxscores for games that
+    // finalized BEFORE the live poller first saw them LIVE. After
+    // a fresh deploy mid-day, that means every already-final game
+    // has no row in `nhl_player_game_stats`, so handlers that sum
+    // from it (Rankings, Race Odds Current) read as zeros.
+    //
+    // Detect that case once at boot — if the per-game stats table
+    // is empty, fire a one-shot rehydrate to seed it. After the
+    // first successful run the table has rows and this short-
+    // circuits forever; manual `/api/admin/rehydrate` is still
+    // available for explicit re-seeds.
+    {
+        let db_seed = db.clone();
+        let nhl_seed = Arc::new(nhl_client.clone());
+        tokio::spawn(async move {
+            // Wait long enough for meta_poller's first tick to land
+            // today's schedule into nhl_games — rehydrate iterates
+            // those rows for boxscores. Stagger is 15 s; +30 s gives
+            // the schedule fetch + upsert time to complete.
+            tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM nhl_player_game_stats",
+            )
+            .fetch_one(db_seed.pool())
+            .await
+            .unwrap_or(0);
+            if count > 0 {
+                tracing::debug!(
+                    rows = count,
+                    "auto-seed: nhl_player_game_stats has data, skipping rehydrate"
+                );
+                return;
+            }
+            info!("auto-seed: nhl_player_game_stats is empty; running rehydrate to seed mirror");
+            let summary =
+                fantasy_hockey::infra::jobs::rehydrate::run(&db_seed, nhl_seed).await;
+            info!(
+                games = summary.games_upserted,
+                player_rows = summary.boxscore_player_rows,
+                landings = summary.landing_captures,
+                errors = summary.errors.len(),
+                "auto-seed: rehydrate complete"
+            );
+        });
+    }
+
     // Compose the prediction adapter. In production with
     // `ANTHROPIC_API_KEY` set we use the Claude narrator; without a
     // key we wire a null adapter so handlers that optionally

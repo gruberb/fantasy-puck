@@ -55,7 +55,12 @@ pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>) -> RehydrateSummary {
     // ---- Schedule: playoff start → today (+1). Per-date freshness
     // gate so a repeat rehydrate skips dates the meta poller just
     // wrote.
-    let today = chrono::Utc::now().date_naive();
+    //
+    // ET-today, not UTC — same rationale as in meta_poller. NHL's
+    // schedule endpoint keys games by ET local date.
+    let today = chrono::Utc::now()
+        .with_timezone(&chrono_tz::America::New_York)
+        .date_naive();
     let mut dates: Vec<String> = Vec::new();
     let playoff_start = crate::api::playoff_start();
     let start_naive = chrono::NaiveDate::parse_from_str(playoff_start, "%Y-%m-%d")

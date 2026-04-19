@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use chrono_tz::America::New_York;
 use tokio::time::{interval_at, Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -82,7 +83,16 @@ async fn run_one_tick(db: &FantasyDb, nhl: &Arc<NhlClient>) {
 }
 
 async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>) -> anyhow::Result<()> {
-    let today = Utc::now().date_naive().format("%Y-%m-%d").to_string();
+    // Eastern-Time date matches what the meta poller writes to
+    // `nhl_games.game_date` — see the comment in meta_poller's
+    // `tick_body`. Using Utc::now() here would lose every late ET
+    // game between midnight UTC and midnight ET because the
+    // mirror has the row keyed under the previous day.
+    let today = Utc::now()
+        .with_timezone(&New_York)
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
     let pool = db.pool();
 
     let game_ids = nhl_mirror::list_live_game_ids_for_date(pool, &today).await?;

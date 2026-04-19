@@ -20,7 +20,8 @@
 
 use std::sync::Arc;
 
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
+use chrono_tz::America::New_York;
 use tokio::time::{interval_at, Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -136,7 +137,15 @@ async fn tick_body(
 
     // ---- Today's schedule — every tick, unless the mirror was
     // touched in the last 5 minutes.
-    let today = Utc::now().date_naive();
+    //
+    // "Today" is the *Eastern Time* date, not the UTC date. NHL's
+    // `/schedule/{date}` keys games by ET local date — a 9 pm ET
+    // game on April 18 is in the response for date "2026-04-18"
+    // even when the wall clock at the server is already past UTC
+    // midnight (April 19). Using `Utc::now().date_naive()` here
+    // would skip every late-evening eastern slate during the
+    // ~4-hour window between midnight UTC and midnight ET.
+    let today: NaiveDate = Utc::now().with_timezone(&New_York).date_naive();
     let today_str = today.format("%Y-%m-%d").to_string();
     let today_last = nhl_mirror::last_update_nhl_games_for_date(pool, &today_str)
         .await

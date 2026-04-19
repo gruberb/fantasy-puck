@@ -4,6 +4,13 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.19.2 — 2026-04-19 (backend)
+
+### Fixed
+
+- Pollers and rehydrate now use **Eastern Time** for "today" instead of UTC. NHL's `/schedule/{date}` endpoint keys games by ET local date — a 9 pm ET game on April 18 is in the response under `date = "2026-04-18"` even after the wall-clock at the server has rolled into UTC April 19. Previously the meta poller fetched `/schedule/2026-04-19` and filtered for that exact date, which silently dropped every late ET slate during the 4-hour window between midnight UTC and midnight ET — the mirror was empty for tonight's games even though the pollers were running on schedule. Same `Utc::now()` → `Utc::now().with_timezone(&America::New_York)` swap applied to `live_poller::tick_body` (so it queries the right `nhl_games` rows) and to `rehydrate` (so the playoff_start → today range is built in ET).
+- Cold-start auto-seed: `main.rs` now spawns a one-shot rehydrate 45 s after boot if `nhl_player_game_stats` is empty. Eliminates the manual-`/api/admin/rehydrate`-after-deploy step that was needed for the v1.19.0 cutover.
+
 ## v1.19.1 — 2026-04-19 (backend) / v1.12.1 (frontend)
 
 ### Changed
