@@ -101,7 +101,7 @@ File: [`backend/src/infra/jobs/live_poller.rs`](../backend/src/infra/jobs/live_p
 | Interval | 60 s |
 | Startup delay | 45 s |
 | Leader election | Postgres advisory lock `884_471_193_002` |
-| Work | For each `LIVE` / `CRIT` / `PRE` game on today's date: upsert boxscore, update state/score/period, invalidate `pulse_narrative:{league}:*` on `LIVE|CRIT → OFF|FINAL` transition |
+| Work | Via `nhl_mirror::list_games_needing_poll(today)`: every `LIVE` / `CRIT` row regardless of date, plus `PRE` rows on today. For each one: upsert boxscore, update state/score/period, invalidate `pulse_narrative:{league}:*` on `LIVE|CRIT → OFF|FINAL` transition. The any-date sweep is the self-heal pass — a process restart or rate-limit blip can leave a row stuck on `LIVE` after the real game finalised, and a today-only query would never re-check it. |
 
 ## Startup one-shots
 

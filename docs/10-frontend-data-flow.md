@@ -53,7 +53,7 @@ Each row: what the page calls, at what staleTime, and whether anything polls. "U
 | --- | --- | --- | --- | --- | --- |
 | `LoginPage` | `useAuth` (context) | POST `/api/auth/login`, `/api/auth/register` | n/a | - | - |
 | `LeaguePickerPage` | `LeagueContext` | GET `/api/leagues`, GET `/api/auth/memberships` | DEFAULT (5 min) | - | - |
-| `HomePage` | Uses several dashboards (rankings, top skaters, upcoming games) | Multiple | DEFAULT | - | - |
+| `HomePage` | Uses several dashboards (rankings, top skaters, upcoming games) + `LiveRankingsTable` via `usePulse` when `hasLiveGames` | Multiple + GET `/api/pulse?league_id=...` (piggy-backs on PulsePage's query) | DEFAULT | Inherits Pulse's 60 s poll while any game is LIVE/CRIT | - |
 | `FantasyTeamsPage` | `useFantasyTeams` | GET `/api/fantasy/teams?league_id=...` | DEFAULT | - | - |
 | `FantasyTeamDetailPage` | `useFantasyTeam` | GET `/api/fantasy/teams/{id}` | DEFAULT | - | - |
 | `RankingsPage` | `useRankingsData` | GET `/api/fantasy/rankings/daily`, GET `/api/fantasy/rankings/playoffs` | DEFAULT | 30 s when viewing today; off otherwise | - |
@@ -62,7 +62,8 @@ Each row: what the page calls, at what staleTime, and whether anything polls. "U
 | `GamesPage` | `useGamesData` | GET `/api/nhl/games?date=&league_id=` | DEFAULT | 30 s when any game is LIVE/CRIT; off otherwise | - |
 | `SkatersPage` | `useSkatersData` | GET `/api/nhl/skaters/top` | DEFAULT | - | - |
 | `DraftPage` | `useDraftSession`, `usePlayerPool`, `useDraftPicks`, `useMakePick`, `useFinalizeDraft`, `useSleeperRound`, `useLeagueMembers` | GET `/api/leagues/{id}/draft`, GET `/api/draft/{id}`, POST `/api/draft/{id}/pick`, ... | DEFAULT | - | **Yes** |
-| `AdminPage` | Admin action hooks | GET `/api/admin/*` | DEFAULT | - | - |
+| `MyLeaguesPage` | `useLeagues` | GET `/api/leagues` | DEFAULT | - | - |
+| `AdminDashboardPage` | `useAdminAction` per panel | GET `/api/admin/cache/invalidate`, `/api/admin/process-rankings/{date}`, `/api/admin/prewarm`, `/api/admin/rehydrate`, `/api/admin/backfill-historical`, `/api/admin/rebackfill-carousel`, `/api/admin/calibrate`, `/api/admin/calibrate-sweep` | n/a (one-shot on button press) | - | Admin-only; non-admins redirect to `/my-leagues` |
 | `JoinLeaguePage` | League API | GET `/api/leagues`, POST `/api/leagues/{id}/join` | DEFAULT | - | - |
 | `LeagueSettingsPage` | League API | PUT `/api/fantasy/teams/{id}`, DELETE member, DELETE league | DEFAULT | - | - |
 | `SettingsPage` | Auth | PUT `/api/auth/profile`, DELETE `/api/auth/account` | n/a | - | - |

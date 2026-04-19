@@ -159,7 +159,7 @@ Handler in [`handlers/insights.rs`](../backend/src/api/handlers/insights.rs).
 | --- | --- | --- | --- | --- |
 | GET | `/api/insights` | `get_insights` | Optional | `response_cache` (keyed per league) with miss-through to mirror reads + Claude narrative + Daily Faceoff headline scraper |
 
-The response includes a generated narrative and a set of signals (hot players, cold players, today's slate, series projections). The narrative is cached per-day; invalidation is controlled by the daily prewarm cron, which overwrites it at 10:00 UTC.
+The response includes a generated narrative and a set of signals: hot players, cold players, today's slate, series projections, and a **Last Night** recap (games that finalised on the previous hockey-date with their final score, post-game series state, and top scorers). The narrative object has four fields — `todays_watch`, `game_narratives[]`, `hot_players`, `bracket`, and `last_night` (a markdown-ish string with `### Subheading` per game in a Daily Faceoff voice). Narratives are cached per-day; invalidation is controlled by the daily prewarm cron, which overwrites the `insights:*` rows at 10:00 UTC. To force a regeneration mid-day, hit `GET /api/admin/cache/invalidate?scope=today`.
 
 ### Pulse
 
@@ -169,7 +169,9 @@ Handler in [`handlers/pulse.rs`](../backend/src/api/handlers/pulse.rs).
 | --- | --- | --- | --- | --- |
 | GET | `/api/pulse?league_id=...` | `get_pulse` | Required | `v_daily_fantasy_totals` (live), `nhl_games`, `nhl_playoff_bracket`, plus Claude narrative cached at `pulse_narrative:{league}:{team}:{season}:{gt}:{date}` |
 
-Details in [`06-business-logic.md`](./06-business-logic.md). The cache key is invalidated by the live poller on `LIVE|CRIT → OFF|FINAL` transitions.
+`PulseResponse` carries the league board (with live `pointsToday` from `v_daily_fantasy_totals`), a per-team series forecast, the caller's games tonight, a flat `games_today` list of today's NHL matchups (home/away abbrev pairs — used by the dashboard's Live Rankings section), an `nhl_team_cup_odds` map lifted from the cached race-odds payload (used by the narrator to contrast stack concentration vs. path diversity), and the narrative itself.
+
+The narrative is a structured `### The Read` / `### Swing Pieces` / `### Rival Risk` block cached at `pulse_narrative:{league}:{team}:{season}:{gt}:{date}`. Details in [`06-business-logic.md`](./06-business-logic.md). The cache key is invalidated by the live poller on `LIVE|CRIT → OFF|FINAL` transitions for games that any of the league's rostered players were in, so the next Pulse hit regenerates with the final score in view.
 
 ### Race odds
 
@@ -183,7 +185,7 @@ Modes: League (league-scoped race) or Champion (global Fantasy Champion board). 
 
 ### Admin
 
-All admin handlers check `auth.is_admin` and return 403 if unset. Handlers in [`handlers/admin.rs`](../backend/src/api/handlers/admin.rs). Full behavior described in [`07-background-jobs.md`](./07-background-jobs.md).
+All admin handlers check `auth.is_admin` and return 403 if unset. Handlers in [`handlers/admin.rs`](../backend/src/api/handlers/admin.rs). Full behavior described in [`07-background-jobs.md`](./07-background-jobs.md). Every endpoint below is also surfaced as a one-click panel in the admin dashboard at `/admin` (admin-only route), with inline response rendering — see `frontend/src/pages/AdminDashboardPage.tsx`.
 
 | Method | Path | Handler | Returns |
 | --- | --- | --- | --- |

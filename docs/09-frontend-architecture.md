@@ -75,7 +75,7 @@ frontend/src/
 │   └── ui/
 │
 └── pages/                  # Top-level route components
-    ├── AdminPage.tsx
+    ├── AdminDashboardPage.tsx
     ├── DraftPage.tsx
     ├── FantasyTeamDetailPage.tsx
     ├── FantasyTeamsPage.tsx
@@ -86,6 +86,7 @@ frontend/src/
     ├── LeaguePickerPage.tsx
     ├── LeagueSettingsPage.tsx
     ├── LoginPage.tsx
+    ├── MyLeaguesPage.tsx
     ├── PulsePage.tsx
     ├── RankingsPage.tsx
     ├── SettingsPage.tsx
@@ -113,7 +114,8 @@ Defined in [`frontend/src/App.tsx`](../frontend/src/App.tsx). Everything except 
 /skaters                           SkatersPage               (Layout)
 /games/:date                       GamesPage                 (Layout)
 /insights                          InsightsPage              (Layout, global variant)
-/admin                             AdminPage                 (Layout + ProtectedRoute)
+/my-leagues                        MyLeaguesPage             (Layout + ProtectedRoute)
+/admin                             AdminDashboardPage        (Layout + ProtectedRoute + isAdmin)
 /join-league                       JoinLeaguePage            (Layout)
 /settings                          SettingsPage              (Layout + ProtectedRoute)
 
@@ -128,7 +130,7 @@ Defined in [`frontend/src/App.tsx`](../frontend/src/App.tsx). Everything except 
    /settings                         LeagueSettingsPage      (ProtectedRoute)
 ```
 
-Three routes are auth-gated via `<ProtectedRoute>`: `/admin`, `/settings`, `/league/:id/draft`, `/league/:id/settings`. The rest are viewable without signing in; pages that need auth-specific data simply return a placeholder when `user` is null.
+Five routes are auth-gated via `<ProtectedRoute>`: `/my-leagues`, `/admin`, `/settings`, `/league/:id/draft`, `/league/:id/settings`. `/admin` additionally redirects non-admins (`profile.isAdmin !== true`) to `/my-leagues` — the route is admin-only and surfaces every `/api/admin/*` endpoint as a one-click action card. The rest are viewable without signing in; pages that need auth-specific data simply return a placeholder when `user` is null.
 
 `InsightsPage` is used in both the global `/insights` route and the league-scoped `/league/:id/insights` route. The component decides which variant it is showing by reading `activeLeagueId` from `LeagueContext` - the hook `useInsights` passes `league_id` to the backend when it's set.
 
@@ -229,6 +231,8 @@ From [`frontend/src/config.ts`](../frontend/src/config.ts):
 | `VITE_API_URL` | `https://api.fantasy-puck.ca/api` | Base URL for backend calls |
 | `VITE_NHL_SEASON` | `20252026` | Displayed season identifier |
 | `VITE_NHL_GAME_TYPE` | `3` (Playoffs) | Drives labels like "2025/2026 Playoffs" |
+| `VITE_NHL_PLAYOFF_START` | `2026-04-18` | Inclusive lower bound for date pickers on Games + Daily Rankings. Mirrors the backend `NHL_PLAYOFF_START`. |
+| `VITE_NHL_SEASON_END` | `2026-06-15` | Inclusive upper bound for the same pickers. Mirrors the backend `NHL_SEASON_END`. |
 
 The WebSocket base URL is derived from `API_URL` at construction time in `WebSocketRealtimeService` ([`lib/realtime.ts:20-26`](../frontend/src/lib/realtime.ts)): `https → wss`, `http → ws`, trailing `/api` stripped.
 
@@ -238,3 +242,14 @@ The WebSocket base URL is derived from `API_URL` at construction time in `WebSoc
 - **"How does the draft page update live?"** → `pages/DraftPage.tsx` + `features/draft/hooks/use-draft-session.ts` + `lib/realtime.ts`. See also [`08-draft.md`](./08-draft.md).
 - **"How does the Pulse page know when to poll?"** → `features/pulse/hooks/use-pulse.ts`.
 - **"How do I add a new endpoint on the frontend?"** → `lib/api-client.ts` (shared fetch wrapper) + a new hook under `features/<name>/hooks/`.
+
+## Design system
+
+UI primitives come from [`@gruberb/fun-ui`](https://www.npmjs.com/package/@gruberb/fun-ui) — a brutalist component library (thick borders, chunky shadows, `Space Grotesk` display font). Direct consumers today: `LoadingSpinner`, `ErrorMessage`, `PageHeader`, `LiveIndicator`, and `Modal` (wrapped as `ConfirmDialog` for the admin dashboard). Styles are pulled in from `index.css`:
+
+```css
+@import "tailwindcss";
+@import "@gruberb/fun-ui/styles";
+```
+
+[`frontend/src/funUiSafelist.ts`](../frontend/src/funUiSafelist.ts) lists every arbitrary-value class baked into the fun-ui bundle (`border-[var(--color-brutal-black)]` etc.). Tailwind v4 skips `node_modules/` when scanning for classes, so without this file those utilities would never land in the output CSS and every fun-ui component would render unstyled. Regenerate with the one-liner in the file header if fun-ui ships new classes.

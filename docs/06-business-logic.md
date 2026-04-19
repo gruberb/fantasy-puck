@@ -134,11 +134,17 @@ From [`handlers/pulse.rs`](../backend/src/api/handlers/pulse.rs):
 | --- | --- | --- |
 | `db.get_all_teams_with_players(league_id)` | Fantasy rosters | No |
 | `nhl_mirror::get_playoff_carousel(pool, season)` | Playoff bracket shape | No (mirror is itself a cache) |
-| `nhl_mirror::list_games_for_date(pool, today)` | Today's games | No |
+| `nhl_mirror::list_games_for_date(pool, today)` | Today's games (also surfaced as `PulseResponse.games_today` for the dashboard's Live Rankings section) | No |
 | `nhl_mirror::list_team_daily_totals(pool, league_id, today)` | `v_daily_fantasy_totals` sum per team | No |
-| `state.prediction.pulse_narrative(...)` via `response_cache` | Claude narrative text | Yes - `pulse_narrative:{league}:{team}:{season}:{gt}:{date}` |
+| `nhl_mirror::list_league_team_season_totals(..., current_date_window())` | Season-to-date totals, clamped to `[playoff_start, season_end]` in playoff mode | No |
+| Cached `race_odds:v4:*` payload | `nhl_team_cup_odds: HashMap<String, f32>` for the narrator — best-effort, empty if the morning cron hasn't warmed | Yes (reused, not regenerated) |
+| `state.prediction.pulse_narrative(...)` via `response_cache` | Structured "Your Read" narrative (`### The Read` / `### Swing Pieces` / `### Rival Risk`) | Yes - `pulse_narrative:{league}:{team}:{season}:{gt}:{date}` |
 
-Everything except the narrative is recomputed on every request. The data sizes are small enough (one league × ~10 teams × ~30 players × a few live games) that this stays in the single-digit millisecond range.
+Everything except the narrative and the race-odds cross-read is recomputed on every request. The data sizes are small enough (one league × ~10 teams × ~30 players × a few live games) that this stays in the single-digit millisecond range.
+
+### Playoff window clamping
+
+Aggregations across date-keyed history (daily wins/top-3, season totals) are scoped to the active window via `crate::api::current_date_window()` — returns `DateWindow::between(playoff_start, season_end)` in playoff mode, unbounded otherwise. Without this, `daily_rankings` rows from the regular season bled into the playoff Season Overview, and `list_league_team_season_totals` let off-mode stats into the SUMs. The helper is consumed by `team_stats`, `rankings`, `pulse`, and `race_odds` handlers; the per-date query `list_live_game_ids_for_date` is kept untouched because `process_daily_rankings` wants strict per-date semantics for its safety gate.
 
 ## Daily-rankings snapshot
 

@@ -219,7 +219,9 @@ Schedule + live state + final score + series context, one row per game.
 | `start_time_utc` | TIMESTAMPTZ | |
 | `game_state` | TEXT | `FUT` → `PRE` → `LIVE` → `CRIT` → `OFF` → `FINAL` |
 | `home_team`, `away_team` | TEXT | |
-| `home_score`, `away_score`, `period_number`, `period_type` | INTEGER/TEXT nullable | Filled in by the live poller |
+| `home_score`, `away_score` | INTEGER nullable | Filled in by the live poller |
+| `period_number` | SMALLINT nullable | `1`–`3` regulation, `4`+ playoff OT. Live poller writes it straight from `periodDescriptor.number` — do not stuff a composite label here. |
+| `period_type` | TEXT nullable | Raw upstream label: `REG`, `OT`, `SO`. The API handler (`format_period` in `handlers/games.rs`) maps to a human string at render time. |
 | `series_status` | JSONB | Playoffs only |
 | `venue` | TEXT | |
 | `updated_at` | TIMESTAMPTZ | |
