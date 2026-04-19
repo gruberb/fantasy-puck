@@ -24,6 +24,11 @@ export interface RankingTableProps {
   limit?: number;
   viewAllLink?: string;
   viewAllText?: string;
+  /** Force-show the top-right link even when `limit` isn't set or all
+   *  rows fit. Default behavior only shows it when the rendered list
+   *  is truncated. Used by Live Rankings where the link is a
+   *  navigational affordance, not an overflow indicator. */
+  alwaysShowViewAll?: boolean;
   dateBadge?: string | Date;
 
   // State flags

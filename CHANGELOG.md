@@ -4,6 +4,22 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.17.1 — 2026-04-19 (frontend)
+
+### Changed — Live Rankings renders through `RankingTable`
+
+First pass used a custom compact-row layout so row heights and
+column widths didn't match the Overall Rankings table below. Now
+renders through the shared `RankingTable` component with its own
+column set (`useLiveRankingsColumns` — Rank / Team / Today / Active
+/ Total). Section matches Overall / Yesterday / Sleepers visually.
+
+- New `useLiveRankingsColumns` for the table shape.
+- `RankingTable` gains an optional `alwaysShowViewAll` prop so the
+  top-right "Live Games" link renders even when no `limit` is set
+  and the list isn't truncated. The default behavior (show only on
+  overflow) is unchanged for existing callers.
+
 ## v1.17.0 — 2026-04-19 (frontend)
 
 ### Added — Live Rankings on the dashboard

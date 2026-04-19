@@ -1,92 +1,57 @@
-import { Link } from "react-router-dom";
 import { usePulse } from "@/features/pulse";
-import { useLeague } from "@/contexts/LeagueContext";
+import RankingTable from "@/components/common/RankingTable";
+import { useLiveRankingsColumns } from "@/components/rankingsPageTableColumns/liveColumns";
 
 /**
  * Appears at the top of the dashboard only while games are in flight
  * (`hasLiveGames` from Pulse). Lists every league team with at least
  * one rostered skater in tonight's NHL slate, sorted by today's live
  * points (from `v_daily_fantasy_totals`, same source as the Pulse
- * League Live Board). First puck drop through the final whistle of
- * the last game on the slate.
+ * League Live Board). Renders via the shared `RankingTable` so row
+ * heights and column treatment match Overall / Yesterday / Sleepers.
  *
- * Reuses `usePulse` rather than adding a parallel endpoint so the
- * auto-refresh behaviour and per-team points stay in one place.
+ * Uses `usePulse` to piggy-back on its existing auto-refresh loop —
+ * no new endpoint, no additional Claude calls.
  */
 export function LiveRankingsTable() {
   const { pulse, isLoading } = usePulse();
-  const { activeLeagueId } = useLeague();
+  const columns = useLiveRankingsColumns();
 
-  // Hide when pulse hasn't loaded yet, when there are no live games,
-  // or when we can't compute the board — staying quiet in those
-  // states beats flashing an empty container across the whole page.
+  // Render nothing when pulse hasn't loaded, there are no live games,
+  // or no team has any active skaters — the section is a live-only
+  // surface and should not flash an empty frame during pre-game state.
   if (isLoading || !pulse || !pulse.hasLiveGames) return null;
 
-  const lp = activeLeagueId ? `/league/${activeLeagueId}` : "";
   const today = new Date().toISOString().slice(0, 10);
-  const active = pulse.leagueBoard
+  const rows = pulse.leagueBoard
     .filter((t) => t.playersActiveToday > 0)
     .sort((a, b) => {
       if (b.pointsToday !== a.pointsToday) return b.pointsToday - a.pointsToday;
       return b.totalPoints - a.totalPoints;
-    });
+    })
+    .map((t, idx) => ({
+      rank: idx + 1,
+      teamId: t.teamId,
+      teamName: t.teamName,
+      pointsToday: t.pointsToday,
+      playersActiveToday: t.playersActiveToday,
+      totalPoints: t.totalPoints,
+    }));
 
-  if (active.length === 0) return null;
+  if (rows.length === 0) return null;
 
   return (
-    <section className="mb-6 bg-white border-2 border-[#1A1A1A] overflow-hidden">
-      <header className="bg-[#EF4444] text-white px-5 py-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="w-2 h-2 bg-white rounded-full animate-pulse flex-shrink-0" aria-hidden />
-          <h2 className="font-extrabold uppercase tracking-wider text-sm truncate">
-            Live Rankings
-          </h2>
-        </div>
-        <Link
-          to={`/games/${today}`}
-          className="px-3 py-1 bg-white text-[#1A1A1A] font-extrabold uppercase tracking-wider text-[11px] border-2 border-white hover:bg-[#1A1A1A] hover:text-white hover:border-[#1A1A1A] transition-colors whitespace-nowrap"
-        >
-          → Live Games
-        </Link>
-      </header>
-      <div className="divide-y divide-gray-100">
-        <div className="grid grid-cols-[1.5rem_minmax(0,1fr)_3.5rem_3.5rem] sm:grid-cols-[2rem_minmax(0,1fr)_4.5rem_4.5rem] gap-2 px-3 sm:px-4 py-2 text-[10px] uppercase tracking-wider text-gray-400 font-bold">
-          <span>#</span>
-          <span>Team</span>
-          <span className="text-right">Active</span>
-          <span className="text-right">Today</span>
-        </div>
-        {active.map((team, idx) => (
-          <div
-            key={team.teamId}
-            className={`grid grid-cols-[1.5rem_minmax(0,1fr)_3.5rem_3.5rem] sm:grid-cols-[2rem_minmax(0,1fr)_4.5rem_4.5rem] gap-2 px-3 sm:px-4 py-2.5 text-sm items-center ${
-              team.isMyTeam ? "bg-[#FACC15]/10 border-l-4 border-[#FACC15]" : ""
-            }`}
-          >
-            <span className={`font-bold ${team.isMyTeam ? "" : "text-gray-400"}`}>
-              {idx + 1}
-            </span>
-            <Link
-              to={`${lp}/teams/${team.teamId}`}
-              className={`truncate hover:text-[#2563EB] ${
-                team.isMyTeam ? "font-bold" : "font-medium"
-              }`}
-            >
-              {team.teamName}
-            </Link>
-            <span className="text-right tabular-nums text-gray-500">
-              {team.playersActiveToday}
-            </span>
-            <span
-              className={`text-right tabular-nums ${
-                team.isMyTeam ? "font-bold text-[#2563EB]" : "font-bold"
-              }`}
-            >
-              {team.pointsToday}
-            </span>
-          </div>
-        ))}
-      </div>
-    </section>
+    <div className="mb-6">
+      <RankingTable
+        columns={columns}
+        data={rows}
+        keyField="teamId"
+        rankField="rank"
+        title="Live Rankings"
+        viewAllLink={`/games/${today}`}
+        viewAllText="Live Games"
+        alwaysShowViewAll
+      />
+    </div>
   );
 }

@@ -17,6 +17,7 @@ const RankingTable = ({
   limit,
   viewAllLink,
   viewAllText = "View All",
+  alwaysShowViewAll = false,
   dateBadge,
 
   // State flags
@@ -147,7 +148,7 @@ const RankingTable = ({
           subtitle={subtitle}
           viewAllLink={viewAllLink}
           viewAllText={viewAllText}
-          showViewAll={!!limit && safeData.length > limit}
+          showViewAll={alwaysShowViewAll || (!!limit && safeData.length > limit)}
           dateBadge={showDatePicker ? undefined : dateBadge}
           showDatePicker={showDatePicker}
           selectedDate={selectedDate}
