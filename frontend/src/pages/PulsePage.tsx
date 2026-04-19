@@ -53,7 +53,7 @@ const PulsePage = () => {
               <StatCol label="Rank" value={`#${myTeam.rank}`} />
               <StatCol label="Total" value={myTeam.totalPoints.toString()} />
               <StatCol
-                label="Yesterday"
+                label="Latest"
                 value={myTeam.pointsToday.toString()}
                 accent
               />
@@ -136,8 +136,8 @@ const PulsePage = () => {
               <span className="text-right">Total</span>
               <span className="text-right">Active</span>
               <span className="text-right">
-                <span className="sm:hidden">Y'day</span>
-                <span className="hidden sm:inline">Yesterday</span>
+                <span className="sm:hidden">Latest</span>
+                <span className="hidden sm:inline">Latest</span>
               </span>
               <span className="text-right hidden sm:block">5-day</span>
             </div>

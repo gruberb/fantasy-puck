@@ -1,8 +1,9 @@
 # Data Pipeline Redesign: NHL Mirror + Live Poller
 
-Status: **proposed** — not yet implemented.
+Status: **shipped in v1.19.0** (backend, 2026-04-19). The
+[per-endpoint fan-out pattern documented in `TECHNICAL-CACHING.md`](./TECHNICAL-CACHING.md)
+is historical; this document describes the current architecture.
 Owner: backend.
-Supersedes: the per-endpoint NHL fan-out pattern currently documented in [TECHNICAL-CACHING.md](../TECHNICAL-CACHING.md).
 
 ## Why this redesign
 

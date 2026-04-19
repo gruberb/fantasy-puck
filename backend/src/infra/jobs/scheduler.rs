@@ -1,8 +1,6 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{Duration, NaiveDate, Utc};
-use futures::{stream, StreamExt, TryStreamExt};
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info};
 
@@ -10,20 +8,18 @@ use crate::api::handlers::insights::generate_and_cache_insights;
 use crate::api::handlers::race_odds::generate_and_cache_race_odds;
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
-use crate::infra::db::FantasyDb;
-use crate::error::Result;
-use crate::domain::models::fantasy::{DailyRanking, TeamDailyPerformance};
+use crate::infra::db::{nhl_mirror, FantasyDb};
+use crate::error::{Error, Result};
 use crate::tuning::scheduler as tuning;
-use crate::domain::services::fantasy_points::process_game_performances;
 use crate::infra::jobs::player_pool::refresh_playoff_roster_cache;
 use crate::infra::jobs::playoff_ingest::ingest_playoff_games_for_date;
 use crate::ws::draft_hub::DraftHub;
-use crate::{Error, NhlClient};
+use crate::NhlClient;
 
 /// Process and store daily rankings for a specific date and league
 pub async fn process_daily_rankings(
     db: &FantasyDb,
-    nhl_client: &NhlClient,
+    _nhl_client: &NhlClient,
     date: &str,
     league_id: &str,
 ) -> Result<()> {
@@ -31,124 +27,73 @@ pub async fn process_daily_rankings(
         "Processing daily rankings for date: {}, league: {}",
         date, league_id
     );
+    let pool = db.pool();
 
-    // Fetch the games for the specified date
-    let games_response = nhl_client.get_schedule_by_date(date).await?;
-    let all_games = games_response.games_for_date(date);
-
-    // Check if we have any games for this date
-    if all_games.is_empty() {
-        info!("No games found for date {}", date);
-        return Ok(());
-    }
-
-    // Check if ALL games are completed (none are live)
-    let any_games_live = all_games.iter().any(|game| game.game_state.is_live());
-    if any_games_live {
+    // Safety gate: if any game on this date is still LIVE/CRIT/PRE
+    // in the mirror, the daily total is still moving and we don't
+    // want to snapshot it. The 9am / 3pm UTC crons run against
+    // *yesterday*, so this gate is usually a no-op; it matters for
+    // a manual /api/admin/process-rankings call fired mid-afternoon
+    // against today.
+    let still_live = nhl_mirror::list_live_game_ids_for_date(pool, date).await?;
+    if !still_live.is_empty() {
         info!(
-            "Some games are still in progress for date {}. Skipping rankings processing.",
-            date
+            date = %date,
+            live = still_live.len(),
+            "process_daily_rankings: games still in progress, skipping"
         );
         return Ok(());
     }
 
-    // Get only completed games
-    let completed_games = all_games
-        .into_iter()
-        .filter(|game| game.game_state.is_completed())
-        .collect::<Vec<_>>();
+    // Read finalised per-team totals from the view. One query.
+    let rows: Vec<(i64, i32, i32, i32)> = sqlx::query_as(
+        r#"
+        SELECT team_id, goals::int, assists::int, points::int
+          FROM v_daily_fantasy_totals
+         WHERE league_id = $1::uuid
+           AND date       = $2::date
+           AND points > 0
+         ORDER BY points DESC, team_id
+        "#,
+    )
+    .bind(league_id)
+    .bind(date)
+    .fetch_all(pool)
+    .await?;
 
-    // If no completed games
-    if completed_games.is_empty() {
-        info!("No completed games found for date {}", date);
+    if rows.is_empty() {
+        info!(date = %date, "process_daily_rankings: no scoring in league today");
         return Ok(());
     }
 
-    // Process all completed games and aggregate team performances
-    let all_team_performances = stream::iter(completed_games)
-        .map(|game| {
-            let db_clone = db.clone();
-            let nhl_client_clone = nhl_client.clone();
-            let league_id_owned = league_id.to_string();
-            async move {
-                // Try to get boxscore for this game
-                let boxscore = nhl_client_clone
-                    .get_game_boxscore(game.id)
-                    .await
-                    .map_err(|e| {
-                        error!(
-                            "Warning: Could not fetch boxscore for game {}: {}",
-                            game.id, e
-                        );
-                        Error::Internal(
-                            "Internal Server Error trying to get NHL Game information".to_string(),
-                        )
-                    })?;
-
-                // Get fantasy players for both teams, scoped to league
-                let home_team = game.home_team.abbrev.as_str();
-                let away_team = game.away_team.abbrev.as_str();
-                let fantasy_players = db_clone
-                    .get_fantasy_players_for_nhl_teams(&[home_team, away_team], &league_id_owned)
-                    .await?;
-
-                // Process performances for this game
-                Ok::<Vec<TeamDailyPerformance>, Error>(process_game_performances(
-                    &fantasy_players,
-                    &boxscore,
-                ))
-            }
-        })
-        .buffer_unordered(4) // Process up to 4 games concurrently
-        .try_fold(
-            HashMap::<i64, TeamDailyPerformance>::new(),
-            |mut acc, performances| async move {
-                // Merge these performances into the accumulator
-                for perf in performances {
-                    acc.entry(perf.team_id)
-                        .and_modify(|existing| {
-                            existing
-                                .player_performances
-                                .extend(perf.player_performances.clone());
-                            existing.total_points += perf.total_points;
-                            existing.total_assists += perf.total_assists;
-                            existing.total_goals += perf.total_goals;
-                        })
-                        .or_insert(perf);
-                }
-                Ok(acc)
-            },
-        )
-        .await?;
-
-    // Convert to rankings domain model
-    let daily_rankings = DailyRanking::build_rankings(all_team_performances);
-
-    // Store rankings in the database (with league_id)
-    for ranking in &daily_rankings {
+    for (rank, (team_id, goals, assists, points)) in rows.iter().enumerate() {
         sqlx::query(
-            "INSERT INTO daily_rankings (date, team_id, league_id, rank, points, goals, assists)
-                    VALUES ($1, $2, $3::uuid, $4, $5, $6, $7)
-                    ON CONFLICT (team_id, date, league_id) DO UPDATE SET
-                        rank = EXCLUDED.rank,
-                        points = EXCLUDED.points,
-                        goals = EXCLUDED.goals,
-                        assists = EXCLUDED.assists",
+            r#"
+            INSERT INTO daily_rankings (date, team_id, league_id, rank, points, goals, assists)
+            VALUES ($1, $2, $3::uuid, $4, $5, $6, $7)
+            ON CONFLICT (team_id, date, league_id) DO UPDATE SET
+                rank = EXCLUDED.rank,
+                points = EXCLUDED.points,
+                goals = EXCLUDED.goals,
+                assists = EXCLUDED.assists
+            "#,
         )
         .bind(date)
-        .bind(ranking.team_id)
+        .bind(team_id)
         .bind(league_id)
-        .bind(ranking.rank as i64)
-        .bind(ranking.daily_points)
-        .bind(ranking.daily_goals)
-        .bind(ranking.daily_assists)
-        .execute(db.pool())
+        .bind(rank as i64 + 1)
+        .bind(points)
+        .bind(goals)
+        .bind(assists)
+        .execute(pool)
         .await?;
     }
 
     info!(
-        "Successfully stored daily rankings for date: {}, league: {}",
-        date, league_id
+        date = %date,
+        league = %league_id,
+        rows = rows.len(),
+        "process_daily_rankings: snapshot written from v_daily_fantasy_totals"
     );
     Ok(())
 }
