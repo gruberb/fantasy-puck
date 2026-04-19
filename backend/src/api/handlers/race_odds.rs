@@ -187,10 +187,26 @@ async fn build_response(
 
     let team_odds = if mode == RaceOddsMode::League {
         let mut teams = output.teams.clone();
+        // Sort key: projected_final_mean desc. The Monte Carlo
+        // outputs (win_prob, top3_prob) are point-in-time from the
+        // 10:00 UTC prewarm, so sorting by win_prob would freeze
+        // the rank order all day even as `current_points` and
+        // `projected_final_mean` slide live with new scoring.
+        // Sorting by projected lets the table re-rank as soon as
+        // the live overlay updates a team's projection. Win %
+        // breaks ties so two teams with identical projections
+        // still order by simulator confidence; team_name is the
+        // final stable tiebreaker.
         teams.sort_by(|a, b| {
-            b.win_prob
-                .partial_cmp(&a.win_prob)
+            b.projected_final_mean
+                .partial_cmp(&a.projected_final_mean)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    b.win_prob
+                        .partial_cmp(&a.win_prob)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| a.team_name.cmp(&b.team_name))
         });
         teams
     } else {
@@ -1163,8 +1179,20 @@ async fn overlay_current_from_mirror(
             entry.p10 += delta_f;
             entry.p90 += delta_f;
         }
-        // Keep the sort by win_prob intact — win% isn't recomputed, so
-        // rank order doesn't change. No re-sort needed.
+        // Re-sort because projections may have shifted on overlay
+        // and the rank-by-projected order matters more than the
+        // cached layout.
+        response.team_odds.sort_by(|a, b| {
+            b.projected_final_mean
+                .partial_cmp(&a.projected_final_mean)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    b.win_prob
+                        .partial_cmp(&a.win_prob)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| a.team_name.cmp(&b.team_name))
+        });
     }
 
     if !response.champion_leaderboard.is_empty() {

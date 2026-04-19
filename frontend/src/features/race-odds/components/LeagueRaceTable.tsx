@@ -3,6 +3,13 @@ import type { TeamOdds } from "../types";
 interface LeagueRaceTableProps {
   teams: TeamOdds[];
   myTeamId?: number | null;
+  /**
+   * ISO timestamp from the race-odds response (`generatedAt`). Used to
+   * caption the Win % / Top-3 columns so users know those numbers came
+   * from the daily prewarm and don't refresh per goal — unlike Current /
+   * Projected which DO update live.
+   */
+  generatedAt?: string;
 }
 
 /**
@@ -12,15 +19,21 @@ interface LeagueRaceTableProps {
  * Sits below the bar visualization to give precise numbers when the user
  * wants to scan the actual values instead of the visual ratio.
  */
-export function LeagueRaceTable({ teams, myTeamId }: LeagueRaceTableProps) {
+export function LeagueRaceTable({ teams, myTeamId, generatedAt }: LeagueRaceTableProps) {
   if (teams.length === 0) return null;
   const me = myTeamId != null ? teams.find((t) => t.teamId === myTeamId) : undefined;
   const showH2H = me != null && teams.length > 1;
   const showTop3 = teams.length > 3;
+  const winSimAt = formatGeneratedAt(generatedAt);
 
   return (
     <div className="border border-[var(--color-divider)] overflow-x-auto">
       <table className="w-full text-sm">
+        {winSimAt && (
+          <caption className="caption-bottom px-3 py-2 text-[10px] text-[var(--color-ink-muted)] tabular-nums text-right">
+            Current / Projected update live; Win % &amp; Top-3 from the simulation last run {winSimAt}.
+          </caption>
+        )}
         <thead>
           <tr className="bg-[var(--color-surface-sunk)] text-[10px] uppercase tracking-widest text-[var(--color-ink-muted)] font-bold">
             <th className="px-3 py-2 text-left w-8">#</th>
@@ -103,4 +116,33 @@ export function LeagueRaceTable({ teams, myTeamId }: LeagueRaceTableProps) {
       </table>
     </div>
   );
+}
+
+/**
+ * Format the response's `generatedAt` ISO timestamp into a short
+ * "10:00 UTC, today" / "10:00 UTC, yesterday" form. The simulation
+ * fires at 10:00 UTC daily so most of the time the user is reading
+ * a same-day or one-day-old run; explicit dates only show up
+ * if the cache hasn't been refreshed for some reason.
+ */
+function formatGeneratedAt(iso?: string): string | null {
+  if (!iso) return null;
+  const ts = new Date(iso);
+  if (Number.isNaN(ts.getTime())) return null;
+  const now = new Date();
+  const sameDay =
+    ts.getUTCFullYear() === now.getUTCFullYear() &&
+    ts.getUTCMonth() === now.getUTCMonth() &&
+    ts.getUTCDate() === now.getUTCDate();
+  const yesterday = new Date(now);
+  yesterday.setUTCDate(now.getUTCDate() - 1);
+  const isYesterday =
+    ts.getUTCFullYear() === yesterday.getUTCFullYear() &&
+    ts.getUTCMonth() === yesterday.getUTCMonth() &&
+    ts.getUTCDate() === yesterday.getUTCDate();
+  const time = `${String(ts.getUTCHours()).padStart(2, "0")}:${String(ts.getUTCMinutes()).padStart(2, "0")} UTC`;
+  if (sameDay) return `${time} today`;
+  if (isYesterday) return `${time} yesterday`;
+  const date = ts.toISOString().slice(0, 10);
+  return `${time} on ${date}`;
 }

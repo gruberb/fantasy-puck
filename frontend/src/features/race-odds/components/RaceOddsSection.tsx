@@ -73,7 +73,11 @@ export function RaceOddsSection({ myTeamId }: RaceOddsSectionProps) {
             {isLeague ? (
               <div className="space-y-4">
                 <LeagueRaceBoard teams={data.teamOdds} myTeamId={myTeamId} />
-                <LeagueRaceTable teams={data.teamOdds} myTeamId={myTeamId} />
+                <LeagueRaceTable
+                  teams={data.teamOdds}
+                  myTeamId={myTeamId}
+                  generatedAt={data.generatedAt}
+                />
               </div>
             ) : (
               <FantasyChampionBoard players={data.championLeaderboard} />

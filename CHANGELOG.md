@@ -4,6 +4,13 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.19.5 — 2026-04-19 (backend) / v1.12.2 (frontend)
+
+### Changed
+
+- Race-odds team table is now sorted by `projected_final_mean` descending, with `win_prob` as the tiebreaker and `team_name` as the final stable tiebreaker. Previously the sort key was `win_prob`, which is a Monte Carlo output frozen at the daily 10:00 UTC prewarm — so the table didn't re-rank as live scoring shifted projections during the day, and tied win-probability rows ordered randomly. Sorting on projected (which IS overlay-updated on every request via the v1.19.2 `current_points` shift) makes the rank reflect what's actually happening on the ice.
+- LeagueRaceTable adds a footer caption explaining the data freshness split: `Current` and `Projected` update live on every request; `Win %` and `Top-3` come from the Monte Carlo last run at the timestamp shown. Reads `generatedAt` from the race-odds response and renders it as `HH:MM UTC today / yesterday / on YYYY-MM-DD`.
+
 ## v1.19.4 — 2026-04-19 (backend)
 
 ### Changed
