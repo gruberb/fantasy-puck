@@ -1209,3 +1209,105 @@ pub async fn list_leagues_with_player_in_game(
     .map_err(Error::Database)?;
     Ok(rows)
 }
+
+// ---------------------------------------------------------------------
+// Freshness checks — used by the meta poller to skip redundant NHL
+// fetches when the mirror tables were updated recently enough.
+// Each helper returns the most recent `updated_at` in the relevant
+// mirror table, or `None` if the table is empty (which callers
+// treat as "always stale → always fetch").
+// ---------------------------------------------------------------------
+
+pub async fn last_update_nhl_games_for_date(
+    pool: &PgPool,
+    date: &str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    let v = sqlx::query_scalar("SELECT MAX(updated_at) FROM nhl_games WHERE game_date = $1::date")
+        .bind(date)
+        .fetch_one(pool)
+        .await
+        .map_err(Error::Database)?;
+    Ok(v)
+}
+
+pub async fn last_update_nhl_skater_season_stats(
+    pool: &PgPool,
+    season: i32,
+    game_type: i16,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    let v = sqlx::query_scalar(
+        "SELECT MAX(updated_at) FROM nhl_skater_season_stats WHERE season = $1 AND game_type = $2",
+    )
+    .bind(season)
+    .bind(game_type)
+    .fetch_one(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(v)
+}
+
+pub async fn last_update_nhl_goalie_season_stats(
+    pool: &PgPool,
+    season: i32,
+    game_type: i16,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    let v = sqlx::query_scalar(
+        "SELECT MAX(updated_at) FROM nhl_goalie_season_stats WHERE season = $1 AND game_type = $2",
+    )
+    .bind(season)
+    .bind(game_type)
+    .fetch_one(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(v)
+}
+
+pub async fn last_update_nhl_standings(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    let v = sqlx::query_scalar("SELECT MAX(updated_at) FROM nhl_standings WHERE season = $1")
+        .bind(season)
+        .fetch_one(pool)
+        .await
+        .map_err(Error::Database)?;
+    Ok(v)
+}
+
+pub async fn last_update_nhl_playoff_bracket(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    let v = sqlx::query_scalar("SELECT MAX(updated_at) FROM nhl_playoff_bracket WHERE season = $1")
+        .bind(season)
+        .fetch_one(pool)
+        .await
+        .map_err(Error::Database)?;
+    Ok(v)
+}
+
+pub async fn last_update_nhl_team_rosters(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    let v = sqlx::query_scalar("SELECT MAX(updated_at) FROM nhl_team_rosters WHERE season = $1")
+        .bind(season)
+        .fetch_one(pool)
+        .await
+        .map_err(Error::Database)?;
+    Ok(v)
+}
+
+/// True if `last` is `None` (no data at all) or older than `max_age`.
+pub fn is_stale(
+    last: Option<chrono::DateTime<chrono::Utc>>,
+    max_age: std::time::Duration,
+) -> bool {
+    match last {
+        None => true,
+        Some(t) => {
+            let age = (chrono::Utc::now() - t).to_std().unwrap_or_default();
+            age >= max_age
+        }
+    }
+}

@@ -124,24 +124,38 @@ async fn tick_body(
     let game_type = cfg_game_type();
     let pool = db.pool();
 
-    // ---- Today's schedule — every tick.
-    // This is the only data that genuinely benefits from 5-min
-    // polling: `game_state` transitions FUT → PRE → LIVE → OFF on
-    // a short timescale and the live-poller only picks up the
-    // switch once a game is already LIVE/CRIT/PRE.
+    // Freshness thresholds. A fetch is skipped if the corresponding
+    // mirror table was updated more recently than its threshold —
+    // this prevents a server restart from re-running every source
+    // on the first tick just because `counter` reset to 1.
+    let today_ttl = live_mirror::META_POLL_INTERVAL;
+    let agg_ttl = live_mirror::META_POLL_INTERVAL
+        * (live_mirror::AGGREGATES_REFRESH_EVERY_N_META_TICKS);
+    let roster_ttl = live_mirror::META_POLL_INTERVAL
+        * (live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS);
+
+    // ---- Today's schedule — every tick, unless the mirror was
+    // touched in the last 5 minutes.
     let today = Utc::now().date_naive();
     let today_str = today.format("%Y-%m-%d").to_string();
-    match nhl.get_schedule_by_date(&today_str).await {
-        Ok(schedule) => {
-            let games = schedule.games_for_date(&today_str);
-            for g in &games {
-                if let Err(e) = nhl_mirror::upsert_game(pool, g, &today_str).await {
-                    warn!(date = %today_str, game_id = g.id, "meta_poller: upsert_game failed: {}", e);
+    let today_last = nhl_mirror::last_update_nhl_games_for_date(pool, &today_str)
+        .await
+        .unwrap_or(None);
+    if nhl_mirror::is_stale(today_last, today_ttl) {
+        match nhl.get_schedule_by_date(&today_str).await {
+            Ok(schedule) => {
+                let games = schedule.games_for_date(&today_str);
+                for g in &games {
+                    if let Err(e) = nhl_mirror::upsert_game(pool, g, &today_str).await {
+                        warn!(date = %today_str, game_id = g.id, "meta_poller: upsert_game failed: {}", e);
+                    }
                 }
+                debug!(date = %today_str, count = games.len(), "meta_poller: today's schedule mirrored");
             }
-            debug!(date = %today_str, count = games.len(), "meta_poller: today's schedule mirrored");
+            Err(e) => warn!(date = %today_str, "meta_poller: today's schedule fetch failed: {}", e),
         }
-        Err(e) => warn!(date = %today_str, "meta_poller: today's schedule fetch failed: {}", e),
+    } else {
+        debug!(date = %today_str, "meta_poller: today's schedule fresh, skipping");
     }
 
     if !work.refresh_aggregates {
@@ -149,89 +163,123 @@ async fn tick_body(
     }
 
     // ---- Everything below runs on the aggregates cadence
-    // (default: every 6th tick = 30 min). Standings / leaderboards /
-    // carousel only change when a game ends, so 5-min polling of
-    // them was mostly wasted NHL calls. Tomorrow's schedule sits
-    // here too — postponements are rare.
+    // (default: every 6th tick = 30 min). Each source is also
+    // freshness-gated: on a server restart the counter=1 tick would
+    // otherwise refetch every aggregate, even though the previous
+    // process just wrote them a minute ago.
 
     // ---- Schedule: tomorrow ----
-    for offset in [1i64] {
-        let date = (today + ChronoDuration::days(offset))
-            .format("%Y-%m-%d")
-            .to_string();
-        match nhl.get_schedule_by_date(&date).await {
+    let tomorrow = today + ChronoDuration::days(1);
+    let tomorrow_str = tomorrow.format("%Y-%m-%d").to_string();
+    let tomorrow_last = nhl_mirror::last_update_nhl_games_for_date(pool, &tomorrow_str)
+        .await
+        .unwrap_or(None);
+    if nhl_mirror::is_stale(tomorrow_last, agg_ttl) {
+        match nhl.get_schedule_by_date(&tomorrow_str).await {
             Ok(schedule) => {
-                let games = schedule.games_for_date(&date);
+                let games = schedule.games_for_date(&tomorrow_str);
                 for g in &games {
-                    if let Err(e) = nhl_mirror::upsert_game(pool, g, &date).await {
-                        warn!(date = %date, game_id = g.id, "meta_poller: upsert_game failed: {}", e);
+                    if let Err(e) = nhl_mirror::upsert_game(pool, g, &tomorrow_str).await {
+                        warn!(date = %tomorrow_str, game_id = g.id, "meta_poller: upsert_game failed: {}", e);
                     }
                 }
-                debug!(date = %date, count = games.len(), "meta_poller: schedule mirrored");
+                debug!(date = %tomorrow_str, count = games.len(), "meta_poller: schedule mirrored");
             }
-            Err(e) => warn!(date = %date, "meta_poller: schedule fetch failed: {}", e),
+            Err(e) => warn!(date = %tomorrow_str, "meta_poller: schedule fetch failed: {}", e),
         }
+    } else {
+        debug!(date = %tomorrow_str, "meta_poller: tomorrow's schedule fresh, skipping");
     }
 
     // ---- Skater leaderboard ----
-    match nhl.get_skater_stats(&season, game_type).await {
-        Ok(leaders) => {
-            match nhl_mirror::upsert_skater_leaderboard(pool, season as i32, game_type as i16, &leaders).await {
-                Ok(n) => debug!(count = n, "meta_poller: skater leaderboard mirrored"),
-                Err(e) => warn!("meta_poller: skater upsert failed: {}", e),
+    let skater_last =
+        nhl_mirror::last_update_nhl_skater_season_stats(pool, season as i32, game_type as i16)
+            .await
+            .unwrap_or(None);
+    if nhl_mirror::is_stale(skater_last, agg_ttl) {
+        match nhl.get_skater_stats(&season, game_type).await {
+            Ok(leaders) => {
+                match nhl_mirror::upsert_skater_leaderboard(pool, season as i32, game_type as i16, &leaders).await {
+                    Ok(n) => debug!(count = n, "meta_poller: skater leaderboard mirrored"),
+                    Err(e) => warn!("meta_poller: skater upsert failed: {}", e),
+                }
             }
+            Err(e) => warn!("meta_poller: skater leaderboard fetch failed: {}", e),
         }
-        Err(e) => warn!("meta_poller: skater leaderboard fetch failed: {}", e),
+    } else {
+        debug!("meta_poller: skater leaderboard fresh, skipping");
     }
 
-    // ---- Goalie leaderboard: use raw payload so we don't need a
-    //      typed struct for every leaderboard category. ----
-    match nhl
-        .get_goalie_stats(&season, game_type)
-        .await
-    {
-        Ok(payload) => {
-            let json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
-            match nhl_mirror::upsert_goalie_leaderboard(pool, season as i32, game_type as i16, &json).await {
-                Ok(n) => debug!(count = n, "meta_poller: goalie leaderboard mirrored"),
-                Err(e) => warn!("meta_poller: goalie upsert failed: {}", e),
+    // ---- Goalie leaderboard ----
+    let goalie_last =
+        nhl_mirror::last_update_nhl_goalie_season_stats(pool, season as i32, game_type as i16)
+            .await
+            .unwrap_or(None);
+    if nhl_mirror::is_stale(goalie_last, agg_ttl) {
+        match nhl.get_goalie_stats(&season, game_type).await {
+            Ok(payload) => {
+                let json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+                match nhl_mirror::upsert_goalie_leaderboard(pool, season as i32, game_type as i16, &json).await {
+                    Ok(n) => debug!(count = n, "meta_poller: goalie leaderboard mirrored"),
+                    Err(e) => warn!("meta_poller: goalie upsert failed: {}", e),
+                }
             }
+            Err(e) => warn!("meta_poller: goalie leaderboard fetch failed: {}", e),
         }
-        Err(e) => warn!("meta_poller: goalie leaderboard fetch failed: {}", e),
+    } else {
+        debug!("meta_poller: goalie leaderboard fresh, skipping");
     }
 
     // ---- Standings ----
-    match nhl.get_standings_raw().await {
-        Ok(payload) => match nhl_mirror::upsert_standings(pool, season as i32, &payload).await {
-            Ok(n) => debug!(count = n, "meta_poller: standings mirrored"),
-            Err(e) => warn!("meta_poller: standings upsert failed: {}", e),
-        },
-        Err(e) => warn!("meta_poller: standings fetch failed: {}", e),
+    let standings_last = nhl_mirror::last_update_nhl_standings(pool, season as i32)
+        .await
+        .unwrap_or(None);
+    if nhl_mirror::is_stale(standings_last, agg_ttl) {
+        match nhl.get_standings_raw().await {
+            Ok(payload) => match nhl_mirror::upsert_standings(pool, season as i32, &payload).await {
+                Ok(n) => debug!(count = n, "meta_poller: standings mirrored"),
+                Err(e) => warn!("meta_poller: standings upsert failed: {}", e),
+            },
+            Err(e) => warn!("meta_poller: standings fetch failed: {}", e),
+        }
+    } else {
+        debug!("meta_poller: standings fresh, skipping");
     }
 
     // ---- Playoff carousel (playoffs only) ----
     if game_type == 3 {
-        match nhl.get_playoff_carousel(season.to_string()).await {
-            Ok(Some(carousel)) => {
-                let json = serde_json::to_value(&carousel).unwrap_or(serde_json::Value::Null);
-                if let Err(e) = nhl_mirror::upsert_playoff_bracket(pool, season as i32, &json).await {
-                    warn!("meta_poller: bracket upsert failed: {}", e);
-                } else {
-                    debug!("meta_poller: playoff carousel mirrored");
+        let bracket_last = nhl_mirror::last_update_nhl_playoff_bracket(pool, season as i32)
+            .await
+            .unwrap_or(None);
+        if nhl_mirror::is_stale(bracket_last, agg_ttl) {
+            match nhl.get_playoff_carousel(season.to_string()).await {
+                Ok(Some(carousel)) => {
+                    let json = serde_json::to_value(&carousel).unwrap_or(serde_json::Value::Null);
+                    if let Err(e) = nhl_mirror::upsert_playoff_bracket(pool, season as i32, &json).await {
+                        warn!("meta_poller: bracket upsert failed: {}", e);
+                    } else {
+                        debug!("meta_poller: playoff carousel mirrored");
+                    }
                 }
+                Ok(None) => debug!("meta_poller: playoff carousel not published yet"),
+                Err(e) => warn!("meta_poller: playoff carousel fetch failed: {}", e),
             }
-            Ok(None) => debug!("meta_poller: playoff carousel not published yet"),
-            Err(e) => warn!("meta_poller: playoff carousel fetch failed: {}", e),
+        } else {
+            debug!("meta_poller: playoff carousel fresh, skipping");
         }
     }
 
-    // ---- Rosters (every Nth tick, default 24 h) ----
-    //
-    // Paced: 32 back-to-back roster fetches at full speed trip NHL's
-    // per-IP rate limit (~20 req/s observed). A 250 ms sleep between
-    // calls keeps us well under the threshold and the whole pass
-    // still completes in ~14 s per run.
+    // ---- Rosters (every Nth tick, default 24 h). Same freshness
+    // gate so a restart shortly after a previous roster refresh
+    // doesn't re-run the whole 32-team pass.
     if work.refresh_rosters {
+        let roster_last = nhl_mirror::last_update_nhl_team_rosters(pool, season as i32)
+            .await
+            .unwrap_or(None);
+        if !nhl_mirror::is_stale(roster_last, roster_ttl) {
+            debug!("meta_poller: rosters fresh, skipping");
+            return Ok(());
+        }
         match nhl.get_all_teams().await {
             Ok(teams) => {
                 let mut count = 0;
