@@ -416,3 +416,80 @@ impl<'a> TeamDbService<'a> {
         Ok(team_stats.into_values().collect())
     }
 }
+
+impl<'a> TeamDbService<'a> {
+    /// Sparkline that merges the `daily_rankings` historical rollup
+    /// with today's live running total from `v_daily_fantasy_totals`.
+    /// Returns per-team points for the last `days` days, ordered by
+    /// date ascending (so callers can take `.last()` for the latest).
+    ///
+    /// Why not just `get_team_sparklines`: that reader goes to
+    /// `daily_rankings` only, which is populated by the 9am / 3pm UTC
+    /// scheduler from *yesterday's* boxscores. On day 1 of a new
+    /// round — or on any day before the cron has fired — the chart
+    /// is empty even though `nhl_player_game_stats` has today's
+    /// data. Unioning the view in gives today's row immediately and
+    /// deduplicates against daily_rankings for prior days.
+    pub async fn get_team_sparklines_with_live(
+        &self,
+        league_id: &str,
+        days: i32,
+        min_date: &str,
+    ) -> Result<HashMap<i64, Vec<i32>>> {
+        let since = chrono::Utc::now() - chrono::Duration::days(days as i64);
+        let window_start = since.format("%Y-%m-%d").to_string();
+        let since_str: String = if !min_date.is_empty() && min_date > window_start.as_str() {
+            min_date.to_string()
+        } else {
+            window_start
+        };
+
+        // Prefer daily_rankings where present (official finalized
+        // rollup); fall back to the live view for dates it hasn't
+        // covered yet (typically today). DISTINCT ON picks the
+        // daily_rankings row over the view row when both exist for
+        // the same (team, date).
+        let rows = sqlx::query(
+            r#"
+            SELECT team_id, date, points
+              FROM (
+                  SELECT DISTINCT ON (team_id, date)
+                         team_id, date::text AS date, points, 1 AS src
+                    FROM daily_rankings
+                   WHERE league_id = $1::uuid
+                     AND date >= $2
+                UNION ALL
+                  SELECT team_id, date::text AS date, points::int AS points, 2 AS src
+                    FROM v_daily_fantasy_totals
+                   WHERE league_id = $1::uuid
+                     AND date::text >= $2
+              ) merged
+             ORDER BY team_id, date, src
+            "#,
+        )
+        .bind(league_id)
+        .bind(&since_str)
+        .map(|row: sqlx::postgres::PgRow| {
+            (
+                row.get::<i64, _>("team_id"),
+                row.get::<String, _>("date"),
+                row.get::<i32, _>("points"),
+            )
+        })
+        .fetch_all(self.pool)
+        .await?;
+
+        // Dedup per (team, date): the outer ORDER BY ensures src=1
+        // (daily_rankings) comes first when both sources have the
+        // same (team, date). We keep the first row per unique key.
+        let mut seen: std::collections::HashSet<(i64, String)> =
+            std::collections::HashSet::new();
+        let mut map: HashMap<i64, Vec<i32>> = HashMap::new();
+        for (team_id, date, points) in rows {
+            if seen.insert((team_id, date)) {
+                map.entry(team_id).or_default().push(points);
+            }
+        }
+        Ok(map)
+    }
+}

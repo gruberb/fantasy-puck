@@ -184,6 +184,21 @@ impl FantasyDb {
             .await
     }
 
+    /// Same shape as `get_team_sparklines` but unioned with
+    /// `v_daily_fantasy_totals` so today's running total shows up
+    /// in the chart before the nightly/afternoon cron rolls it into
+    /// `daily_rankings`. Used by Pulse.
+    pub async fn get_team_sparklines_with_live(
+        &self,
+        league_id: &str,
+        days: i32,
+        min_date: &str,
+    ) -> Result<std::collections::HashMap<i64, Vec<i32>>> {
+        teams::TeamDbService::new(&self.pool)
+            .get_team_sparklines_with_live(league_id, days, min_date)
+            .await
+    }
+
     pub async fn get_all_teams_with_players(
         &self,
         league_id: &str,

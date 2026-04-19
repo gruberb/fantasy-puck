@@ -292,9 +292,15 @@ async fn build_league_board(
     let totals_by_team: HashMap<i64, i32> =
         totals.into_iter().map(|r| (r.team_id, r.points as i32)).collect();
 
+    // Live-aware sparkline: UNIONs daily_rankings (finalized rollups)
+    // with v_daily_fantasy_totals (today's running total from the
+    // mirror). Without the view leg the chart is blank on day 1 of
+    // any round and on every day before the afternoon cron has
+    // processed that day — today's scoring is in
+    // nhl_player_game_stats immediately but not yet in daily_rankings.
     let sparklines = state
         .db
-        .get_team_sparklines(league_id, 5, crate::api::playoff_start())
+        .get_team_sparklines_with_live(league_id, 5, crate::api::playoff_start())
         .await
         .unwrap_or_default();
 
