@@ -367,19 +367,31 @@ impl<'a> TeamDbService<'a> {
             );
         }
 
-        // Query to get all daily rankings for this league with computed rank
+        // Query to get all daily rankings for this league with a
+        // tie-aware rank. `daily_rankings.rank` is assigned from
+        // enumerate() at write time and breaks ties arbitrarily by
+        // team_id, so two teams tied for first get ranks 1 and 2;
+        // this subquery counts how many teams outscored each row
+        // and adds 1, producing shared ranks for true ties.
+        //
+        // The previous version referenced `daily_points`, which does
+        // not exist on this table (the column is `points`). The SQL
+        // errored on every call, silently swallowed by the handler's
+        // `unwrap_or_else(|_| Vec::new())`, so every team rendered
+        // as 0 daily wins + 0 daily top-3 even after the morning
+        // rankings cron had written the rows.
         let daily_rankings = sqlx::query(
             r#"
             SELECT
                 r1.date,
                 r1.team_id,
-                r1.daily_points,
+                r1.points,
                 (
                     SELECT COUNT(*) + 1
                     FROM daily_rankings r2
                     WHERE r2.date = r1.date
                     AND r2.league_id = r1.league_id
-                    AND r2.daily_points > r1.daily_points
+                    AND r2.points > r1.points
                 ) AS true_rank
             FROM daily_rankings r1
             WHERE r1.league_id = $1::uuid

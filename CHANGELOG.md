@@ -4,6 +4,12 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.20.2 — 2026-04-19 (backend)
+
+### Fixed
+
+- Season Overview table's "Daily Wins" and "Daily Top 3" columns rendered as 0 for every team regardless of actual results. `get_daily_ranking_stats` referenced a non-existent `daily_points` column (the `daily_rankings` table's column is `points`); the SQL errored on every call and the handler's `unwrap_or_else(|_| Vec::new())` swallowed the failure silently. Fixed the column reference and promoted the fallback to a `warn!` log so a future SQL regression surfaces in the server logs instead of hiding as a column of zeros.
+
 ## v1.13.2 — 2026-04-19 (frontend)
 
 ### Changed

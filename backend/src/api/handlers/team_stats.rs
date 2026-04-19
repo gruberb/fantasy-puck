@@ -43,12 +43,22 @@ pub async fn get_team_stats(
         stats.clone(),
     );
 
-    // 4. Get daily rankings history (if available)
+    // 4. Get daily rankings history (if available). Log before
+    // falling back to empty — the previous silent swallow hid a
+    // long-standing SQL typo (`daily_points` vs `points`) that
+    // zeroed out this column on every render.
     let daily_rankings = state
         .db
         .get_daily_ranking_stats(league_id)
         .await
-        .unwrap_or_else(|_| Vec::new());
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                league_id = %league_id,
+                error = %e,
+                "team_stats: daily ranking stats query failed; rendering zeros"
+            );
+            Vec::new()
+        });
 
     let daily_rankings_map: HashMap<i64, crate::domain::models::db::TeamDailyRankingStats> = daily_rankings
         .into_iter()
