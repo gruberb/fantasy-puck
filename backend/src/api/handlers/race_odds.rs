@@ -99,12 +99,21 @@ pub async fn generate_and_cache_race_odds(
         today
     );
 
-    if let Some(cached) = state
+    if let Some(mut cached) = state
         .db
         .cache()
         .get_cached_response::<RaceOddsResponse>(&cache_key)
         .await?
     {
+        // The Monte Carlo outputs (win%, top3%, likely range) are
+        // point-in-time from when the cache was written at 10:00 UTC.
+        // `current_points` lives in the same struct but must stay in
+        // step with the mirror as the day progresses — otherwise the
+        // Current column diverges from Rankings / Pulse. Overlay
+        // fresh current from nhl_player_game_stats, and shift the
+        // projected mean / p10 / p90 by the same delta so the
+        // distribution remains anchored at the right starting point.
+        overlay_current_from_mirror(state, league_id, &mut cached).await;
         // Rivalry depends on the caller — recompute it against the cached
         // league standings rather than serving a stale "me vs X" card.
         return Ok(attach_rivalry(cached, my_team_id));
@@ -1105,4 +1114,82 @@ mod tests {
         assert!(out.rivalry.is_none(), "champion mode must not carry rivalry");
     }
 
+}
+
+/// Splice fresh per-team / per-player current-point totals from the
+/// mirror onto a cached `RaceOddsResponse`. The Monte Carlo outputs
+/// (win%, top-3%, likely range) stay exactly as the simulator
+/// produced them — re-simulating on every request is a tens-of-ms
+/// CPU hit per league and unnecessary just to refresh the Current
+/// column. But shifting `projected_final_mean` / `p10` / `p90` by
+/// `(fresh_current - cached_current)` keeps the projection anchored
+/// at the correct starting point: a team that scored 9 points since
+/// the cache was written will see its projected total shift up by 9
+/// without having to re-run the sim.
+async fn overlay_current_from_mirror(
+    state: &Arc<AppState>,
+    league_id: &str,
+    response: &mut RaceOddsResponse,
+) {
+    let season_val = season() as i32;
+    let gt_val = game_type() as i16;
+    let pool = state.db.pool();
+
+    if !league_id.is_empty() && !response.team_odds.is_empty() {
+        let totals = match nhl_mirror::list_league_team_season_totals(
+            pool, league_id, season_val, gt_val,
+        )
+        .await
+        {
+            Ok(rows) => rows,
+            Err(_) => return,
+        };
+        let fresh_by_team: HashMap<i64, i32> = totals
+            .into_iter()
+            .map(|r| (r.team_id, r.points as i32))
+            .collect();
+        for entry in response.team_odds.iter_mut() {
+            let Some(&fresh) = fresh_by_team.get(&entry.team_id) else {
+                continue;
+            };
+            let delta = fresh - entry.current_points;
+            if delta == 0 {
+                continue;
+            }
+            let delta_f = delta as f32;
+            entry.current_points = fresh;
+            entry.projected_final_mean += delta_f;
+            entry.projected_final_median += delta_f;
+            entry.p10 += delta_f;
+            entry.p90 += delta_f;
+        }
+        // Keep the sort by win_prob intact — win% isn't recomputed, so
+        // rank order doesn't change. No re-sort needed.
+    }
+
+    if !response.champion_leaderboard.is_empty() {
+        let ids: Vec<i64> = response
+            .champion_leaderboard
+            .iter()
+            .map(|p| p.nhl_id)
+            .collect();
+        let fresh = nhl_mirror::sum_player_points(pool, &ids, season_val, gt_val)
+            .await
+            .unwrap_or_default();
+        for p in response.champion_leaderboard.iter_mut() {
+            let Some(&fresh_pts) = fresh.get(&p.nhl_id) else {
+                continue;
+            };
+            let delta = fresh_pts - p.current_points;
+            if delta == 0 {
+                continue;
+            }
+            let delta_f = delta as f32;
+            p.current_points = fresh_pts;
+            p.projected_final_mean += delta_f;
+            p.projected_final_median += delta_f;
+            p.p10 += delta_f;
+            p.p90 += delta_f;
+        }
+    }
 }
