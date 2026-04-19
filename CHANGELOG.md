@@ -4,6 +4,12 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.19.4 — 2026-04-19 (backend)
+
+### Changed
+
+- Skaters page (playoff branch) is now a real top-N points leaderboard rather than the eligible-roster pool. Source is `nhl_player_game_stats` aggregated per `player_id` via the new `nhl_mirror::list_top_skaters`, sorted by points desc / goals desc / id. Mirrors what `nhl.com/stats/skaters` shows. Goalies excluded. The fantasy-team-tag overlay is unchanged. Replaces the previous `playoff_roster_cache`-driven view that listed every rostered player whether they had skated or not.
+
 ## v1.19.3 — 2026-04-19 (backend)
 
 ### Fixed

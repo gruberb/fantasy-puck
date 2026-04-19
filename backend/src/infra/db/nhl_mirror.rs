@@ -1386,3 +1386,58 @@ pub async fn aggregate_skater_totals(
         .map(|(id, g, a, p)| (id, (g as i32, a as i32, p as i32)))
         .collect())
 }
+
+/// One leaderboard row: every skater who has appeared in any
+/// completed game of the current `(season, game_type)`, with
+/// totals summed across their boxscore rows. Ordered by points
+/// descending. The metadata fields (`name`, `position`,
+/// `team_abbrev`) come from the most recent game appearance —
+/// captures mid-season trades correctly.
+#[derive(Debug, FromRow)]
+pub struct TopSkaterRow {
+    pub player_id: i64,
+    pub name: String,
+    pub position: String,
+    pub team_abbrev: String,
+    pub goals: i64,
+    pub assists: i64,
+    pub points: i64,
+}
+
+pub async fn list_top_skaters(
+    pool: &PgPool,
+    season: i32,
+    game_type: i16,
+    limit: i64,
+) -> Result<Vec<TopSkaterRow>> {
+    let rows = sqlx::query_as::<_, TopSkaterRow>(
+        r#"
+        WITH agg AS (
+            SELECT pgs.player_id,
+                   COALESCE(SUM(pgs.goals),   0)::bigint AS goals,
+                   COALESCE(SUM(pgs.assists), 0)::bigint AS assists,
+                   COALESCE(SUM(pgs.points),  0)::bigint AS points,
+                   (ARRAY_AGG(pgs.name        ORDER BY pgs.updated_at DESC))[1] AS name,
+                   (ARRAY_AGG(pgs.position    ORDER BY pgs.updated_at DESC))[1] AS position,
+                   (ARRAY_AGG(pgs.team_abbrev ORDER BY pgs.updated_at DESC))[1] AS team_abbrev
+              FROM nhl_player_game_stats pgs
+              JOIN nhl_games g ON g.game_id = pgs.game_id
+             WHERE g.season    = $1
+               AND g.game_type = $2
+             GROUP BY pgs.player_id
+        )
+        SELECT player_id, name, position, team_abbrev, goals, assists, points
+          FROM agg
+         WHERE position <> 'G'
+         ORDER BY points DESC, goals DESC, player_id
+         LIMIT $3
+        "#,
+    )
+    .bind(season)
+    .bind(game_type)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}

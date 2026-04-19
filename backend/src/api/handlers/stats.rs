@@ -42,72 +42,56 @@ pub async fn get_top_skaters(
         }
     }
 
-    // Playoffs: source the eligible pool from the 16 playoff team
-    // rosters (cached in Postgres via playoff_roster_cache so a cold
-    // hit doesn't re-fan-out NHL calls), then layer real per-player
-    // playoff totals on top by aggregating nhl_player_game_stats.
-    // Pre-mirror this branch hard-coded points=0 because the
-    // skater-stats-leaders endpoint is empty / sparse during early
-    // playoffs and the regular leaderboard tops out at top-25 per
-    // category. Now we have the per-game truth in the mirror.
+    // Playoffs: top scorers across all skaters who have appeared in
+    // any playoff game so far. This mirrors what nhl.com/stats/skaters
+    // shows — a real leaderboard, sorted by points desc.
+    //
+    // The data source is `nhl_player_game_stats` aggregated per
+    // player. The previous implementation pulled the eligible
+    // playoff-roster pool from `playoff_roster_cache` and showed
+    // every roster regardless of whether the player had touched
+    // the ice — that was an "eligible pool" view, not a leaderboard.
+    // The fantasy-team tag overlay carries through unchanged.
     if game_type == 3 {
-        let pool = crate::infra::jobs::player_pool::fetch_playoff_roster_pool_cached(
-            &state.db,
-            &state.nhl_client,
-            *season,
-            game_type,
-        )
-        .await?;
-        let player_ids: Vec<i64> = pool.keys().copied().collect();
-        let totals = crate::infra::db::nhl_mirror::aggregate_skater_totals(
+        let rows = crate::infra::db::nhl_mirror::list_top_skaters(
             state.db.pool(),
-            &player_ids,
             *season as i32,
             game_type as i16,
+            limit as i64,
         )
-        .await
-        .unwrap_or_default();
+        .await?;
 
-        let mut players = pool
+        let players = rows
             .into_iter()
-            .map(|(id, (name, position, team_abbrev, headshot))| {
-                let (first_name, last_name) = split_name(&name);
-                let (goals, assists, points) =
-                    totals.get(&id).copied().unwrap_or((0, 0, 0));
+            .map(|r| {
+                let (first_name, last_name) = split_name(&r.name);
                 let mut stats = HashMap::new();
-                stats.insert("goals".to_string(), goals);
-                stats.insert("assists".to_string(), assists);
-                stats.insert("points".to_string(), points);
+                stats.insert("goals".to_string(), r.goals as i32);
+                stats.insert("assists".to_string(), r.assists as i32);
+                stats.insert("points".to_string(), r.points as i32);
                 ConsolidatedPlayerStats {
-                    id,
+                    id: r.player_id,
                     first_name,
                     last_name,
                     sweater_number: None,
-                    headshot,
-                    team_abbrev: team_abbrev.clone(),
-                    team_name: team_abbrev.clone(),
+                    headshot: format!(
+                        "https://assets.nhle.com/mugs/nhl/latest/{}.png",
+                        r.player_id
+                    ),
+                    team_abbrev: r.team_abbrev.clone(),
+                    team_name: r.team_abbrev.clone(),
                     team_logo: format!(
                         "https://assets.nhle.com/logos/nhl/svg/{}_light.svg",
-                        team_abbrev
+                        r.team_abbrev
                     ),
-                    position,
+                    position: r.position,
                     stats,
-                    fantasy_team: fantasy_mapping.get(&id).cloned(),
+                    fantasy_team: fantasy_mapping.get(&r.player_id).cloned(),
                     form: None,
                 }
             })
             .collect::<Vec<_>>();
-        // Sort by points descending so the top scorers are surfaced
-        // first; the playoff path used to display in pool-iteration
-        // order which was effectively random.
-        players.sort_by(|a, b| {
-            b.stats
-                .get("points")
-                .unwrap_or(&0)
-                .cmp(a.stats.get("points").unwrap_or(&0))
-        });
-        let limited = players.into_iter().take(limit).collect::<Vec<_>>();
-        return Ok(json_success(limited));
+        return Ok(json_success(players));
     }
 
     match state.nhl_client.get_skater_stats(season, game_type).await {
