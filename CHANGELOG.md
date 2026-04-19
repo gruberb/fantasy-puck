@@ -4,6 +4,18 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.17.4 — 2026-04-19 (frontend)
+
+### Fixed — Live Rankings rendered upside-down
+
+Switching the body to `RankingTable` in v1.17.3 picked up its
+default sort (`"desc"` on the first column, which resolved to
+`rank`), flipping the list so rank 14 sat on top and rank 1 at
+the bottom. Live Rankings pre-sorts its rows by today's points
+descending and stamps `rank` accordingly, so the right fix is to
+pin `RankingTable` to the precomputed order via
+`initialSortKey="rank"` + `initialSortDirection="asc"`.
+
 ## v1.17.3 — 2026-04-19 (frontend)
 
 ### Changed — Live Rankings body matches Overall Rankings

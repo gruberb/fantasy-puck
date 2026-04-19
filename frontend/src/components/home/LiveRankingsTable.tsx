@@ -43,6 +43,13 @@ export function LiveRankingsTable() {
         keyField="teamId"
         rankField="rank"
         customHeader={<LiveHeader to={`/games/${today}`} />}
+        /* Rows are already pre-sorted (pointsToday DESC, tiebreak by
+           playersActiveToday) with `rank` assigned to match. Without
+           these props `RankingTable` falls back to its default
+           `"desc"` sort on the first column, which flips the list
+           upside-down (rank 14 at the top). */
+        initialSortKey="rank"
+        initialSortDirection="asc"
       />
     </div>
   );
