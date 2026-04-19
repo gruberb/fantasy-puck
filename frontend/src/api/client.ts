@@ -128,10 +128,16 @@ export const api = {
     leagueId: string,
     date: string,
   ): Promise<RankingItem[]> {
-    return fetchApi<RankingItem[]>(
-      withLeague(`fantasy/rankings/daily?date=${date}`, leagueId),
-      { fallback: [] },
-    );
+    // Server wraps the list in `{ date, rankings: [...] }`; unwrap here
+    // so the TS signature (a flat `RankingItem[]`) matches reality and
+    // every caller's `Array.isArray(...)` guard actually succeeds.
+    const response = await fetchApi<
+      RankingItem[] | { date: string; rankings: RankingItem[] }
+    >(withLeague(`fantasy/rankings/daily?date=${date}`, leagueId), {
+      fallback: [],
+    });
+    if (Array.isArray(response)) return response;
+    return response?.rankings ?? [];
   },
 
   async getPlayoffRankings(

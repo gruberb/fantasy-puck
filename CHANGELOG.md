@@ -4,6 +4,12 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.13.1 — 2026-04-19 (frontend)
+
+### Fixed
+
+- Daily Fantasy Scores table rendered the empty state ("No daily rankings available for this date") even when the backend returned the full list. Server response is `{ date, rankings: [...] }` but `api.getDailyFantasySummary` was typed as `Promise<RankingItem[]>` and returned the wrapper object unchanged — HomePage and RankingsPage both guard with `Array.isArray(data) ? data : []`, which fell through to the empty array for every non-list response. `getDailyFantasySummary` now unwraps the `rankings` field at the API boundary so the typed signature matches reality and every caller gets a flat array.
+
 ## v1.20.1 — 2026-04-19 (backend)
 
 ### Fixed
