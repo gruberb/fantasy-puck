@@ -266,6 +266,12 @@ pub async fn prewarm_cache(
     let nhl = state.nhl_client.clone();
     tokio::spawn(async move {
         info!("Admin-triggered pre-warm starting");
+        // Force a fresh Edge refresh first so the insights pre-warm
+        // reads current top-speed / top-shot-speed telemetry from the
+        // mirror. Force=true bypasses the freshness gate — the admin
+        // endpoint is explicit user intent to refresh *now*.
+        let nhl_arc = std::sync::Arc::new(nhl.clone());
+        let _ = crate::infra::jobs::edge_refresher::run(&db, nhl_arc, true).await;
         scheduler::prewarm_derived_payloads(&db, &nhl).await;
         info!("Admin-triggered pre-warm complete");
     });

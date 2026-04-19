@@ -167,6 +167,49 @@ async fn tick_body(
         debug!(date = %today_str, "meta_poller: today's schedule fresh, skipping");
     }
 
+    // ---- Landing capture for today's new FUT/PRE games ----
+    //
+    // `nhl_game_landing` is write-once: the pre-game matchup block
+    // (leaders / goalies / venue / records) only appears in the NHL
+    // landing response while the game is in FUT state, and we want to
+    // keep it visible on the Insights sidebar for the entire hockey-
+    // date. This loop catches exactly the newly-added FUT rows — the
+    // `LEFT JOIN ... IS NULL` filter means each game is fetched at
+    // most once per mirror lifecycle. Most ticks return an empty set
+    // and cost nothing.
+    match nhl_mirror::list_games_without_landing_for_date(pool, &today_str).await {
+        Ok(ids) if !ids.is_empty() => {
+            for gid in ids {
+                match nhl.get_game_landing_raw(gid as u32).await {
+                    Ok(landing) => {
+                        let matchup = landing
+                            .get("matchup")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        match nhl_mirror::capture_game_landing(pool, gid, &matchup).await {
+                            Ok(true) => debug!(game_id = gid, "meta_poller: landing captured"),
+                            Ok(false) => {
+                                debug!(game_id = gid, "meta_poller: landing payload empty, skipped")
+                            }
+                            Err(e) => warn!(
+                                game_id = gid,
+                                "meta_poller: landing upsert failed: {}",
+                                e
+                            ),
+                        }
+                    }
+                    Err(e) => warn!(
+                        game_id = gid,
+                        "meta_poller: landing fetch failed: {}",
+                        e
+                    ),
+                }
+            }
+        }
+        Ok(_) => debug!("meta_poller: all FUT/PRE games already have landing captured"),
+        Err(e) => warn!("meta_poller: landing-pending query failed: {}", e),
+    }
+
     if !work.refresh_aggregates {
         return Ok(());
     }

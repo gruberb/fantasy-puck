@@ -193,6 +193,15 @@ pub mod scheduler {
     /// state.
     pub const DAILY_PREWARM_CRON: &str = "0 0 10 * * *";
 
+    /// Nightly NHL Edge refresh. Pulls per-player top-speed / top-shot-
+    /// speed telemetry for the season leaderboard top cohort into
+    /// `nhl_skater_edge`. 09:30 UTC = 05:30 ET, scheduled 30 minutes
+    /// ahead of the daily prewarm so the insights pre-warm reads fresh
+    /// edge data. Sequential fetch at
+    /// [`super::live_mirror::EDGE_REFRESH_DELAY`] — slower than the
+    /// general rate-limit window by design.
+    pub const EDGE_REFRESH_CRON: &str = "0 30 9 * * *";
+
     /// How long rows sit in the `response_cache` table before the
     /// morning rankings job prunes them.
     pub const CACHE_RETENTION: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -303,4 +312,23 @@ pub mod live_mirror {
     /// refresh tick from ~6 s to ~14 s but gives every team a clean
     /// fetch.
     pub const ROSTER_FETCH_DELAY: Duration = Duration::from_millis(250);
+
+    /// Top-N season-leader skaters the nightly edge refresher covers.
+    /// The Insights hot card shows 5 — 30 gives headroom for the
+    /// L5-form ranking to shuffle the top 20 into a different top 5
+    /// without coverage gaps.
+    pub const EDGE_REFRESH_TOP_N: usize = 30;
+
+    /// Sleep between consecutive Edge calls in the nightly refresher.
+    /// 500 ms × 30 players = ~15 s wall time, comfortably below the
+    /// NHL per-IP rate-limit window. Deliberately more conservative
+    /// than the roster fetch pacing because Edge data refreshes once
+    /// per day and has no latency requirement.
+    pub const EDGE_REFRESH_DELAY: Duration = Duration::from_millis(500);
+
+    /// Freshness window for the Edge mirror. If any row was updated
+    /// within this many hours the refresher skips — avoids duplicate
+    /// work when the admin prewarm and the cron fire close together,
+    /// or when a deploy restarts the process near the cron time.
+    pub const EDGE_REFRESH_FRESHNESS: Duration = Duration::from_secs(18 * 3600);
 }

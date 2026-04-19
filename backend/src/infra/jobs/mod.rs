@@ -3,6 +3,7 @@
 //! Postgres tables. Nothing in this module is called from the
 //! request path.
 
+pub mod edge_refresher;
 pub mod historical_seed;
 pub mod live_poller;
 pub mod meta_poller;

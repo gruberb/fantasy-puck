@@ -100,8 +100,6 @@ export interface InsightsSignals {
   seriesProjections: TeamSeriesProjection[];
   todaysGames: TodaysGameSignal[];
   newsHeadlines: string[];
-  /** True when Hot/Cold points are from the regular season (pre-playoff fallback). */
-  hotColdIsRegularSeason: boolean;
 }
 
 export interface InsightsResponse {

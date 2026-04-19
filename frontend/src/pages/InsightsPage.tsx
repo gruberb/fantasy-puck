@@ -67,12 +67,6 @@ const InsightsPage = () => {
         signals.coldHands.length > 0) && (
         <InsightCard accent="#EF4444" title="Hot + Cold">
           <Narrative text={narratives.hotPlayers} />
-          {signals.hotColdIsRegularSeason && (
-            <p className="text-[11px] text-[var(--color-ink-muted)] mt-1 italic">
-              Playoff data isn't live yet — points below reflect the regular
-              season.
-            </p>
-          )}
           <div className="mt-4 space-y-5">
             <div>
               <p className="text-[10px] uppercase tracking-widest text-[#DC2626] font-bold mb-2">
@@ -80,18 +74,13 @@ const InsightsPage = () => {
               </p>
               {signals.hotPlayers.length === 0 ? (
                 <p className="text-xs text-gray-400">
-                  No hot hands yet — check back after tonight's games.
+                  Playoffs haven't produced data yet — check back after
+                  tonight's games.
                 </p>
               ) : (
                 <div className="flex gap-3 overflow-x-auto pb-2 items-stretch">
                   {signals.hotPlayers.map((p, i) => (
-                    <HotPlayerCard
-                      key={i}
-                      player={p}
-                      rank={i + 1}
-                      tone="hot"
-                      isRegularSeason={signals.hotColdIsRegularSeason}
-                    />
+                    <HotPlayerCard key={i} player={p} rank={i + 1} tone="hot" />
                   ))}
                 </div>
               )}
@@ -107,13 +96,7 @@ const InsightsPage = () => {
               ) : (
                 <div className="flex gap-3 overflow-x-auto pb-2 items-stretch">
                   {signals.coldHands.map((p, i) => (
-                    <HotPlayerCard
-                      key={i}
-                      player={p}
-                      rank={i + 1}
-                      tone="cold"
-                      isRegularSeason={signals.hotColdIsRegularSeason}
-                    />
+                    <HotPlayerCard key={i} player={p} rank={i + 1} tone="cold" />
                   ))}
                 </div>
               )}
@@ -360,14 +343,10 @@ function HotPlayerCard({
   player,
   rank,
   tone = "hot",
-  isRegularSeason = false,
 }: {
   player: HotPlayerSignal;
   rank: number;
   tone?: "hot" | "cold";
-  /** When true, the "playoffPoints" value is actually regular-season points
-      (pre-playoff fallback) and the label needs to reflect that. */
-  isRegularSeason?: boolean;
 }) {
   const badgeClass =
     tone === "hot"
@@ -434,7 +413,7 @@ function HotPlayerCard({
       {player.playoffPoints > 0 && (
         <p className="mt-1.5 text-[10px] text-gray-500 tabular-nums">
           <span className="font-bold text-[#1A1A1A]">{player.playoffPoints}</span>{" "}
-          {isRegularSeason ? "season pts" : "playoff pts"}
+          playoff pts
         </p>
       )}
 

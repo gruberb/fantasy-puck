@@ -4,6 +4,32 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.20.0 — 2026-04-19 (backend) / v1.13.0 (frontend)
+
+### Changed — Insights is now mirror-only
+
+Every data path the Insights page depends on reads from the NHL mirror in Postgres. The request path makes zero NHL API calls apart from static URL construction; the cache-miss render no longer fans out to `api-web.nhle.com` and therefore cannot trigger a rate-limit cascade that poisons the daily prewarm. Split across four concerns:
+
+- **Hot card**: top-20 season leaders come from `nhl_skater_season_stats`; L5 form for the top-20 comes from `list_player_form` (one SQL window-function scan). Previously 20 sequential `get_player_form` calls per cache miss.
+- **Cold card**: rostered players' L5 form via `list_player_form` on the rostered set. Goalies are filtered out before the query. The probe call that previously fetched one player's game log just to detect whether playoff data existed is gone — an empty `list_player_form` result is the signal.
+- **Today's Games**: schedule from `list_games_for_date`, standings context (streak + L10) from new `list_team_standings_context`, yesterday's result captions from the mirror's game rows, and pre-game matchup (leaders + goalies + team records) from `nhl_game_landing` via new `get_game_landing_matchup`. The meta poller now captures landing for newly-added FUT/PRE games on today's slate via `list_games_without_landing_for_date`, write-once guarded; the old `response_cache` path with the `insights_landing:{id}` key is retired.
+- **Stanley Cup Odds**: bracket reads from `nhl_mirror::get_playoff_carousel`; team ratings (playoff Elo and the standings-blend) fed from `nhl_mirror::load_standings_payload`, which reconstructs the NHL-shaped JSON from typed rows so `compute_current_elo` and `team_ratings::from_standings` work unchanged.
+
+### Added — nightly NHL Edge refresher
+
+- `backend/src/infra/jobs/edge_refresher.rs`: pulls top-skating-speed and top-shot-speed telemetry for the top 30 season leaders, writes `nhl_skater_edge`. Sequential fetch paced at 500 ms between players (~15 s wall time). 18-hour freshness gate skips a run when a recent refresh already happened, so the 09:30 UTC cron and a nearby admin prewarm don't double up. The admin `/api/admin/prewarm` endpoint force-triggers a refresh before the insights pre-warm so the cached page carries the freshest Edge numbers.
+- New migration `20260420010000_nhl_skater_edge.sql` creates `nhl_skater_edge(player_id PK, top_speed_mph, top_shot_speed_mph, updated_at)`.
+- Hot card reads `nhl_skater_edge` via new `list_skater_edge`. Players the refresher hasn't covered yet render with blank speed tiles — preferable to blocking the page on a live fetch.
+
+### Removed
+
+- Regular-season Hot/Cold fallback when playoffs haven't started. Empty Hot/Cold lists now render a "playoffs haven't produced data yet" empty state; the Claude narrative for `hot_players` acknowledges the absence instead of inventing players.
+- `InsightsSignals.hotColdIsRegularSeason` end-to-end — the flag is obsolete now that there's no RS fallback. The `HotPlayerCard` `isRegularSeason` prop and the conditional "season pts" / "playoff pts" label are gone; the label is now simply "playoff pts".
+
+### Fixed
+
+- Pulse League Live Board 5-DAY sparkline rendered as one solid full-width block for any team with a single scoring day. `Sparkbars` normalises bar height as `h = (v / max) × height`; with one data point `max == v` and the one bar fills the entire box. `get_team_sparklines_with_live` now zero-pads each team's vector against the full expected date sequence, so a team scoring only once returns `[0, 0, P, 0, 0]` and the component draws five distinct bars. Teams with zero total still return an empty vector and keep the grey baseline empty-state.
+
 ## v1.19.5 — 2026-04-19 (backend) / v1.12.2 (frontend)
 
 ### Changed

@@ -17,12 +17,6 @@ pub struct InsightsSignals {
     /// Per-team series state + odds across every active playoff series.
     #[serde(default)]
     pub series_projections: Vec<TeamSeriesProjection>,
-    /// True when Hot/Cold data was sourced from regular-season leaders
-    /// (pre-playoff fallback). Drives the UI's "season pts" vs "playoff
-    /// pts" label and keeps Claude from claiming playoff stats that don't
-    /// exist yet.
-    #[serde(default)]
-    pub hot_cold_is_regular_season: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

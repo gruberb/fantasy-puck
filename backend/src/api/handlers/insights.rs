@@ -6,7 +6,6 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use futures::future::join_all;
 use tracing::{error, warn};
 
 use crate::api::dtos::insights::*;
@@ -111,10 +110,7 @@ async fn compute_signals(
     let mut series_projections = projections.unwrap_or_default();
     enrich_projections(state, league_id, &mut series_projections).await;
 
-    let (hot_players, hot_cold_is_regular_season) = match hot {
-        Ok(result) => (result.signals, result.is_regular_season),
-        Err(_) => (Vec::new(), false),
-    };
+    let hot_players = hot.unwrap_or_default();
 
     Ok(InsightsSignals {
         hot_players,
@@ -122,7 +118,6 @@ async fn compute_signals(
         series_projections,
         todays_games,
         news_headlines: news.unwrap_or_default(),
-        hot_cold_is_regular_season,
     })
 }
 
@@ -141,8 +136,16 @@ async fn enrich_projections(
     // Team ratings: during the playoffs use the dynamic playoff Elo
     // (same source the Stanley Cup Odds table reads), so both surfaces
     // on this page agree on which team is "stronger." Before playoffs
-    // fall back to the standings-points blend.
-    let ratings: HashMap<String, f32> = match state.nhl_client.get_standings_raw().await {
+    // fall back to the standings-points blend. Standings JSON is
+    // reconstructed from the mirrored nhl_standings table — zero NHL
+    // calls at request time.
+    let pool = state.db.pool();
+    let ratings: HashMap<String, f32> = match crate::infra::db::nhl_mirror::load_standings_payload(
+        pool,
+        crate::api::season() as i32,
+    )
+    .await
+    {
         Ok(json) => {
             if crate::api::game_type() == 3 {
                 match crate::infra::prediction::compute_current_elo(
@@ -217,49 +220,31 @@ async fn enrich_projections(
 // Hot players (top 5 by recent form)
 // ---------------------------------------------------------------------------
 
-/// Return value from [`compute_hot_players`] carrying both the ranked
-/// signals and a flag indicating whether the data came from regular-season
-/// leaders (pre-playoff fallback). The flag bubbles up to `InsightsSignals`
-/// so the UI and Claude narrative can use the correct "season pts" vs
-/// "playoff pts" label.
-struct HotPlayersResult {
-    signals: Vec<HotPlayerSignal>,
-    is_regular_season: bool,
-}
-
 async fn compute_hot_players(
     state: &Arc<AppState>,
     league_id: &str,
-) -> Result<HotPlayersResult> {
-    let playoff_stats = state
-        .nhl_client
-        .get_skater_stats(&season(), game_type())
-        .await?;
+) -> Result<Vec<HotPlayerSignal>> {
+    let pool = state.db.pool();
 
-    // Playoffs haven't produced any point totals yet — fall back to
-    // regular-season leaders so the Hot card isn't empty the night before
-    // Game 1. We also drop the "form L5" fetch in that case because playoff
-    // game logs are empty; regular-season L5 comes instead.
-    let playoff_has_data = playoff_stats
-        .points
-        .iter()
-        .any(|p| (p.value as i32) > 0);
-    let use_rs_fallback = !playoff_has_data;
+    // Top-20 season leaders come from the mirror. The meta poller writes
+    // nhl_skater_season_stats every ~30 minutes, so this read is always
+    // a single indexed scan rather than a live NHL call.
+    let leaders = crate::infra::db::nhl_mirror::list_skater_season_stats(
+        pool,
+        season() as i32,
+        game_type() as i16,
+    )
+    .await
+    .unwrap_or_default();
 
-    let (stats, fallback_game_type) = if use_rs_fallback {
-        let rs = state
-            .nhl_client
-            .get_skater_stats(&season(), 2)
-            .await?;
-        (rs, 2u8)
-    } else {
-        (playoff_stats, game_type())
-    };
+    // Playoffs haven't produced data yet → empty Hot card. The UI
+    // renders a "playoffs haven't started" empty state; we no longer
+    // fall back to the regular-season leaderboard.
+    if leaders.iter().all(|r| r.points == 0) {
+        return Ok(Vec::new());
+    }
 
-    // Take top 20 by the relevant season's points.
-    let mut top_players = stats.points.clone();
-    top_players.sort_by(|a, b| (b.value as i32).cmp(&(a.value as i32)));
-    top_players.truncate(20);
+    let top_players: Vec<_> = leaders.into_iter().take(20).collect();
 
     // Build fantasy ownership mapping if league is provided
     let ownership: HashMap<i64, String> = if !league_id.is_empty() {
@@ -268,49 +253,41 @@ async fn compute_hot_players(
         HashMap::new()
     };
 
-    // Fetch form for each player concurrently (semaphore in NhlClient limits to 5)
-    let form_futures: Vec<_> = top_players
-        .iter()
-        .map(|player| {
-            let state = Arc::clone(state);
-            let player_id = player.id as i64;
-            async move {
-                match state
-                    .nhl_client
-                    .get_player_form(player_id, &season(), fallback_game_type, 5)
-                    .await
-                {
-                    Ok((goals, assists, points)) => Some((player_id, goals, assists, points, 5usize)),
-                    Err(e) => {
-                        warn!("Failed to get form for player {}: {}", player_id, e);
-                        None
-                    }
-                }
-            }
+    // Form data (last 5 completed games per player) also from the
+    // mirror. Previously this was 20 sequential NHL calls per cache
+    // miss, which routinely tripped the per-IP rate limit and blocked
+    // the daily prewarm from writing its cache — cascading into every
+    // user request re-running the whole pipeline including Claude.
+    let top_player_ids: Vec<i64> = top_players.iter().map(|p| p.player_id).collect();
+    let form_rows = crate::infra::db::nhl_mirror::list_player_form(pool, &top_player_ids, 5)
+        .await
+        .unwrap_or_default();
+    let form_by_player: HashMap<i64, (i32, i32, i32, usize)> = form_rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.player_id,
+                (
+                    r.goals as i32,
+                    r.assists as i32,
+                    r.points as i32,
+                    r.games as usize,
+                ),
+            )
         })
         .collect();
 
-    let form_results = join_all(form_futures).await;
-
-    // Combine player info with form data
-    let mut signals: Vec<(i64, HotPlayerSignal)> = Vec::new();
-
-    for (player, form) in top_players.iter().zip(form_results.into_iter()) {
-        let name = format!(
-            "{} {}",
-            player.first_name.get("default").cloned().unwrap_or_default(),
-            player.last_name.get("default").cloned().unwrap_or_default()
-        );
-        let player_id = player.id as i64;
-        let (form_goals, form_assists, form_points, form_games) = match form {
-            Some((_, g, a, p, n)) => (g, a, p, n),
-            None => (0, 0, 0, 0),
-        };
-
+    let mut signals: Vec<(i64, HotPlayerSignal)> = Vec::with_capacity(top_players.len());
+    for player in &top_players {
+        let name = format!("{} {}", player.first_name, player.last_name);
+        let (form_goals, form_assists, form_points, form_games) = form_by_player
+            .get(&player.player_id)
+            .copied()
+            .unwrap_or((0, 0, 0, 0));
         signals.push((
-            player_id,
+            player.player_id,
             HotPlayerSignal {
-                nhl_id: player_id,
+                nhl_id: player.player_id,
                 name,
                 nhl_team: player.team_abbrev.clone(),
                 position: player.position.clone(),
@@ -318,63 +295,45 @@ async fn compute_hot_players(
                 form_assists,
                 form_points,
                 form_games,
-                playoff_points: player.value as i32,
-                fantasy_team: ownership.get(&player_id).cloned(),
-                image_url: state.nhl_client.get_player_image_url(player_id),
+                playoff_points: player.points,
+                fantasy_team: ownership.get(&player.player_id).cloned(),
+                image_url: state.nhl_client.get_player_image_url(player.player_id),
                 top_speed: None,
                 top_shot_speed: None,
             },
         ));
     }
 
-    // Sort by form points descending, take top 5
+    // Sort by form points desc, take top 5
     signals.sort_by(|a, b| b.1.form_points.cmp(&a.1.form_points));
     signals.truncate(5);
 
-    // Fetch NHL Edge data for top 5 players concurrently
-    let edge_futures: Vec<_> = signals
-        .iter()
-        .map(|(pid, _)| {
-            let state = Arc::clone(state);
-            let pid = *pid;
-            async move {
-                match state.nhl_client.get_skater_edge_detail(pid).await {
-                    Ok(edge) => Some((pid, edge)),
-                    Err(e) => {
-                        warn!("Failed to get edge data for player {}: {}", pid, e);
-                        None
-                    }
-                }
-            }
-        })
-        .collect();
-
-    let edge_results = join_all(edge_futures).await;
-    let edge_map: HashMap<i64, serde_json::Value> = edge_results
+    // Edge data (top skating speed, top shot speed) comes from the
+    // mirror — the nightly edge_refresher job writes nhl_skater_edge at
+    // 09:30 UTC. Zero NHL calls in the request path. Missing rows just
+    // leave the speed tiles blank, which is preferable to blocking the
+    // page while we fan out to the NHL Edge endpoint.
+    let top5_ids: Vec<i64> = signals.iter().map(|(pid, _)| *pid).collect();
+    let edge_rows = crate::infra::db::nhl_mirror::list_skater_edge(pool, &top5_ids)
+        .await
+        .unwrap_or_default();
+    let edge_by_player: HashMap<i64, (Option<f32>, Option<f32>)> = edge_rows
         .into_iter()
-        .flatten()
+        .map(|r| (r.player_id, (r.top_speed_mph, r.top_shot_speed_mph)))
         .collect();
 
-    // Enrich with edge data
     let signals: Vec<HotPlayerSignal> = signals
         .into_iter()
         .map(|(pid, mut signal)| {
-            if let Some(edge) = edge_map.get(&pid) {
-                signal.top_speed = edge
-                    .get("topSkatingSpeed")
-                    .and_then(|v| v.as_f64());
-                signal.top_shot_speed = edge
-                    .get("topShotSpeed")
-                    .and_then(|v| v.as_f64());
+            if let Some((speed, shot)) = edge_by_player.get(&pid) {
+                signal.top_speed = speed.map(|v| v as f64);
+                signal.top_shot_speed = shot.map(|v| v as f64);
             }
             signal
         })
         .collect();
 
-    Ok(HotPlayersResult {
-        signals,
-        is_regular_season: use_rs_fallback,
-    })
+    Ok(signals)
 }
 
 // ---------------------------------------------------------------------------
@@ -385,158 +344,102 @@ async fn compute_todays_games(
     state: &Arc<AppState>,
     hockey_today: &str,
 ) -> Result<Vec<TodaysGameSignal>> {
-    let schedule = state
-        .nhl_client
-        .get_schedule_by_date(hockey_today)
-        .await?;
+    let pool = state.db.pool();
 
-    let games = schedule.games_for_date(hockey_today);
+    // Today's slate, standings context, and yesterday's results all
+    // come from the mirror. No NHL calls in the request path.
+    let games = crate::infra::db::nhl_mirror::list_games_for_date(pool, hockey_today)
+        .await
+        .unwrap_or_default();
 
-    // Fetch standings and yesterday's scores concurrently
     let yesterday = {
         let date = chrono::NaiveDate::parse_from_str(hockey_today, "%Y-%m-%d")
             .unwrap_or_else(|_| Utc::now().date_naive());
         (date - chrono::Duration::days(1)).format("%Y-%m-%d").to_string()
     };
 
-    let (standings_res, scores_res) = tokio::join!(
-        state.nhl_client.get_standings_raw(),
-        state.nhl_client.get_scores_by_date(&yesterday)
-    );
-
-    // Build standings lookup: team_abbrev -> (streak, l10, conf_rank)
-    let standings_map: HashMap<String, (String, String)> = standings_res
-        .ok()
-        .and_then(|json| json.get("standings")?.as_array().cloned())
-        .map(|standings| {
-            standings
-                .iter()
-                .filter_map(|team| {
-                    let abbrev = team.get("teamAbbrev")
-                        .and_then(|a| a.get("default"))
-                        .and_then(|a| a.as_str())?
-                        .to_string();
-                    let streak_code = team.get("streakCode").and_then(|v| v.as_str()).unwrap_or("");
-                    let streak_count = team.get("streakCount").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let streak = if !streak_code.is_empty() {
-                        format!("{}{}", streak_code, streak_count)
-                    } else {
-                        String::new()
-                    };
-                    let l10w = team.get("l10Wins").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let l10l = team.get("l10Losses").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let l10o = team.get("l10OtLosses").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let l10 = format!("{}-{}-{}", l10w, l10l, l10o);
-                    Some((abbrev, (streak, l10)))
-                })
-                .collect()
+    // Standings context: streak string + L10 record per team.
+    let standings_rows =
+        crate::infra::db::nhl_mirror::list_team_standings_context(pool, crate::api::season() as i32)
+            .await
+            .unwrap_or_default();
+    let standings_map: HashMap<String, (String, String)> = standings_rows
+        .into_iter()
+        .map(|r| {
+            let streak = match (r.streak_code.as_deref(), r.streak_count) {
+                (Some(code), Some(n)) if !code.is_empty() => format!("{}{}", code, n),
+                _ => String::new(),
+            };
+            let l10 = format!(
+                "{}-{}-{}",
+                r.l10_wins.unwrap_or(0),
+                r.l10_losses.unwrap_or(0),
+                r.l10_ot_losses.unwrap_or(0)
+            );
+            (r.team_abbrev, (streak, l10))
         })
+        .collect();
+
+    // Yesterday's final scores → "W 4-2 vs OPP" caption per team.
+    // Mirror's `list_games_for_date` already carries home/away scores
+    // on every row (live poller writes them on game-end), so we only
+    // need one query here instead of the old NHL `/score/{date}` call.
+    let yesterday_games = crate::infra::db::nhl_mirror::list_games_for_date(pool, &yesterday)
+        .await
         .unwrap_or_default();
+    let last_result_map: HashMap<String, String> = build_last_result_map(&yesterday_games);
 
-    // Build last-result lookup from yesterday's scores: team_abbrev -> "W 4-2 vs OPP" / "L 2-4 vs OPP"
-    let last_result_map: HashMap<String, String> = scores_res
-        .ok()
-        .and_then(|json| json.get("games")?.as_array().cloned())
-        .map(|games_arr| {
-            let mut map = HashMap::new();
-            for g in &games_arr {
-                let state_str = g.get("gameState").and_then(|v| v.as_str()).unwrap_or("");
-                if state_str != "OFF" && state_str != "FINAL" {
-                    continue;
-                }
-                let home_abbrev = g.get("homeTeam").and_then(|t| t.get("abbrev")).and_then(|a| a.as_str()).unwrap_or("");
-                let away_abbrev = g.get("awayTeam").and_then(|t| t.get("abbrev")).and_then(|a| a.as_str()).unwrap_or("");
-                let home_score = g.get("homeTeam").and_then(|t| t.get("score")).and_then(|s| s.as_i64()).unwrap_or(0);
-                let away_score = g.get("awayTeam").and_then(|t| t.get("score")).and_then(|s| s.as_i64()).unwrap_or(0);
-
-                if !home_abbrev.is_empty() && !away_abbrev.is_empty() {
-                    let (home_result, away_result) = if home_score > away_score {
-                        (
-                            format!("W {}-{} vs {}", home_score, away_score, away_abbrev),
-                            format!("L {}-{} @ {}", away_score, home_score, home_abbrev),
-                        )
-                    } else {
-                        (
-                            format!("L {}-{} vs {}", home_score, away_score, away_abbrev),
-                            format!("W {}-{} @ {}", away_score, home_score, home_abbrev),
-                        )
-                    };
-                    map.insert(home_abbrev.to_string(), home_result);
-                    map.insert(away_abbrev.to_string(), away_result);
-                }
-            }
-            map
-        })
-        .unwrap_or_default();
-
-    let mut signals: Vec<TodaysGameSignal> = Vec::new();
+    let mut signals: Vec<TodaysGameSignal> = Vec::with_capacity(games.len());
 
     for game in &games {
-        let home = &game.home_team.abbrev;
-        let away = &game.away_team.abbrev;
+        let home = game.home_team.clone();
+        let away = game.away_team.clone();
 
-        let (series_context, is_elimination) = match &game.series_status {
-            Some(ss) => {
-                let context = format!(
-                    "{} - {} leads {}-{}",
-                    ss.series_title,
-                    if ss.top_seed_wins >= ss.bottom_seed_wins { &ss.top_seed_team_abbrev } else { &ss.bottom_seed_team_abbrev },
-                    ss.top_seed_wins.max(ss.bottom_seed_wins),
-                    ss.top_seed_wins.min(ss.bottom_seed_wins)
-                );
-                let elim = ss.top_seed_wins == 3 || ss.bottom_seed_wins == 3;
-                (Some(context), elim)
-            }
-            None => (None, false),
-        };
+        // Series status was stored as JSON by the meta poller;
+        // deserialize back to the typed shape for the label.
+        let (series_context, is_elimination) = series_context_from_row(game);
 
-        // Fetch rich landing data, cached per-game. Pre-game matchup
-        // (leaders + goalies) only exists in the NHL landing response
-        // while the game is FUT; once puck drops the response shape
-        // swaps to live recap and the matchup block is gone. Capturing
-        // it once — ideally at the 10am UTC prewarm before any game
-        // starts — and never overwriting with an empty pull keeps the
-        // sidebar intact for games that go live later in the day.
-        let landing = get_or_fetch_landing_cached(state, game.id, hockey_today)
-            .await
-            .unwrap_or_else(LandingCached::default);
-        let venue = landing.venue;
-        let home_record = landing.home_record;
-        let away_record = landing.away_record;
-        let points_leaders = landing.points_leaders;
-        let goals_leaders = landing.goals_leaders;
-        let assists_leaders = landing.assists_leaders;
-        let home_goalie = landing.home_goalie;
-        let away_goalie = landing.away_goalie;
+        // Pre-game matchup (leaders + goalies + records) from the
+        // write-once `nhl_game_landing` mirror row. Venue comes
+        // directly from the game row so an empty matchup still
+        // yields a correct address in the header.
+        let landing_matchup = crate::infra::db::nhl_mirror::get_game_landing_matchup(
+            pool, game.game_id,
+        )
+        .await
+        .ok()
+        .flatten();
+        let landing = landing_matchup
+            .as_ref()
+            .map(build_landing_from_matchup)
+            .unwrap_or_default();
 
-        // Standings context
         let (home_streak, home_l10) = standings_map
-            .get(home)
+            .get(&home)
             .map(|(s, l)| (Some(s.clone()), Some(l.clone())))
             .unwrap_or((None, None));
         let (away_streak, away_l10) = standings_map
-            .get(away)
+            .get(&away)
             .map(|(s, l)| (Some(s.clone()), Some(l.clone())))
             .unwrap_or((None, None));
 
-        // Last game result
-        let home_last_result = last_result_map.get(home).cloned();
-        let away_last_result = last_result_map.get(away).cloned();
+        let home_last_result = last_result_map.get(&home).cloned();
+        let away_last_result = last_result_map.get(&away).cloned();
 
         signals.push(TodaysGameSignal {
-            home_team: home.clone(),
-            away_team: away.clone(),
-            home_record,
-            away_record,
-            venue,
-            start_time: game.start_time_utc.clone(),
+            home_team: home,
+            away_team: away,
+            home_record: landing.home_record,
+            away_record: landing.away_record,
+            venue: game.venue.clone().unwrap_or_default(),
+            start_time: game.start_time_utc.to_rfc3339(),
             series_context,
             is_elimination,
-            points_leaders,
-            goals_leaders,
-            assists_leaders,
-            home_goalie,
-            away_goalie,
+            points_leaders: landing.points_leaders,
+            goals_leaders: landing.goals_leaders,
+            assists_leaders: landing.assists_leaders,
+            home_goalie: landing.home_goalie,
+            away_goalie: landing.away_goalie,
             home_streak,
             away_streak,
             home_l10,
@@ -548,6 +451,68 @@ async fn compute_todays_games(
     }
 
     Ok(signals)
+}
+
+/// Build the "yesterday's result" caption per team from the mirror's
+/// game rows. Only completed games (state OFF/FINAL) contribute —
+/// LIVE-state rows lurking on the wrong date would otherwise render
+/// a partial score as if it were final.
+fn build_last_result_map(
+    games: &[crate::infra::db::nhl_mirror::NhlGameRow],
+) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for g in games {
+        if !matches!(g.game_state.as_str(), "OFF" | "FINAL") {
+            continue;
+        }
+        let (Some(home_score), Some(away_score)) = (g.home_score, g.away_score) else {
+            continue;
+        };
+        let (home_result, away_result) = if home_score > away_score {
+            (
+                format!("W {}-{} vs {}", home_score, away_score, g.away_team),
+                format!("L {}-{} @ {}", away_score, home_score, g.home_team),
+            )
+        } else {
+            (
+                format!("L {}-{} vs {}", home_score, away_score, g.away_team),
+                format!("W {}-{} @ {}", away_score, home_score, g.home_team),
+            )
+        };
+        map.insert(g.home_team.clone(), home_result);
+        map.insert(g.away_team.clone(), away_result);
+    }
+    map
+}
+
+/// Deserialise the JSONB `series_status` column on an `nhl_games` row
+/// back to the typed shape and format the "PIT leads 2-1" caption.
+/// Returns `(None, false)` if the column is null (regular-season game
+/// or a playoff game before Round 1 seeding was published).
+fn series_context_from_row(
+    game: &crate::infra::db::nhl_mirror::NhlGameRow,
+) -> (Option<String>, bool) {
+    let Some(raw) = game.series_status.as_ref() else {
+        return (None, false);
+    };
+    let ss: crate::domain::models::nhl::SeriesStatus = match serde_json::from_value(raw.clone()) {
+        Ok(v) => v,
+        Err(_) => return (None, false),
+    };
+    let leader = if ss.top_seed_wins >= ss.bottom_seed_wins {
+        &ss.top_seed_team_abbrev
+    } else {
+        &ss.bottom_seed_team_abbrev
+    };
+    let context = format!(
+        "{} - {} leads {}-{}",
+        ss.series_title,
+        leader,
+        ss.top_seed_wins.max(ss.bottom_seed_wins),
+        ss.top_seed_wins.min(ss.bottom_seed_wins),
+    );
+    let elim = ss.top_seed_wins == 3 || ss.bottom_seed_wins == 3;
+    (Some(context), elim)
 }
 
 /// Enrich each `TodaysGameSignal` with "your team has N players in this game"
@@ -614,14 +579,17 @@ pub async fn enrich_games_with_ownership(
     }
 }
 
-/// Subset of the NHL game-landing response that Insights actually displays.
-/// Stored in `response_cache` as `insights_landing:{game_id}` with write-once
-/// semantics — see [`get_or_fetch_landing_cached`] — so that a game whose
-/// pre-game matchup was captured earlier in the day keeps its sidebar even
-/// after puck drop, when the live response no longer includes the block.
-#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
+/// Subset of the NHL game-landing response that Insights displays for
+/// each game card — skater leaders, goalies, team records. Venue lives
+/// on the game row itself so it isn't duplicated here.
+///
+/// The matchup JSON is captured by the meta poller (and admin rehydrate)
+/// at the first tick that sees a game in FUT/PRE state, stored in
+/// `nhl_game_landing`. Capture is write-once: once the NHL response
+/// swaps from pre-game matchup to live recap, we never overwrite the
+/// mirror row, so the sidebar stays populated for the full hockey-date.
+#[derive(Default, Clone)]
 struct LandingCached {
-    venue: String,
     home_record: String,
     away_record: String,
     points_leaders: Option<(PlayerLeader, PlayerLeader)>,
@@ -631,32 +599,8 @@ struct LandingCached {
     away_goalie: Option<GoalieStats>,
 }
 
-impl LandingCached {
-    fn has_matchup(&self) -> bool {
-        self.points_leaders.is_some()
-            || self.goals_leaders.is_some()
-            || self.assists_leaders.is_some()
-            || self.home_goalie.is_some()
-            || self.away_goalie.is_some()
-    }
-}
-
-fn build_landing_from_raw(landing: &serde_json::Value) -> LandingCached {
-    let venue = landing
-        .get("venue")
-        .and_then(|v| v.get("default"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let mut out = LandingCached {
-        venue,
-        ..LandingCached::default()
-    };
-
-    let Some(matchup) = landing.get("matchup") else {
-        return out;
-    };
+fn build_landing_from_matchup(matchup: &serde_json::Value) -> LandingCached {
+    let mut out = LandingCached::default();
 
     if let Some(leaders) = matchup
         .get("skaterComparison")
@@ -698,52 +642,6 @@ fn build_landing_from_raw(landing: &serde_json::Value) -> LandingCached {
     }
 
     out
-}
-
-/// Return a cached landing if present (matchup populated), otherwise fetch
-/// from NHL. Caches only when the fetched matchup is populated — i.e. the
-/// game was still FUT at fetch time. Post-puck-drop fetches are returned to
-/// the caller for one-shot use but not written, so a later prewarm or
-/// request during a FUT window can still populate the cache correctly.
-async fn get_or_fetch_landing_cached(
-    state: &Arc<AppState>,
-    game_id: u32,
-    date: &str,
-) -> Option<LandingCached> {
-    let cache_key = format!("insights_landing:{}", game_id);
-
-    if let Ok(Some(cached)) = state
-        .db
-        .cache()
-        .get_cached_response::<LandingCached>(&cache_key)
-        .await
-    {
-        if cached.has_matchup() {
-            return Some(cached);
-        }
-    }
-
-    let landing = match state.nhl_client.get_game_landing_raw(game_id).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                game_id = game_id,
-                error = %e,
-                "insights: game landing fetch failed; leaders/goalies will be null"
-            );
-            return None;
-        }
-    };
-
-    let built = build_landing_from_raw(&landing);
-    if built.has_matchup() {
-        let _ = state
-            .db
-            .cache()
-            .store_response(&cache_key, date, &built)
-            .await;
-    }
-    Some(built)
 }
 
 fn extract_player_leader(leader: &serde_json::Value, side: &str) -> Option<PlayerLeader> {
@@ -904,7 +802,7 @@ HARD RULES:
 - Never make up or hallucinate statistics, records, or player information.
 - If data is missing, say "stats aren't available yet" rather than inventing.
 - Wrap player names in **double asterisks** for bold (e.g. **Connor McDavid**).
-- The `hotColdIsRegularSeason` flag in the signals tells you whether hot/cold totals are playoff points or regular-season points. If it's `true`, say "regular-season points" — NEVER "playoff points" — because the playoffs haven't produced data yet.
+- Hot/Cold numbers are playoff totals. If `hotPlayers` is empty it's because no playoff data exists yet — acknowledge that and don't invent names.
 
 This page is NHL-centric — the league-race narrative lives elsewhere. Stay out of fantasy-standings talk here; only note ownership tags when they sharpen an NHL story.
 
@@ -914,7 +812,7 @@ Return JSON with exactly these fields:
 
 - **game_narratives**: an array of exactly {num_games} strings, one per game in the same order. 2–3 sentences previewing each matchup — who's hot, where the edge is, what's at stake. Do NOT repeat the team names in the prefix; the header shows them.
 
-- **hot_players**: 3–4 sentences on the hottest skaters. Cite form numbers and NHL Edge data when present. Respect the `hotColdIsRegularSeason` flag: call it "regular-season points" when true.
+- **hot_players**: 3–4 sentences on the hottest skaters. Cite form numbers and NHL Edge data when present. If the Hot list is empty, say the playoffs haven't produced data yet rather than padding.
 
 - **bracket**: 3–4 sentences on the playoff picture — who's favored, where the upsets could come from, which team's Stanley Cup path looks easiest or hardest. Lean on series state + team ratings from the data. This is the one field where full-bracket / season-long talk belongs — everything else should stay game-scoped or player-scoped."#),
         "messages": [
@@ -1046,9 +944,14 @@ async fn compute_cold_hands(
 
     // Rostered players in this league.
     let groups = state.db.get_nhl_teams_and_players(league_id).await.unwrap_or_default();
-    let mut rostered: Vec<(i64, String, String, String, String)> = Vec::new(); // (nhl_id, name, team, position, fantasy_team)
+    let mut rostered: Vec<(i64, String, String, String, String)> = Vec::new();
     for g in groups {
         for p in g.players {
+            // Goalies don't carry the scorer signal — filter here so
+            // they never enter the form batch in the first place.
+            if p.position.eq_ignore_ascii_case("G") {
+                continue;
+            }
             rostered.push((
                 p.nhl_id,
                 p.name.clone(),
@@ -1059,72 +962,39 @@ async fn compute_cold_hands(
         }
     }
 
-    // Probe one rostered player's playoff game log to decide whether
-    // playoff data exists; if it's empty for the pilot we fall back to
-    // regular-season game logs so the card isn't silent pre-playoffs.
-    let playoff_has_data = if let Some((pid, _, _, _, _)) = rostered.first() {
-        matches!(
-            state
-                .nhl_client
-                .get_player_game_log(*pid, &season(), game_type())
-                .await,
-            Ok(log) if !log.game_log.is_empty()
-        )
-    } else {
-        false
-    };
-    let log_game_type = if playoff_has_data { game_type() } else { 2u8 };
-
-    // Fetch form (L5) for each rostered player, keep those with games>=3 and points<=1.
-    let form_futures: Vec<_> = rostered
-        .iter()
-        .map(|(nhl_id, _, _, _, _)| {
-            let state = Arc::clone(state);
-            let pid = *nhl_id;
-            async move {
-                match state
-                    .nhl_client
-                    .get_player_game_log(pid, &season(), log_game_type)
-                    .await
-                {
-                    Ok(log) => {
-                        let recent: Vec<_> = log.game_log.iter().rev().take(5).collect();
-                        let games = recent.len();
-                        let goals: i32 = recent.iter().map(|g| g.goals).sum();
-                        let assists: i32 = recent.iter().map(|g| g.assists).sum();
-                        let points: i32 = recent.iter().map(|g| g.points).sum();
-                        Some((pid, games, goals, assists, points))
-                    }
-                    Err(_) => None,
-                }
-            }
-        })
+    // Batched L5 form from the mirror — one SQL query instead of N
+    // NHL calls per rostered player. If the mirror has no data yet
+    // (pre-first-playoff-game), the query returns nothing and the
+    // card is empty — which is the correct product behaviour.
+    let ids: Vec<i64> = rostered.iter().map(|(pid, _, _, _, _)| *pid).collect();
+    let form_rows = crate::infra::db::nhl_mirror::list_player_form(state.db.pool(), &ids, 5)
+        .await
+        .unwrap_or_default();
+    let form_by_player: HashMap<i64, (i64, i64, i64, i64)> = form_rows
+        .into_iter()
+        .map(|r| (r.player_id, (r.games, r.goals, r.assists, r.points)))
         .collect();
 
-    let results = join_all(form_futures).await;
-
     let mut cold: Vec<HotPlayerSignal> = Vec::new();
-    for ((nhl_id, name, team, position, fantasy_team), res) in rostered.iter().zip(results) {
-        let Some((_, games, goals, assists, points)) = res else { continue };
+    for (nhl_id, name, team, position, fantasy_team) in &rostered {
+        let Some(&(games, goals, assists, points)) = form_by_player.get(nhl_id) else {
+            continue;
+        };
         if games < 3 {
             continue; // not enough sample size
         }
         if points > 1 {
             continue; // only show real slumps
         }
-        // Skip goalies — the scorer signal doesn't apply.
-        if position.eq_ignore_ascii_case("G") {
-            continue;
-        }
         cold.push(HotPlayerSignal {
             nhl_id: *nhl_id,
             name: name.clone(),
             nhl_team: team.clone(),
             position: position.clone(),
-            form_goals: goals,
-            form_assists: assists,
-            form_points: points,
-            form_games: games,
+            form_goals: goals as i32,
+            form_assists: assists as i32,
+            form_points: points as i32,
+            form_games: games as usize,
             playoff_points: 0,
             fantasy_team: Some(fantasy_team.clone()),
             image_url: state.nhl_client.get_player_image_url(*nhl_id),
@@ -1132,7 +1002,7 @@ async fn compute_cold_hands(
             top_shot_speed: None,
         });
     }
-    // Surface the coldest (lowest points) first, then fewest points ties broken by fewer games.
+    // Coldest (lowest points) first; ties broken by larger sample (more games).
     cold.sort_by(|a, b| a.form_points.cmp(&b.form_points).then(b.form_games.cmp(&a.form_games)));
     cold.truncate(8);
     Ok(cold)
@@ -1148,10 +1018,14 @@ async fn compute_series_projections(
     use crate::infra::nhl::constants::team_names;
     use crate::domain::prediction::series_projection as sp;
 
-    let carousel = match state
-        .nhl_client
-        .get_playoff_carousel(format!("{}", season()))
-        .await?
+    // Bracket comes straight from the mirror. Meta poller refreshes
+    // nhl_playoff_bracket every aggregate cadence (~30 min), so this
+    // is a single SELECT + deserialize rather than a live NHL call.
+    let carousel = match crate::infra::db::nhl_mirror::get_playoff_carousel(
+        state.db.pool(),
+        season() as i32,
+    )
+    .await?
     {
         Some(c) => c,
         None => return Ok(Vec::new()),

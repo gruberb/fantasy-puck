@@ -233,6 +233,8 @@ pub async fn init_rankings_scheduler(
     let nhl_client_clone_afternoon = nhl_client.clone();
     let db_clone_insights = db.clone();
     let nhl_client_clone_insights = nhl_client.clone();
+    let db_clone_edge = db.clone();
+    let nhl_client_clone_edge = nhl_client.clone();
 
     // Schedule job for 9am UTC
     let morning_job = Job::new_async(tuning::MORNING_RANKINGS_CRON, move |_, _| {
@@ -299,6 +301,19 @@ pub async fn init_rankings_scheduler(
     })
     .map_err(|e| Error::Internal(format!("Failed to create pre-warming job: {}", e)))?;
 
+    // Schedule the nightly NHL Edge refresh at 09:30 UTC. Runs 30 min
+    // ahead of the daily prewarm so the insights pre-warm reads fresh
+    // top-speed / top-shot-speed telemetry from the mirror.
+    let edge_job = Job::new_async(tuning::EDGE_REFRESH_CRON, move |_, _| {
+        let db = db_clone_edge.clone();
+        let nhl_client = nhl_client_clone_edge.clone();
+        Box::pin(async move {
+            info!("Running nightly NHL Edge refresh");
+            let _ = crate::infra::jobs::edge_refresher::run(&db, nhl_client, false).await;
+        })
+    })
+    .map_err(|e| Error::Internal(format!("Failed to create edge refresh job: {}", e)))?;
+
     // Add jobs to the scheduler
     scheduler
         .add(morning_job)
@@ -315,13 +330,18 @@ pub async fn init_rankings_scheduler(
         .await
         .map_err(|e| Error::Internal(format!("Failed to add insights job: {}", e)))?;
 
+    scheduler
+        .add(edge_job)
+        .await
+        .map_err(|e| Error::Internal(format!("Failed to add edge refresh job: {}", e)))?;
+
     // Start the scheduler
     scheduler
         .start()
         .await
         .map_err(|e| Error::Internal(format!("Failed to start scheduler: {}", e)))?;
 
-    info!("Scheduler initialized: rankings at 9am/3pm UTC, insights + race-odds at 10am UTC");
+    info!("Scheduler initialized: rankings at 9am/3pm UTC, edge at 09:30 UTC, insights + race-odds at 10am UTC");
     Ok(scheduler)
 }
 

@@ -436,13 +436,33 @@ impl<'a> TeamDbService<'a> {
         days: i32,
         min_date: &str,
     ) -> Result<HashMap<i64, Vec<i32>>> {
-        let since = chrono::Utc::now() - chrono::Duration::days(days as i64);
-        let window_start = since.format("%Y-%m-%d").to_string();
-        let since_str: String = if !min_date.is_empty() && min_date > window_start.as_str() {
-            min_date.to_string()
-        } else {
-            window_start
+        // Window covers the last `days` calendar days ending today,
+        // clamped forward by `min_date` so the caller can refuse dates
+        // before playoff_start. Every team that has *any* row in the
+        // window is returned with a fixed-length vector: one slot per
+        // day, zero-filled where there was no scoring. Without the
+        // padding the frontend's Sparkbars renders a single full-width
+        // bar when a team has exactly one scoring day, because the
+        // component normalises `h = (v / max) × height` and with one
+        // point max == v and the one bar fills the whole box.
+        let today = chrono::Utc::now().date_naive();
+        let window_start_candidate = today - chrono::Duration::days((days - 1).max(0) as i64);
+        let min_date_parsed = chrono::NaiveDate::parse_from_str(min_date, "%Y-%m-%d").ok();
+        let since = match min_date_parsed {
+            Some(d) if d > window_start_candidate => d,
+            _ => window_start_candidate,
         };
+        let since_str = since.format("%Y-%m-%d").to_string();
+
+        // Pre-build the expected date sequence (inclusive on both ends)
+        // so per-team padding has stable ordering — the callers rely on
+        // `Vec::last()` as the "latest" entry.
+        let mut expected_dates: Vec<String> = Vec::new();
+        let mut cur = since;
+        while cur <= today {
+            expected_dates.push(cur.format("%Y-%m-%d").to_string());
+            cur += chrono::Duration::days(1);
+        }
 
         // Prefer daily_rankings where present (official finalized
         // rollup); fall back to the live view for dates it hasn't
@@ -484,12 +504,27 @@ impl<'a> TeamDbService<'a> {
         // same (team, date). We keep the first row per unique key.
         let mut seen: std::collections::HashSet<(i64, String)> =
             std::collections::HashSet::new();
-        let mut map: HashMap<i64, Vec<i32>> = HashMap::new();
+        let mut by_team_date: HashMap<i64, HashMap<String, i32>> = HashMap::new();
         for (team_id, date, points) in rows {
-            if seen.insert((team_id, date)) {
-                map.entry(team_id).or_default().push(points);
+            if seen.insert((team_id, date.clone())) {
+                by_team_date.entry(team_id).or_default().insert(date, points);
             }
         }
+
+        // Zero-pad each team's vector against the full expected date
+        // sequence. A team scoring only on day 3 of a 5-day window
+        // returns `[0, 0, P, 0, 0]`, which the Sparkbars component
+        // renders as five distinct bars instead of one solid block.
+        let map: HashMap<i64, Vec<i32>> = by_team_date
+            .into_iter()
+            .map(|(team_id, dates)| {
+                let padded: Vec<i32> = expected_dates
+                    .iter()
+                    .map(|d| dates.get(d).copied().unwrap_or(0))
+                    .collect();
+                (team_id, padded)
+            })
+            .collect();
         Ok(map)
     }
 }

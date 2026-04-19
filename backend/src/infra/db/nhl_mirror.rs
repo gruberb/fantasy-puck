@@ -829,6 +829,49 @@ pub async fn capture_game_landing(
 }
 
 // ---------------------------------------------------------------------
+// nhl_skater_edge
+// ---------------------------------------------------------------------
+
+/// Upsert NHL Edge telemetry (top skating speed, top shot speed) for a
+/// single player. Called by the nightly `edge_refresher` job.
+pub async fn upsert_skater_edge(
+    pool: &PgPool,
+    player_id: i64,
+    top_speed_mph: Option<f32>,
+    top_shot_speed_mph: Option<f32>,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO nhl_skater_edge (player_id, top_speed_mph, top_shot_speed_mph, updated_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (player_id) DO UPDATE SET
+            top_speed_mph      = EXCLUDED.top_speed_mph,
+            top_shot_speed_mph = EXCLUDED.top_shot_speed_mph,
+            updated_at         = NOW()
+        "#,
+    )
+    .bind(player_id)
+    .bind(top_speed_mph)
+    .bind(top_shot_speed_mph)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Timestamp of the most recent Edge refresh, across all players.
+/// The refresher uses this to skip a run when yesterday's data is
+/// still within the freshness window.
+pub async fn last_update_nhl_skater_edge(pool: &PgPool) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    let ts: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT MAX(updated_at) FROM nhl_skater_edge")
+            .fetch_one(pool)
+            .await
+            .map_err(Error::Database)?;
+    Ok(ts)
+}
+
+// ---------------------------------------------------------------------
 // Read-side queries consumed by handlers (Phase 3+).
 // ---------------------------------------------------------------------
 
@@ -899,6 +942,145 @@ pub struct SkaterSeasonRow {
     pub goals: i32,
     pub assists: i32,
     pub points: i32,
+}
+
+/// Snapshot of a single team's standings-derived context used on
+/// the Insights page: streak string and L10 record, plus the raw
+/// points figure so callers don't need a second query for ratings.
+#[derive(Debug, FromRow)]
+pub struct TeamStandingsContextRow {
+    pub team_abbrev: String,
+    pub points: i32,
+    pub streak_code: Option<String>,
+    pub streak_count: Option<i32>,
+    pub l10_wins: Option<i32>,
+    pub l10_losses: Option<i32>,
+    pub l10_ot_losses: Option<i32>,
+}
+
+/// Every team's streak + L10 + points context, pulled from the
+/// mirrored standings. Safe to call every request — the meta poller
+/// keeps this fresh on the aggregate cadence.
+pub async fn list_team_standings_context(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Vec<TeamStandingsContextRow>> {
+    let rows = sqlx::query_as::<_, TeamStandingsContextRow>(
+        r#"
+        SELECT team_abbrev, points, streak_code, streak_count,
+               l10_wins, l10_losses, l10_ot_losses
+          FROM nhl_standings
+         WHERE season = $1
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// Reconstruct the NHL-shaped standings JSON from the mirror for
+/// functions that still take the raw payload shape
+/// (`team_ratings::from_standings`, `playoff_elo::seed_from_standings`,
+/// `compute_current_elo`). Avoids a second NHL fetch path now that
+/// we mirror every field those functions read.
+pub async fn load_standings_payload(pool: &PgPool, season: i32) -> Result<Value> {
+    let rows = list_team_standings_context(pool, season).await?;
+    let arr: Vec<Value> = rows
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "teamAbbrev": { "default": r.team_abbrev },
+                "points": r.points,
+                "streakCode": r.streak_code,
+                "streakCount": r.streak_count,
+                "l10Wins": r.l10_wins,
+                "l10Losses": r.l10_losses,
+                "l10OtLosses": r.l10_ot_losses,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "standings": arr }))
+}
+
+/// Pre-game matchup JSON for a given game_id, as written by the
+/// meta poller / rehydrate when the game was still in FUT/PRE. The
+/// `matchup` block is the live-response shape's NHL calls the
+/// landing handler consumed — we store it whole so the handler
+/// can re-parse via its existing `build_landing_from_raw`.
+pub async fn get_game_landing_matchup(
+    pool: &PgPool,
+    game_id: i64,
+) -> Result<Option<Value>> {
+    let row: Option<Value> = sqlx::query_scalar(
+        "SELECT matchup FROM nhl_game_landing WHERE game_id = $1",
+    )
+    .bind(game_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(row)
+}
+
+/// Game IDs for `date` that are FUT or PRE and have no
+/// `nhl_game_landing` row yet. The meta poller uses this to fetch
+/// pre-game matchup data exactly once per game — after puck drop the
+/// NHL response replaces `matchup` with live-recap data, so a
+/// second capture would clobber the pre-game payload.
+pub async fn list_games_without_landing_for_date(
+    pool: &PgPool,
+    date: &str,
+) -> Result<Vec<i64>> {
+    let rows: Vec<i64> = sqlx::query_scalar(
+        r#"
+        SELECT g.game_id
+          FROM nhl_games g
+     LEFT JOIN nhl_game_landing l ON l.game_id = g.game_id
+         WHERE g.game_date = $1::date
+           AND g.game_state IN ('FUT', 'PRE')
+           AND l.game_id IS NULL
+        "#,
+    )
+    .bind(date)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// NHL Edge row — top speed and top shot speed per player, populated
+/// by the nightly edge_refresher job.
+#[derive(Debug, FromRow)]
+pub struct SkaterEdgeRow {
+    pub player_id: i64,
+    pub top_speed_mph: Option<f32>,
+    pub top_shot_speed_mph: Option<f32>,
+}
+
+/// Edge telemetry for the given player IDs. Missing players simply
+/// don't appear in the result — the handler falls back to blank
+/// speed tiles, which is the correct UX when the nightly refresher
+/// hasn't covered a particular player (e.g. a recent call-up).
+pub async fn list_skater_edge(
+    pool: &PgPool,
+    player_ids: &[i64],
+) -> Result<Vec<SkaterEdgeRow>> {
+    if player_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, SkaterEdgeRow>(
+        r#"
+        SELECT player_id, top_speed_mph, top_shot_speed_mph
+          FROM nhl_skater_edge
+         WHERE player_id = ANY($1)
+        "#,
+    )
+    .bind(player_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
 }
 
 /// All skaters on the season leaderboard for `(season, game_type)`,
