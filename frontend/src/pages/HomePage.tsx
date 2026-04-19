@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import ActionButtons from "@/components/home/ActionButtons";
+import { LiveRankingsTable } from "@/components/home/LiveRankingsTable";
 import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
 import RankingTable from "@/components/common/RankingTable";
 import { useHomePageData } from "@/hooks/useHomePageData";
@@ -420,6 +421,11 @@ function RankingsDashboard({
 
   return (
     <div>
+      {/* Live Rankings — appears only while games are in flight. Hidden
+          entirely on off-days, so the Overall Rankings naturally moves
+          back to the top of the dashboard. */}
+      <LiveRankingsTable />
+
       {/* Overall Rankings */}
       {(rankingsLoading || hasRankings) && (
         <div className="mb-6">

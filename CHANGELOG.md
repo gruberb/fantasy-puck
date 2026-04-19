@@ -4,6 +4,28 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.17.0 — 2026-04-19 (frontend)
+
+### Added — Live Rankings on the dashboard
+
+New section at the top of `/league/:id` that appears only while any
+game on the slate is `LIVE|CRIT`. Lists every league team with at
+least one rostered skater in tonight's NHL games, sorted by today's
+live points (from `v_daily_fantasy_totals`). Teams with zero active
+skaters are omitted.
+
+- Red header with a pulse dot mirrors the "LIVE" treatment on the
+  Games page.
+- Right-side "→ Live Games" button links to `/games/{today}`.
+- The caller's own team is highlighted yellow (same rule as the
+  Pulse League Live Board).
+- Hidden on off-days and pre-puck-drop; Overall Rankings sits back
+  at the top.
+
+Backed by the existing `/api/pulse` payload (same hook as Pulse),
+so no new endpoint and no re-derivation. Auto-refresh follows the
+Pulse cadence — updates ~every 60 s while games are live.
+
 ## v1.21.2 — 2026-04-19 (backend)
 
 ### Fixed — `LIVE · P12` period render
