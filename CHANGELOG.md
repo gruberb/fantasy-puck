@@ -4,6 +4,14 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.19.1 — 2026-04-19 (backend) / v1.12.1 (frontend)
+
+### Changed
+
+- `scheduler::process_daily_rankings` reads finalised per-team totals from `v_daily_fantasy_totals` and upserts them into `daily_rankings` in one pass. The boxscore fan-out that was the last remaining NHL-API-per-game code path in a scheduled job is gone — the live poller already populates `nhl_player_game_stats` ahead of the 9am / 3pm UTC rollup, so the scheduler's job is now pure SQL. Preserves the old "skip if games still in progress" guard via `nhl_mirror::list_live_game_ids_for_date`.
+- Pulse League Live Board: the `YESTERDAY` column is now `LATEST`. The underlying `points_today` field reads the most recent sparkline entry, which is today's running total during an active game day and yesterday's official rollup once the morning cron has fired. "Latest" covers both.
+- `docs/DATA-PIPELINE-REDESIGN.md` status line flipped from "proposed — not yet implemented" to "shipped in v1.19.0"; the document now describes the architecture in production rather than a proposal.
+
 ## v1.19.0 — 2026-04-19 (backend) / v1.12.0 (frontend)
 
 ### Added — NHL mirror pipeline, layered architecture, prediction port
