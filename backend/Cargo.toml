@@ -35,3 +35,4 @@ jsonwebtoken = "9"
 rand = { version = "0.8", features = ["small_rng"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 secrecy = "0.10"
+async-trait = "0.1"

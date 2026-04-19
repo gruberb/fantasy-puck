@@ -9,6 +9,7 @@ use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 
 use crate::config::Config;
+use crate::domain::ports::prediction::PredictionService;
 use crate::infra::nhl::client::NhlClient;
 use crate::FantasyDb;
 
@@ -43,6 +44,7 @@ pub async fn run_server(
     db: FantasyDb,
     nhl_client: NhlClient,
     config: Arc<Config>,
+    prediction: Arc<dyn PredictionService>,
 ) -> anyhow::Result<()> {
     let port = config.port;
 
@@ -62,7 +64,7 @@ pub async fn run_server(
 
     // Build our application with routes and middleware stack.
     // Layers wrap in reverse order: the last .layer() is the outermost.
-    let app = routes::create_router(db, nhl_client, config)
+    let app = routes::create_router(db, nhl_client, config, prediction)
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(1024 * 1024)) // 1 MB
         .layer(TimeoutLayer::new(crate::tuning::http::AXUM_REQUEST_TIMEOUT))

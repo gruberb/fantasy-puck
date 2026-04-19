@@ -13,7 +13,9 @@ use fantasy_hockey::infra::jobs::playoff_ingest::{
 };
 use fantasy_hockey::infra::jobs::scheduler;
 use fantasy_hockey::infra::jobs::scheduler::{init_rankings_scheduler, populate_historical_rankings};
+use fantasy_hockey::domain::ports::prediction::PredictionService;
 use fantasy_hockey::infra::jobs::{live_poller, meta_poller};
+use fantasy_hockey::infra::prediction::claude::{ClaudeNarrator, NullNarrator};
 use fantasy_hockey::FantasyDb;
 use fantasy_hockey::{api, NhlClient};
 
@@ -177,10 +179,26 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Compose the prediction adapter. In production with
+    // `ANTHROPIC_API_KEY` set we use the Claude narrator; without a
+    // key we wire a null adapter so handlers that optionally
+    // include a narrative degrade to "no narrative" rather than
+    // failing the whole server boot.
+    let prediction: Arc<dyn PredictionService> = match ClaudeNarrator::from_env() {
+        Some(n) => {
+            info!("Prediction adapter: ClaudeNarrator");
+            Arc::new(n)
+        }
+        None => {
+            info!("Prediction adapter: NullNarrator (ANTHROPIC_API_KEY unset)");
+            Arc::new(NullNarrator)
+        }
+    };
+
     // Run the API server. When the server's graceful shutdown fires
     // we cancel the pollers so they stop cleanly on SIGTERM.
     info!("Starting web server on port {}", config.port);
-    let result = api::run_server(db, nhl_client, config).await;
+    let result = api::run_server(db, nhl_client, config, prediction).await;
     poller_cancel.cancel();
     result
 }

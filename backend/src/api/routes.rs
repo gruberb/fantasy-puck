@@ -9,6 +9,7 @@ use axum::{
 
 use crate::api::handlers;
 use crate::config::Config;
+use crate::domain::ports::prediction::PredictionService;
 use crate::infra::nhl::client::NhlClient;
 use crate::ws::draft_hub::DraftHub;
 use crate::FantasyDb;
@@ -19,16 +20,27 @@ pub struct AppState {
     pub nhl_client: NhlClient,
     pub config: Arc<Config>,
     pub draft_hub: DraftHub,
+    /// Text-generation adapter (production: Claude via
+    /// `infra::prediction::claude::ClaudeNarrator`). Handlers call
+    /// `state.prediction.pulse_narrative(...)` rather than building
+    /// a Claude request themselves.
+    pub prediction: Arc<dyn PredictionService>,
 }
 
 // Create the router
-pub fn create_router(db: FantasyDb, nhl_client: NhlClient, config: Arc<Config>) -> Router {
+pub fn create_router(
+    db: FantasyDb,
+    nhl_client: NhlClient,
+    config: Arc<Config>,
+    prediction: Arc<dyn PredictionService>,
+) -> Router {
     // Create shared application state
     let state = Arc::new(AppState {
         db,
         nhl_client,
         config,
         draft_hub: DraftHub::new(),
+        prediction,
     });
 
     Router::new()

@@ -207,11 +207,22 @@ async fn ingest_yesterdays_playoff_games(db: &FantasyDb, nhl_client: &NhlClient)
 /// and on-demand via `GET /api/admin/prewarm` (usually after a cache
 /// invalidation or a model-version bump that emptied the cache).
 pub async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
+    // Prewarm builds its own AppState so it can call the same
+    // handler entry points a real HTTP request would. The
+    // prediction adapter gets rebuilt here because the scheduler
+    // doesn't receive one from outside — this mirrors the main.rs
+    // composition root.
+    let prediction: Arc<dyn crate::domain::ports::prediction::PredictionService> =
+        match crate::infra::prediction::claude::ClaudeNarrator::from_env() {
+            Some(n) => Arc::new(n),
+            None => Arc::new(crate::infra::prediction::claude::NullNarrator),
+        };
     let state = Arc::new(AppState {
         db: db.clone(),
         nhl_client: nhl_client.clone(),
         config: Arc::new(crate::config::Config::from_env()),
         draft_hub: DraftHub::new(),
+        prediction,
     });
 
     // Playoff roster pool — 16 team rosters written into Postgres so
