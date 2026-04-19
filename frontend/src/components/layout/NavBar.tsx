@@ -275,12 +275,21 @@ const NavBar = () => {
                       </NavLink>
                     )}
                     <NavLink
-                      to="/admin"
+                      to="/my-leagues"
                       onClick={() => setUserMenuOpen(false)}
                       className="block px-4 py-2.5 text-sm text-[#1A1A1A] font-bold uppercase hover:bg-[#FACC15]/10 cursor-pointer"
                     >
                       My Leagues
                     </NavLink>
+                    {profile?.isAdmin && (
+                      <NavLink
+                        to="/admin"
+                        onClick={() => setUserMenuOpen(false)}
+                        className="block px-4 py-2.5 text-sm font-bold uppercase bg-[#1A1A1A] text-[#FACC15] hover:bg-[#FACC15] hover:text-[#1A1A1A] cursor-pointer transition-colors"
+                      >
+                        Admin
+                      </NavLink>
+                    )}
                     <NavLink
                       to="/settings"
                       onClick={() => setUserMenuOpen(false)}
@@ -501,7 +510,7 @@ const NavBar = () => {
                     </NavLink>
                   )}
                   <NavLink
-                    to="/admin"
+                    to="/my-leagues"
                     onClick={() => setMobileOpen(false)}
                     className={({ isActive }) =>
                       isActive ? activeLinkClass : inactiveLinkClass
@@ -509,6 +518,15 @@ const NavBar = () => {
                   >
                     My Leagues
                   </NavLink>
+                  {profile?.isAdmin && (
+                    <NavLink
+                      to="/admin"
+                      onClick={() => setMobileOpen(false)}
+                      className="block px-4 py-2 rounded-none uppercase font-bold bg-[#1A1A1A] text-[#FACC15] hover:bg-[#FACC15] hover:text-[#1A1A1A] transition-colors duration-100 cursor-pointer"
+                    >
+                      Admin
+                    </NavLink>
+                  )}
                   <NavLink
                     to="/settings"
                     onClick={() => setMobileOpen(false)}

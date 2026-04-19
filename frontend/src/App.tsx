@@ -12,7 +12,8 @@ import SkatersPage from "@/pages/SkatersPage";
 import GamesPage from "@/pages/GamesPage";
 import RankingsPage from "@/pages/RankingsPage";
 import LoginPage from "@/pages/LoginPage";
-import AdminPage from "@/pages/AdminPage";
+import MyLeaguesPage from "@/pages/MyLeaguesPage";
+import AdminDashboardPage from "@/pages/AdminDashboardPage";
 import DraftPage from "@/pages/DraftPage";
 import JoinLeaguePage from "@/pages/JoinLeaguePage";
 import LeagueSettingsPage from "@/pages/LeagueSettingsPage";
@@ -38,7 +39,8 @@ function App() {
             <Route path="/insights" element={<InsightsPage />} />
 
             {/* Protected pages (not league-scoped) */}
-            <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
+            <Route path="/my-leagues" element={<ProtectedRoute><MyLeaguesPage /></ProtectedRoute>} />
+            <Route path="/admin" element={<ProtectedRoute><AdminDashboardPage /></ProtectedRoute>} />
             <Route path="/join-league" element={<JoinLeaguePage />} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
 

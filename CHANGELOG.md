@@ -4,6 +4,47 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.15.0 — 2026-04-19 (frontend)
+
+### Changed — Split `/admin` into `/my-leagues` and `/admin`
+
+The old `/admin` page served both purposes: every user saw a
+"create league + your leagues" layout, and admins got a small
+"Super Admin" badge that exposed an "All Leagues" grid. Clean split:
+
+- **`/my-leagues`** — new route for every signed-in user. Create a
+  league + manage the leagues you own. No admin badge, no
+  cross-league view.
+- **`/admin`** — new admin-only dashboard. Non-admins who navigate
+  directly are redirected to `/my-leagues`. Exposes every
+  `/api/admin/*` endpoint as a one-click button with inline JSON
+  response rendering:
+  - Invalidate Cache (scope: `all` / `today` / date picker)
+  - Reprocess Daily Rankings (date)
+  - Prewarm Caches
+  - Rehydrate NHL Mirror (confirm first — long-running)
+  - Backfill Historical Playoffs (start + end)
+  - Rebackfill Carousel (season)
+  - Calibrate (season; Brier / log-loss per round rendered as a
+    summary table above the raw JSON)
+  - Calibrate Sweep (season + advanced hyperparameter grids;
+    confirm first — grid capped at 200 cells)
+  - Cross-league "All Leagues" list at the bottom.
+
+### Added
+
+- `NavBar` dropdown shows a new **Admin** entry (yellow-on-black
+  styling) only when `profile?.isAdmin === true`.
+- Shared admin UI infrastructure under `frontend/src/features/admin/`:
+  `AdminActionCard` + `ResultPanel` (pretty JSON, copy button, timestamp,
+  ok/err accent) + `ConfirmDialog` for destructive actions.
+
+### Backend
+
+No changes. Every admin endpoint already existed in
+`backend/src/api/handlers/admin.rs` and already enforced `is_admin`;
+this release just surfaces them in the UI.
+
 ## v1.21.0 — 2026-04-19 (backend) / v1.14.0 (frontend)
 
 ### Changed — Pulse "Your Read" replaces "Where You Stand"
