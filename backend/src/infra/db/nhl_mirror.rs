@@ -890,3 +890,243 @@ pub async fn list_skater_season_stats(
     .map_err(Error::Database)?;
     Ok(rows)
 }
+
+/// Full mirror row for `nhl_games` as the games/match-day handlers
+/// consume it. Schedule fields + live state + series status.
+#[derive(Debug, FromRow)]
+pub struct NhlGameRow {
+    pub game_id: i64,
+    pub season: i32,
+    pub game_type: i16,
+    pub game_date: chrono::NaiveDate,
+    pub start_time_utc: chrono::DateTime<chrono::Utc>,
+    pub game_state: String,
+    pub home_team: String,
+    pub away_team: String,
+    pub home_score: Option<i32>,
+    pub away_score: Option<i32>,
+    pub period_number: Option<i16>,
+    pub period_type: Option<String>,
+    pub series_status: Option<serde_json::Value>,
+    pub venue: Option<String>,
+}
+
+/// All games scheduled for `date`, ordered by `start_time_utc` so
+/// tonight's slate renders in kick-off order.
+pub async fn list_games_for_date(pool: &PgPool, date: &str) -> Result<Vec<NhlGameRow>> {
+    let rows = sqlx::query_as::<_, NhlGameRow>(
+        r#"
+        SELECT
+            game_id, season, game_type, game_date, start_time_utc, game_state,
+            home_team, away_team, home_score, away_score,
+            period_number, period_type, series_status, venue
+        FROM nhl_games
+        WHERE game_date = $1::date
+        ORDER BY start_time_utc
+        "#,
+    )
+    .bind(date)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// Row shape for per-player per-game stats that handlers render.
+#[derive(Debug, FromRow)]
+pub struct PlayerGameStatRow {
+    pub game_id: i64,
+    pub player_id: i64,
+    pub team_abbrev: String,
+    pub position: String,
+    pub name: String,
+    pub goals: i32,
+    pub assists: i32,
+    pub points: i32,
+    pub toi_seconds: Option<i32>,
+}
+
+/// Every player row from `nhl_player_game_stats` for the given games.
+/// Caller groups by `game_id` in-memory.
+pub async fn list_player_game_stats_for_games(
+    pool: &PgPool,
+    game_ids: &[i64],
+) -> Result<Vec<PlayerGameStatRow>> {
+    if game_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, PlayerGameStatRow>(
+        r#"
+        SELECT
+            game_id, player_id, team_abbrev, position, name,
+            goals, assists, points, toi_seconds
+        FROM nhl_player_game_stats
+        WHERE game_id = ANY($1)
+        "#,
+    )
+    .bind(game_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// Aggregated last-N-games form for a batch of players. Considers
+/// only completed games (`game_state IN (OFF, FINAL)`) so in-progress
+/// partials don't distort the line.
+#[derive(Debug, FromRow)]
+pub struct PlayerFormRow {
+    pub player_id: i64,
+    pub games: i64,
+    pub goals: i64,
+    pub assists: i64,
+    pub points: i64,
+    /// Time on ice from the single most recent completed game,
+    /// formatted later as `MM:SS` by the handler.
+    pub latest_toi_seconds: Option<i32>,
+}
+
+pub async fn list_player_form(
+    pool: &PgPool,
+    player_ids: &[i64],
+    num_games: i32,
+) -> Result<Vec<PlayerFormRow>> {
+    if player_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, PlayerFormRow>(
+        r#"
+        WITH recent AS (
+            SELECT pgs.player_id, pgs.goals, pgs.assists, pgs.points,
+                   pgs.toi_seconds, g.game_date,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY pgs.player_id
+                       ORDER BY g.game_date DESC, g.game_id DESC
+                   ) AS rn
+              FROM nhl_player_game_stats pgs
+              JOIN nhl_games g ON g.game_id = pgs.game_id
+             WHERE pgs.player_id = ANY($1)
+               AND g.game_state IN ('OFF', 'FINAL')
+        )
+        SELECT player_id,
+               COUNT(*)::bigint                                AS games,
+               COALESCE(SUM(goals), 0)::bigint                 AS goals,
+               COALESCE(SUM(assists), 0)::bigint               AS assists,
+               COALESCE(SUM(points), 0)::bigint                AS points,
+               (ARRAY_AGG(toi_seconds ORDER BY game_date DESC))[1] AS latest_toi_seconds
+          FROM recent
+         WHERE rn <= $2
+         GROUP BY player_id
+        "#,
+    )
+    .bind(player_ids)
+    .bind(num_games)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// Season-to-date playoff totals from `nhl_player_game_stats`, used
+/// by the extended-games handler to render the per-player playoff
+/// line ("12 GP — 3G 5A 8P"). Restricted to `game_type = 3`.
+#[derive(Debug, FromRow)]
+pub struct PlayerPlayoffTotalsRow {
+    pub player_id: i64,
+    pub games: i64,
+    pub goals: i64,
+    pub assists: i64,
+    pub points: i64,
+}
+
+pub async fn list_player_playoff_totals(
+    pool: &PgPool,
+    player_ids: &[i64],
+    season: i32,
+) -> Result<Vec<PlayerPlayoffTotalsRow>> {
+    if player_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, PlayerPlayoffTotalsRow>(
+        r#"
+        SELECT pgs.player_id,
+               COUNT(*)::bigint             AS games,
+               COALESCE(SUM(pgs.goals), 0)::bigint   AS goals,
+               COALESCE(SUM(pgs.assists), 0)::bigint AS assists,
+               COALESCE(SUM(pgs.points), 0)::bigint  AS points
+          FROM nhl_player_game_stats pgs
+          JOIN nhl_games g ON g.game_id = pgs.game_id
+         WHERE pgs.player_id = ANY($1)
+           AND g.season      = $2
+           AND g.game_type   = 3
+           AND g.game_state IN ('OFF', 'FINAL')
+         GROUP BY pgs.player_id
+        "#,
+    )
+    .bind(player_ids)
+    .bind(season)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// Season-to-date totals per fantasy team in a league, computed by
+/// summing every rostered player's `nhl_player_game_stats` rows for
+/// completed games in the current season + game_type.
+///
+/// This replaces the older "NHL skater leaderboard" source used by
+/// `get_rankings`. That endpoint only returns the top ~25 skaters
+/// per category, so any rostered player outside it contributed 0
+/// goals + 0 assists even after scoring — producing overall rankings
+/// that silently understated teams whose rostered depth players
+/// scored.
+///
+/// Every team in the league appears in the result (LEFT JOIN), so a
+/// team with no rostered appearances still renders with zeros and
+/// gets a rank.
+#[derive(Debug, FromRow)]
+pub struct LeagueTeamSeasonTotalsRow {
+    pub team_id: i64,
+    pub team_name: String,
+    pub goals: i64,
+    pub assists: i64,
+    pub points: i64,
+}
+
+pub async fn list_league_team_season_totals(
+    pool: &PgPool,
+    league_id: &str,
+    season: i32,
+    game_type: i16,
+) -> Result<Vec<LeagueTeamSeasonTotalsRow>> {
+    let rows = sqlx::query_as::<_, LeagueTeamSeasonTotalsRow>(
+        r#"
+        SELECT
+            ft.id                          AS team_id,
+            ft.name                        AS team_name,
+            COALESCE(SUM(pgs.goals),   0)::bigint AS goals,
+            COALESCE(SUM(pgs.assists), 0)::bigint AS assists,
+            COALESCE(SUM(pgs.points),  0)::bigint AS points
+        FROM fantasy_teams ft
+        LEFT JOIN fantasy_players fp
+               ON fp.team_id = ft.id
+        LEFT JOIN nhl_player_game_stats pgs
+               ON pgs.player_id = fp.nhl_id
+        LEFT JOIN nhl_games g
+               ON g.game_id   = pgs.game_id
+              AND g.season    = $2
+              AND g.game_type = $3
+        WHERE ft.league_id = $1::uuid
+        GROUP BY ft.id, ft.name
+        ORDER BY points DESC, ft.name
+        "#,
+    )
+    .bind(league_id)
+    .bind(season)
+    .bind(game_type)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}

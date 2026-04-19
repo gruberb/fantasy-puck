@@ -14,6 +14,7 @@ sqlx = { version = "0.8", features = [
     "macros",
     "migrate",
     "uuid",
+    "chrono",
 ] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }

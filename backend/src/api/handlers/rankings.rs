@@ -22,7 +22,7 @@ use crate::domain::models::db::FantasyTeamWithPlayers;
 use crate::domain::models::fantasy::TeamRanking;
 use crate::domain::models::nhl::PlayoffCarousel;
 use crate::domain::services::rankings::{
-    build_daily_rankings, calculate_team_rankings, DailyPlayerStat, SeasonSkaterStat,
+    build_daily_rankings, DailyPlayerStat, SeasonSkaterStat,
 };
 use crate::error::Result;
 use crate::infra::db::nhl_mirror;
@@ -36,10 +36,38 @@ pub async fn get_rankings(
     State(state): State<Arc<AppState>>,
     Query(league_params): Query<LeagueParams>,
 ) -> Result<Json<ApiResponse<Vec<TeamRanking>>>> {
+    // Sum over nhl_player_game_stats rather than joining league
+    // rosters against the NHL skater leaderboard — the leaderboard
+    // only lists each category's top 25 players, so any rostered
+    // depth player outside the top contributed 0 goals/assists even
+    // after scoring. Summing from per-game mirror rows gives every
+    // team an accurate season-to-date total that matches what the
+    // daily rankings handler computes.
     let league_id = &league_params.league_id;
-    let teams = load_league_teams(&state, league_id).await?;
-    let stats = load_skater_leaderboard(&state).await?;
-    Ok(json_success(calculate_team_rankings(teams, &stats)))
+    let rows = nhl_mirror::list_league_team_season_totals(
+        state.db.pool(),
+        league_id,
+        season() as i32,
+        game_type() as i16,
+    )
+    .await?;
+
+    let mut rankings: Vec<TeamRanking> = rows
+        .into_iter()
+        .map(|r| TeamRanking {
+            rank: 0,
+            team_id: r.team_id,
+            team_name: r.team_name,
+            goals: r.goals as i32,
+            assists: r.assists as i32,
+            total_points: r.points as i32,
+        })
+        .collect();
+    rankings.sort_by(|a, b| b.total_points.cmp(&a.total_points));
+    for (i, r) in rankings.iter_mut().enumerate() {
+        r.rank = i + 1;
+    }
+    Ok(json_success(rankings))
 }
 
 // ---------------------------------------------------------------------
@@ -87,8 +115,23 @@ pub async fn get_playoff_rankings(
     let league_id = &league_params.league_id;
 
     let teams = load_league_teams(&state, league_id).await?;
+    // Use per-team season totals from nhl_player_game_stats so the
+    // `totalPoints` displayed here matches the overall rankings
+    // page. The leaderboard-based top-10 calculation still needs
+    // the skater list, so we also load it.
+    let base_totals = nhl_mirror::list_league_team_season_totals(
+        state.db.pool(),
+        league_id,
+        season() as i32,
+        game_type() as i16,
+    )
+    .await?;
+    let base_by_team: HashMap<i64, i32> = base_totals
+        .into_iter()
+        .map(|r| (r.team_id, r.points as i32))
+        .collect();
+
     let stats = load_skater_leaderboard(&state).await?;
-    let base_rankings = calculate_team_rankings(teams.clone(), &stats);
 
     let bets = state.db.get_fantasy_bets_by_nhl_team(league_id).await?;
     let bets_by_team: HashMap<i64, Vec<String>> = bets
@@ -98,7 +141,8 @@ pub async fn get_playoff_rankings(
 
     let teams_in_playoffs = load_teams_in_playoffs(&state).await?;
 
-    // Top 10 scorers: stats are already sorted by points desc.
+    // Top 10 scorers from the NHL skater leaderboard. The leaderboard
+    // has O(25) rows, so picking the top 10 is straightforward.
     let mut top_ten: Vec<(i64, i32)> = stats
         .iter()
         .take(10)
@@ -122,11 +166,7 @@ pub async fn get_playoff_rankings(
     let mut response: Vec<PlayoffRankingResponse> = teams
         .iter()
         .map(|twp| {
-            let total_points = base_rankings
-                .iter()
-                .find(|r| r.team_id == twp.id)
-                .map(|r| r.total_points)
-                .unwrap_or(0);
+            let total_points = base_by_team.get(&twp.id).copied().unwrap_or(0);
             let nhl_teams = bets_by_team.get(&twp.id).cloned().unwrap_or_default();
             let player_nhl_teams: Vec<String> =
                 twp.players.iter().map(|p| p.nhl_team.clone()).collect();
