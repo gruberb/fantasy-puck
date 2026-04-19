@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import ErrorMessage from "@/components/common/ErrorMessage";
+import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
 import { useTeams } from "@/features/teams";
 import { useLeagueMembers } from "@/features/draft";
 import { useLeague } from "@/contexts/LeagueContext";

@@ -4,6 +4,27 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.16.0 — 2026-04-19 (frontend)
+
+### Changed — Consolidate onto @gruberb/fun-ui
+
+Three custom components replaced with their name-matching fun-ui
+equivalents. Props are identical, so every call-site works unchanged;
+deleted files live on in fun-ui.
+
+- `@/components/common/LoadingSpinner` → `{ LoadingSpinner } from "@gruberb/fun-ui"` (14 files)
+- `@/components/common/ErrorMessage`  → `{ ErrorMessage } from "@gruberb/fun-ui"` (9 files)
+- `@/components/common/PageHeader`    → `{ PageHeader } from "@gruberb/fun-ui"` (8 files)
+
+Also: the admin `ConfirmDialog` now wraps fun-ui's `Modal` internally
+(same public prop shape — admin panels unchanged). And
+`@gruberb/fun-ui/styles` is imported from `index.css` so fun-ui's
+`brutal-*` classes and CSS custom properties resolve at build time.
+
+The three local component files (`LoadingSpinner.tsx`,
+`ErrorMessage.tsx`, `PageHeader.tsx`) are deleted. Next time fun-ui
+bumps, the whole app picks up the change.
+
 ## v1.15.1 — 2026-04-19 (frontend)
 
 ### Changed — Games header

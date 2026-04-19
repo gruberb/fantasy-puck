@@ -3,8 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLeague } from "@/contexts/LeagueContext";
 import { api } from "@/api/client";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import PageHeader from "@/components/common/PageHeader";
+import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
 import { formatSeason } from "@/utils/format";
 import { APP_CONFIG } from "@/config";
 import {

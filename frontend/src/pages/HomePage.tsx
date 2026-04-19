@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import ActionButtons from "@/components/home/ActionButtons";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
+import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
 import RankingTable from "@/components/common/RankingTable";
 import { useHomePageData } from "@/hooks/useHomePageData";
 import { useSleepersRankingsColumns } from "@/components/rankingsPageTableColumns/sleepersColumns";
@@ -12,7 +12,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useLeague } from "@/contexts/LeagueContext";
 import { api } from "@/api/client";
 import { formatSeason } from "@/utils/format";
-import PageHeader from "@/components/common/PageHeader";
 import type { League } from "@/types/league";
 
 // ── League Members List (for pre-draft state) ─────────────────────────────

@@ -3,8 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/api/client";
 import { authService } from "@/features/auth";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import PageHeader from "@/components/common/PageHeader";
+import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
 
 const SettingsPage = () => {
   const { user, profile, signOut } = useAuth();

@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import ErrorMessage from "@/components/common/ErrorMessage";
+import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
 import Sparkbars from "@/components/common/Sparkbars";
 import SeriesForecastHero from "@/components/pulse/SeriesForecastHero";
 import { usePulse } from "@/features/pulse";

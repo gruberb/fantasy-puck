@@ -1,6 +1,5 @@
 import { useParams } from "react-router-dom";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import ErrorMessage from "@/components/common/ErrorMessage";
+import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
 import TeamHeader from "@/components/fantasyTeamDetail/TeamHeader";
 import TeamStats from "@/components/fantasyTeamDetail/TeamStats";
 import PlayoffStatus from "@/components/fantasyTeamDetail/PlayoffStatus";

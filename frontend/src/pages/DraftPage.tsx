@@ -4,9 +4,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLeague } from "@/contexts/LeagueContext";
 import { getNHLTeamFullName, getNHLTeamLogoUrl } from "@/utils/nhlTeams";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import ErrorMessage from "@/components/common/ErrorMessage";
-import PageHeader from "@/components/common/PageHeader";
+import { ErrorMessage, LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
 import { APP_CONFIG, QUERY_INTERVALS } from "@/config";
 import {
   useLeagueMembers,

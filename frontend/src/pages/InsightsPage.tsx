@@ -1,5 +1,4 @@
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import ErrorMessage from "@/components/common/ErrorMessage";
+import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
 import { useInsights } from "@/features/insights";
 // RaceOddsSection is a Pulse surface (personal/league projections); Insights
 // stays NHL-centric. The Fantasy Champion leaderboard (no-league view) lives

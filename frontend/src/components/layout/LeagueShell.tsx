@@ -1,8 +1,7 @@
 import { useEffect } from "react";
 import { useParams, Outlet } from "react-router-dom";
 import { useLeague } from "@/contexts/LeagueContext";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import ErrorMessage from "@/components/common/ErrorMessage";
+import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
 
 const LeagueShell = () => {
   const { leagueId } = useParams<{ leagueId: string }>();

@@ -3,10 +3,9 @@ import { useNavigate, Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/api/client";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
+import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
 import { formatSeason } from "@/utils/format";
 import { APP_CONFIG } from "@/config";
-import PageHeader from "@/components/common/PageHeader";
 import { useLeagues } from "@/features/draft";
 
 const MyLeaguesPage = () => {

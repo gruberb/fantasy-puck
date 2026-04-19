@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { RankingTableProps } from "./types";
 import RankingTableHeader from "./RankingTableHeader";
 import RankingTableEmpty from "./RankingTableEmpty";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
+import { LoadingSpinner } from "@gruberb/fun-ui";
 
 const RankingTable = ({
   // Core data props

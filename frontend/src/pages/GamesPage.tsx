@@ -1,9 +1,7 @@
 import { useParams } from "react-router-dom";
-import { LiveIndicator } from "@gruberb/fun-ui";
+import { ErrorMessage, LiveIndicator, LoadingSpinner } from "@gruberb/fun-ui";
 import DateHeader from "@/components/common/DateHeader";
 import GameCard from "@/components/games/GameCard";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import ErrorMessage from "@/components/common/ErrorMessage";
 import { APP_CONFIG } from "@/config";
 import { useGamesData } from "@/features/games";
 

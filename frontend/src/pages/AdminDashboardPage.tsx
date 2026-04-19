@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import PageHeader from "@/components/common/PageHeader";
+import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
 import { APP_CONFIG } from "@/config";
 import { formatSeason } from "@/utils/format";
 import { useLeagues } from "@/features/draft";

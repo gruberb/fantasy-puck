@@ -1,5 +1,4 @@
-import LoadingSpinner from "@/components/common/LoadingSpinner";
-import ErrorMessage from "@/components/common/ErrorMessage";
+import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
 import TopSkatersTable from "@/components/skaters/TopSkatersTable";
 import { useSkaters } from "@/features/skaters";
 

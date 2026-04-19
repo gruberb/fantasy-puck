@@ -1,4 +1,4 @@
-import PageHeader from "@/components/common/PageHeader";
+import { PageHeader } from "@gruberb/fun-ui";
 
 interface FantasyTeamsHeaderProps {
   searchTerm: string;
