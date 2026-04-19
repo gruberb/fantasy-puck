@@ -460,32 +460,35 @@ impl NhlClient {
             .and_then(|score| score.as_i64())
             .map(|s| s as i32);
 
-        // Extract period information
-        let period = if let Some(period_data) = json.get("periodDescriptor") {
-            let number = period_data
-                .get("number")
-                .and_then(|n| n.as_i64())
-                .unwrap_or(0);
-            let period_type = period_data.get("periodType").and_then(|t| t.as_str());
-
-            let period_type_text = match period_type {
-                Some("REG") => "Period",
-                Some("OT") => "OT",
-                Some("SO") => "Shootout",
-                Some(other) => other,
-                None => "",
+        // Extract period number + type as separate fields so the live
+        // poller can write them straight into their respective columns.
+        // The earlier implementation formatted them into a single string
+        // like "2 Period"; when the caller tried to `.parse::<i16>()`
+        // the combined string, the parse always failed and the mirror's
+        // `period_number` drifted from `period_type`, which in turn
+        // produced renders like `P12` (= "1" from stale number + "2 Period"
+        // from fresh type, stripped of non-digits).
+        let (period_number, period_type) =
+            if let Some(period_data) = json.get("periodDescriptor") {
+                let number = period_data
+                    .get("number")
+                    .and_then(|n| n.as_i64())
+                    .and_then(|n| i16::try_from(n).ok());
+                let period_type = period_data
+                    .get("periodType")
+                    .and_then(|t| t.as_str())
+                    .map(str::to_string);
+                (number, period_type)
+            } else {
+                (None, None)
             };
-
-            Some(format!("{} {}", number, period_type_text))
-        } else {
-            None
-        };
 
         Ok(Some(GameData {
             game_state,
             home_score,
             away_score,
-            period,
+            period_number,
+            period_type,
         }))
     }
 

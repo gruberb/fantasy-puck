@@ -157,18 +157,14 @@ async fn poll_one_game(
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_else(|| "LIVE".into());
         new_state_for_invalidation = Some(state_str.clone());
-        let period_number: Option<i16> = data
-            .period
-            .as_ref()
-            .and_then(|p| p.parse::<i16>().ok());
         nhl_mirror::update_game_live_state(
             pool,
             game_id,
             &state_str,
             data.home_score,
             data.away_score,
-            period_number,
-            data.period.as_deref(),
+            data.period_number,
+            data.period_type.as_deref(),
         )
         .await?;
     }

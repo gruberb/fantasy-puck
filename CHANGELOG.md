@@ -4,6 +4,28 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.21.2 — 2026-04-19 (backend)
+
+### Fixed — `LIVE · P12` period render
+
+`get_game_data` formatted the period into a composite string like
+`"2 Period"` and handed that to the live poller, which then tried to
+`parse::<i16>()` it for the `period_number` column. That parse always
+failed, so `period_number` stayed at whatever stale value the meta
+poller had seeded (usually `1`) while `period_type` was overwritten
+with the composite string. `format_period(1, "2 Period")` emitted
+`"1 2 Period"`; the frontend's digit-stripper reduced that to `12`,
+shown as `LIVE · P12`.
+
+Fixed at the source: `GameData` now carries `period_number` and
+`period_type` as separate fields. The live poller writes them
+directly into the matching mirror columns, so a tick in period 2
+stores `(2, "REG")` and `format_period` produces the expected
+`"2 Period"` → `P2`.
+
+Stuck rows self-correct on the next live-poller tick after deploy
+(≤60 s). No manual rehydrate required.
+
 ## v1.21.1 — 2026-04-19 (backend) / v1.16.1 (frontend)
 
 ### Fixed — fun-ui components rendered unstyled

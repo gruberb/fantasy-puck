@@ -70,7 +70,11 @@ pub struct GameData {
     pub game_state: GameState,
     pub home_score: Option<i32>,
     pub away_score: Option<i32>,
-    pub period: Option<String>,
+    /// Period number (1–3 reg, 4+ playoff OT). None outside a playing state.
+    pub period_number: Option<i16>,
+    /// Upstream `periodType` — `REG`, `OT`, `SO`. Stored raw; the API
+    /// handler maps it to a human label at render time.
+    pub period_type: Option<String>,
 }
 
 /// Team information for schedule
