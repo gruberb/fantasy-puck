@@ -18,6 +18,7 @@ import {
 } from "@/utils/nhlTeams";
 import type {
   HotPlayerSignal,
+  LastNightGame,
   PlayerLeader,
   TodaysGameSignal,
 } from "@/features/insights";
@@ -45,6 +46,24 @@ const InsightsPage = () => {
 
   return (
     <div className="space-y-6">
+
+      {/* Last Night — Daily Faceoff-style recap of the previous hockey-day's
+          games. Rendered first so a morning visitor's first glance answers
+          "what did I miss overnight" before being steered into the preview. */}
+      {(signals.lastNight.length > 0 || narratives.lastNight) && (
+        <InsightCard accent="#1A1A1A" title="Last Night">
+          {signals.lastNight.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+              {signals.lastNight.map((g, i) => (
+                <LastNightCard key={i} game={g} />
+              ))}
+            </div>
+          )}
+          {narratives.lastNight && (
+            <MarkdownNarrative text={narratives.lastNight} />
+          )}
+        </InsightCard>
+      )}
 
       {/* What to Watch Today */}
       {(narratives.todaysWatch || signals.todaysGames.length > 0) && (
@@ -177,6 +196,91 @@ function InsightCard({
         </h2>
       </div>
       <div className="p-6">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * Per-game card for Last Night: headline, final score, series state,
+ * and up to three top scorers with point totals. Purely presentational;
+ * the narrative paragraph below contextualises these numbers.
+ */
+function LastNightCard({ game }: { game: LastNightGame }) {
+  return (
+    <div className="border-2 border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 bg-gray-50 border-b-2 border-gray-200">
+        <p className="font-extrabold uppercase tracking-wider text-xs text-[#1A1A1A]">
+          {game.headline}
+        </p>
+        <p className="text-[11px] text-gray-500 font-medium">
+          {game.awayTeam} {game.awayScore} – {game.homeTeam} {game.homeScore}
+          {game.seriesAfter ? ` · ${game.seriesAfter}` : ""}
+        </p>
+      </div>
+      {game.topScorers.length > 0 && (
+        <ul className="divide-y divide-gray-100 text-xs">
+          {game.topScorers.map((s, i) => (
+            <li key={i} className="flex justify-between items-center px-3 py-1.5">
+              <span className="truncate pr-2">
+                <span className="font-bold text-[#1A1A1A]">{s.name}</span>{" "}
+                <span className="text-gray-400">({s.team})</span>
+              </span>
+              <span className="tabular-nums text-gray-600">
+                {s.goals}G {s.assists}A · <strong className="text-[#1A1A1A]">{s.points} pts</strong>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Renders text with a tiny markdown subset: `### Heading`, blank-line
+ * paragraph breaks, and `**bold**`. Used by the Last Night section,
+ * which gets per-game sub-headings from Claude. Unknown markdown lines
+ * fall through as plain paragraphs.
+ */
+function MarkdownNarrative({ text }: { text: string }) {
+  type Block =
+    | { kind: "heading"; text: string }
+    | { kind: "paragraph"; text: string };
+  const blocks: Block[] = [];
+  let paragraph: string[] = [];
+  const flush = () => {
+    if (paragraph.length > 0) {
+      blocks.push({ kind: "paragraph", text: paragraph.join(" ").trim() });
+      paragraph = [];
+    }
+  };
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (line === "") { flush(); continue; }
+    if (line.startsWith("### ")) {
+      flush();
+      blocks.push({ kind: "heading", text: line.slice(4).trim() });
+      continue;
+    }
+    paragraph.push(line);
+  }
+  flush();
+  return (
+    <div className="space-y-3">
+      {blocks.map((b, i) =>
+        b.kind === "heading" ? (
+          <h3
+            key={i}
+            className={`font-extrabold uppercase tracking-wider text-xs text-[#1A1A1A] ${
+              i === 0 ? "" : "pt-3 border-t border-gray-200"
+            }`}
+          >
+            {b.text}
+          </h3>
+        ) : (
+          <Narrative key={i} text={b.text} />
+        )
+      )}
     </div>
   );
 }

@@ -96,12 +96,13 @@ async fn compute_signals(
     // Run independent signal computations concurrently. Personal surfaces
     // (fantasy race, rivalry, sleeper watch) live on Pulse / race-odds now;
     // this signal set is strictly NHL-centric.
-    let (hot, cold, projections, games, news) = tokio::join!(
+    let (hot, cold, projections, games, news, last_night) = tokio::join!(
         compute_hot_players(state, league_id),
         compute_cold_hands(state, league_id),
         compute_series_projections(state),
         compute_todays_games(state, hockey_today),
         scrape_headlines(),
+        compute_last_night(state, hockey_today),
     );
 
     let mut todays_games = games.unwrap_or_default();
@@ -118,7 +119,120 @@ async fn compute_signals(
         series_projections,
         todays_games,
         news_headlines: news.unwrap_or_default(),
+        last_night: last_night.unwrap_or_default(),
     })
+}
+
+/// Recap of games that finalised on the hockey-date preceding `today`.
+/// Returns an empty list on the first hockey-day of a round (no prior
+/// date) and when the previous slate was off / still live. Every entry
+/// carries the final score, the top 1–3 scorers, and the resulting
+/// series state so the narrator doesn't need to parse scores directly.
+async fn compute_last_night(
+    state: &Arc<AppState>,
+    today: &str,
+) -> Result<Vec<crate::api::dtos::insights::LastNightGame>> {
+    use crate::api::dtos::insights::{LastNightGame, LastNightScorer};
+    use crate::infra::db::nhl_mirror;
+
+    let yesterday = match chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d") {
+        Ok(d) => match d.pred_opt() {
+            Some(p) => p.format("%Y-%m-%d").to_string(),
+            None => return Ok(Vec::new()),
+        },
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    // Clamp to the playoff window so pre-playoff days don't get recapped
+    // once the cutover happens. Callers already scope other reads the
+    // same way.
+    if yesterday.as_str() < crate::api::playoff_start() {
+        return Ok(Vec::new());
+    }
+
+    let pool = state.db.pool();
+    let games = nhl_mirror::list_games_for_date(pool, &yesterday).await?;
+    let finals: Vec<&nhl_mirror::NhlGameRow> = games
+        .iter()
+        .filter(|g| matches!(g.game_state.as_str(), "OFF" | "FINAL"))
+        .collect();
+    if finals.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let game_ids: Vec<i64> = finals.iter().map(|g| g.game_id).collect();
+    let player_stats = nhl_mirror::list_player_game_stats_for_games(pool, &game_ids)
+        .await
+        .unwrap_or_default();
+
+    let mut by_game: HashMap<i64, Vec<&nhl_mirror::PlayerGameStatRow>> = HashMap::new();
+    for stat in &player_stats {
+        if stat.points > 0 {
+            by_game.entry(stat.game_id).or_default().push(stat);
+        }
+    }
+
+    let recaps: Vec<LastNightGame> = finals
+        .iter()
+        .map(|g| {
+            let mut top = by_game.remove(&g.game_id).unwrap_or_default();
+            top.sort_by(|a, b| b.points.cmp(&a.points).then(b.goals.cmp(&a.goals)));
+            let top_scorers: Vec<LastNightScorer> = top
+                .into_iter()
+                .take(3)
+                .map(|s| LastNightScorer {
+                    name: s.name.clone(),
+                    team: s.team_abbrev.clone(),
+                    goals: s.goals,
+                    assists: s.assists,
+                    points: s.points,
+                })
+                .collect();
+
+            let (hs, as_) = (g.home_score.unwrap_or(0), g.away_score.unwrap_or(0));
+            let headline = if hs >= as_ {
+                format!("{} wins {}-{}", g.home_team, hs, as_)
+            } else {
+                format!("{} wins {}-{}", g.away_team, as_, hs)
+            };
+
+            let series_after = g.series_status.as_ref().and_then(|v| {
+                let s: Option<crate::domain::models::nhl::SeriesStatus> =
+                    serde_json::from_value(v.clone()).ok();
+                s.map(|s| {
+                    if s.top_seed_wins == s.bottom_seed_wins {
+                        format!("Series tied {}-{}", s.top_seed_wins, s.bottom_seed_wins)
+                    } else if s.top_seed_wins > s.bottom_seed_wins {
+                        format!(
+                            "{} leads series {}-{}",
+                            s.top_seed_team_abbrev,
+                            s.top_seed_wins,
+                            s.bottom_seed_wins
+                        )
+                    } else {
+                        format!(
+                            "{} leads series {}-{}",
+                            s.bottom_seed_team_abbrev,
+                            s.bottom_seed_wins,
+                            s.top_seed_wins
+                        )
+                    }
+                })
+            });
+
+            LastNightGame {
+                home_team: g.home_team.clone(),
+                away_team: g.away_team.clone(),
+                home_score: hs,
+                away_score: as_,
+                headline,
+                series_after,
+                top_scorers,
+            }
+        })
+        .collect();
+
+    Ok(recaps)
 }
 
 /// Fill in team strength (standings points) and fantasy ownership tags on
@@ -752,6 +866,7 @@ fn fallback_narratives() -> InsightsNarratives {
         game_narratives: Vec::new(),
         hot_players: msg.clone(),
         bracket: msg,
+        last_night: String::new(),
     }
 }
 
@@ -795,7 +910,28 @@ async fn call_claude_api(signals: &InsightsSignals) -> std::result::Result<Insig
         }
     }
 
+    // Human-readable last-night recaps. We hand Claude the scores, the
+    // post-game series state, and the top scorers; the narrator chooses
+    // which games are worth a sub-heading and writes the prose.
+    let mut last_night_summary = String::new();
+    for g in &signals.last_night {
+        last_night_summary.push_str(&format!(
+            "\n--- {} @ {} · Final {} {} – {} {} · {} ---\n",
+            g.away_team, g.home_team, g.away_team, g.away_score, g.home_team, g.home_score, g.headline
+        ));
+        if let Some(s) = &g.series_after {
+            last_night_summary.push_str(&format!("  Series: {}\n", s));
+        }
+        for scorer in &g.top_scorers {
+            last_night_summary.push_str(&format!(
+                "  {} ({}): {}G {}A, {} pts\n",
+                scorer.name, scorer.team, scorer.goals, scorer.assists, scorer.points
+            ));
+        }
+    }
+
     let num_games = signals.todays_games.len();
+    let num_last_night = signals.last_night.len();
 
     let request_body = serde_json::json!({
         "model": "claude-haiku-4-5-20251001",
@@ -819,13 +955,15 @@ Return JSON with exactly these fields:
 
 - **hot_players**: 3–4 sentences on the hottest skaters. Cite form numbers and NHL Edge data when present. If the Hot list is empty, say the playoffs haven't produced data yet rather than padding.
 
-- **bracket**: 3–4 sentences on the playoff picture — who's favored, where the upsets could come from, which team's Stanley Cup path looks easiest or hardest. Lean on series state + team ratings from the data. This is the one field where full-bracket / season-long talk belongs — everything else should stay game-scoped or player-scoped."#),
+- **bracket**: 3–4 sentences on the playoff picture — who's favored, where the upsets could come from, which team's Stanley Cup path looks easiest or hardest. Lean on series state + team ratings from the data. This is the one field where full-bracket / season-long talk belongs — everything else should stay game-scoped or player-scoped.
+
+- **last_night**: Daily Faceoff-style recap of the {num_last_night} completed games under "LAST NIGHT". Format: one `### Headline` per game (name the story, not the teams — e.g. "Andersen slams the door on Ottawa" not "Hurricanes beat Senators"), followed by one 2–4 sentence paragraph covering what actually happened — final score, the turning moment, the top scorer, and the resulting series state. Voice is a veteran beat writer filing at midnight: specific, direct, no hype. Wrap player names in **double asterisks**. Skip hot takes about the whole series; this is a Day N recap, not a prediction. If `{num_last_night}` is 0, return an empty string for this field (not "No games last night", just `""`)."#),
         "messages": [
             {
                 "role": "user",
                 "content": format!(
-                    "Generate insights as JSON.\n\n=== TODAY'S GAMES ({num_games} games — generate exactly {num_games} game_narratives in this order) ==={}\n\n=== NHL EDGE DATA ===\n{}\n\n=== FULL DATA ===\n{}",
-                    game_summaries, edge_summary, signals_json
+                    "Generate insights as JSON.\n\n=== LAST NIGHT ({num_last_night} completed games) ==={}\n\n=== TODAY'S GAMES ({num_games} games — generate exactly {num_games} game_narratives in this order) ==={}\n\n=== NHL EDGE DATA ===\n{}\n\n=== FULL DATA ===\n{}",
+                    last_night_summary, game_summaries, edge_summary, signals_json
                 )
             }
         ]
@@ -898,6 +1036,11 @@ Return JSON with exactly these fields:
             .get("bracket")
             .and_then(|v| v.as_str())
             .unwrap_or("No update available.")
+            .to_string(),
+        last_night: parsed
+            .get("last_night")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
             .to_string(),
     })
 }

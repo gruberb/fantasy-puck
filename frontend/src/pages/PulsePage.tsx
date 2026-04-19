@@ -75,14 +75,14 @@ const PulsePage = () => {
         </section>
       )}
 
-      {/* Personal Pulse narrative from Claude Sonnet 4.6. Yellow header to
-          signal "this is your personal read"; visual weight now matches the
-          other major sections. Hidden if the LLM call failed. */}
+      {/* Personal Pulse narrative. Three sections: The Read, Swing Pieces,
+          Rival Risk — rendered inline via markdown H3 parsing in
+          `PulseNarrative`. Hidden entirely if the LLM call failed. */}
       {narrative && (
         <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
           <header className="bg-[var(--color-you)] px-6 py-3">
             <h2 className="font-extrabold uppercase tracking-wider text-sm text-[#1A1A1A]">
-              Where You Stand
+              Your Read
             </h2>
           </header>
           <div className="p-6">
@@ -187,16 +187,93 @@ const PulsePage = () => {
   );
 };
 
-/** Render a Claude narrative with **bold** markers rewritten as <strong>. */
+/**
+ * Render a Claude narrative. Supports a tiny markdown subset sufficient
+ * for the Pulse Your Read prompt: `### Heading`, `- bullet`, `**bold**`.
+ * Anything else falls through as a paragraph.
+ */
 function PulseNarrative({ text }: { text: string }) {
-  const paragraphs = text.split(/\n{2,}/).filter((p) => p.trim().length > 0);
+  const blocks = parseNarrativeBlocks(text);
   return (
     <div className="space-y-3 text-sm leading-relaxed text-[#1A1A1A]">
-      {paragraphs.map((p, i) => (
-        <p key={i}>{renderBoldSegments(p)}</p>
-      ))}
+      {blocks.map((block, i) => {
+        if (block.kind === "heading") {
+          return (
+            <h3
+              key={i}
+              className={`font-extrabold uppercase tracking-wider text-xs text-[#1A1A1A] ${
+                i === 0 ? "" : "pt-3 border-t border-gray-200"
+              }`}
+            >
+              {block.text}
+            </h3>
+          );
+        }
+        if (block.kind === "list") {
+          return (
+            <ul key={i} className="space-y-1.5 pl-0">
+              {block.items.map((item, j) => (
+                <li key={j} className="flex gap-2">
+                  <span aria-hidden className="text-[#1A1A1A]/40">—</span>
+                  <span className="flex-1">{renderBoldSegments(item)}</span>
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        return <p key={i}>{renderBoldSegments(block.text)}</p>;
+      })}
     </div>
   );
+}
+
+type NarrativeBlock =
+  | { kind: "heading"; text: string }
+  | { kind: "paragraph"; text: string }
+  | { kind: "list"; items: string[] };
+
+function parseNarrativeBlocks(text: string): NarrativeBlock[] {
+  const blocks: NarrativeBlock[] = [];
+  let paragraph: string[] = [];
+  let list: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraph.length > 0) {
+      blocks.push({ kind: "paragraph", text: paragraph.join(" ").trim() });
+      paragraph = [];
+    }
+  };
+  const flushList = () => {
+    if (list.length > 0) {
+      blocks.push({ kind: "list", items: list });
+      list = [];
+    }
+  };
+
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (line === "") {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+    if (line.startsWith("### ")) {
+      flushParagraph();
+      flushList();
+      blocks.push({ kind: "heading", text: line.slice(4).trim() });
+      continue;
+    }
+    if (line.startsWith("- ")) {
+      flushParagraph();
+      list.push(line.slice(2).trim());
+      continue;
+    }
+    flushList();
+    paragraph.push(line);
+  }
+  flushParagraph();
+  flushList();
+  return blocks;
 }
 
 function renderBoldSegments(text: string): React.ReactNode[] {

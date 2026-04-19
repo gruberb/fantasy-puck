@@ -10,4 +10,6 @@ export type {
   InsightsNarratives,
   InsightsSignals,
   InsightsResponse,
+  LastNightGame,
+  LastNightScorer,
 } from './hooks/use-insights';

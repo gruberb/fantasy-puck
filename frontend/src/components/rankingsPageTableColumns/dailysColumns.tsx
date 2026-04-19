@@ -27,6 +27,12 @@ export const useDailyRankingsColumns = () => {
       ),
     },
     {
+      key: "dailyPoints",
+      header: "Points",
+      className: "font-bold whitespace-nowrap",
+      sortable: true,
+    },
+    {
       key: "dailyGoals",
       header: "Goals",
       className: "whitespace-nowrap",
@@ -36,12 +42,6 @@ export const useDailyRankingsColumns = () => {
       key: "dailyAssists",
       header: "Assists",
       className: "whitespace-nowrap",
-      sortable: true,
-    },
-    {
-      key: "dailyPoints",
-      header: "Points",
-      className: "font-bold whitespace-nowrap",
       sortable: true,
     },
     {

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::domain::prediction::series_projection::SeriesStateCode;
@@ -18,6 +20,14 @@ pub struct PulseResponse {
     pub league_board: Vec<LeagueBoardEntry>,
     pub has_games_today: bool,
     pub has_live_games: bool,
+    /// Cup-win probability per NHL team from the last Monte Carlo run
+    /// (values in 0.0 – 1.0). Keyed by 3-letter abbreviation. Populated
+    /// opportunistically from the cached `/api/race-odds` payload; empty
+    /// when that cache hasn't warmed yet. The narrator uses this to
+    /// contrast "high-diversity, low-ceiling" rosters against
+    /// concentrated stacks that depend on one run going deep.
+    #[serde(default)]
+    pub nhl_team_cup_odds: HashMap<String, f32>,
     /// Optional Claude-generated personal narrative. Empty when the LLM call
     /// fails or no `my_team` is resolved (nothing personal to say).
     #[serde(default)]

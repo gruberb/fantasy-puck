@@ -97,6 +97,28 @@ export interface InsightsNarratives {
   gameNarratives: string[];
   hotPlayers: string;
   bracket: string;
+  /** Daily Faceoff-style recap of the previous hockey-date's games.
+   *  Contains one `### Sub-heading` per covered game, followed by a
+   *  short paragraph. Empty when no games were played yesterday. */
+  lastNight: string;
+}
+
+export interface LastNightScorer {
+  name: string;
+  team: string;
+  goals: number;
+  assists: number;
+  points: number;
+}
+
+export interface LastNightGame {
+  homeTeam: string;
+  awayTeam: string;
+  homeScore: number;
+  awayScore: number;
+  headline: string;
+  seriesAfter: string | null;
+  topScorers: LastNightScorer[];
 }
 
 export interface InsightsSignals {
@@ -105,6 +127,7 @@ export interface InsightsSignals {
   seriesProjections: TeamSeriesProjection[];
   todaysGames: TodaysGameSignal[];
   newsHeadlines: string[];
+  lastNight: LastNightGame[];
 }
 
 export interface InsightsResponse {

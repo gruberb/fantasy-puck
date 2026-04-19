@@ -4,6 +4,71 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.21.0 — 2026-04-19 (backend) / v1.14.0 (frontend)
+
+### Changed — Pulse "Your Read" replaces "Where You Stand"
+
+The narrative now reads like a friend who watches every game telling
+you honestly whether your roster is live. Three sections with H3
+sub-headings:
+
+- **The Read** — verdict + the one thing the roster is built on and the
+  one thing working against it.
+- **Swing Pieces** — 3–5 players whose performance decides the outcome,
+  each with a single clause on why.
+- **Rival Risk** — leader's stack profile contrasted with the caller's,
+  ending on "your path is better / worse / even".
+
+Prompt changes:
+
+- `PulseResponse` gains `nhl_team_cup_odds` — a best-effort lift from
+  the cached `/api/race-odds` payload keyed by NHL abbrev. The
+  narrator uses these to cross-reference stack concentration vs cup
+  win probability. Empty when the morning Monte Carlo hasn't warmed
+  the cache yet (narrator skips odds phrasing in that case).
+- Headline block fed to Claude adds: caller's stack profile (NHL
+  teams → player count → cup %), path diversity count, leader's stack
+  profile, and an alive/trailing/eliminated summary of the caller's
+  skaters.
+- Two few-shot examples pin the voice (post-day-1 and zero-state).
+- `max_tokens` raised 1500 → 2200 to fit the three-section output
+  without clipping the Swing Pieces list on deeper rosters.
+
+Frontend: `PulseNarrative` now parses `### Heading` and `- bullet`
+markdown on top of the existing `**bold**` rule. Section header
+renamed `Where You Stand` → `Your Read`.
+
+### Added — Insights "Last Night" recap
+
+A new block at the top of `/insights` that summarises the previous
+hockey-day's completed games in a Daily Faceoff voice.
+
+- New `LastNightGame` signal (per-game: home/away, final score,
+  post-game series state, top 3 scorers) computed from yesterday's
+  `nhl_games` + `nhl_player_game_stats`, clamped by `playoff_start()`.
+- New `last_night` narrative — one `### Sub-heading` per covered
+  game, followed by a 2–4 sentence paragraph.
+- Frontend renders per-game cards (headline, score, series state,
+  top scorers) plus the narrative with H3 parsing.
+
+### Fixed
+
+- **UTA team link** pointed at `nhl.com/utahhc` (the provisional slug
+  from the franchise's first season). They rebranded to **Utah
+  Mammoth** and live at `/utah/`. `NHL_TEAMS_BY_ABBREV[UTA]` now
+  reflects that — full name, short name, and slug.
+- **Daily Fantasy Scores / Yesterday's Rankings** column order was
+  `Goals · Assists · Points`. Reordered to `Points · Goals · Assists`
+  so the sort key lands in the first numeric column.
+
+### Notes
+
+The Pulse and Insights narratives are cached per
+`{league}:{team}:{date}` and `{league}:{date}` respectively. After
+deploy, existing cached entries keep serving until midnight ET unless
+busted. Use `GET /api/admin/cache/invalidate?scope=today` to force
+a fresh generation.
+
 ## v1.20.6 — 2026-04-19 (backend) / v1.13.4 (frontend)
 
 ### Fixed — Pre-playoff data leaking into playoff surfaces

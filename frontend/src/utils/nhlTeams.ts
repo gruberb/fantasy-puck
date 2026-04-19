@@ -205,9 +205,9 @@ export const NHL_TEAMS_BY_ABBREV: Record<string, NHLTeamInfo> = {
     abbreviation: "WPG",
   },
   UTA: {
-    fullName: "Utah Hockey Club",
-    shortName: "Utah HC",
-    urlSlug: "utahhc",
+    fullName: "Utah Mammoth",
+    shortName: "Mammoth",
+    urlSlug: "utah",
     abbreviation: "UTA",
   },
 };

@@ -17,6 +17,40 @@ pub struct InsightsSignals {
     /// Per-team series state + odds across every active playoff series.
     #[serde(default)]
     pub series_projections: Vec<TeamSeriesProjection>,
+    /// Games that finalised on the previous hockey-date, with top
+    /// scorers and the resulting series status. Empty on off-days and
+    /// on the first day of a new round before any game has finished.
+    #[serde(default)]
+    pub last_night: Vec<LastNightGame>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LastNightGame {
+    pub home_team: String,
+    pub away_team: String,
+    pub home_score: i32,
+    pub away_score: i32,
+    /// Pre-computed winner label — "CAR wins 2-0" — so the narrator
+    /// doesn't have to parse the score direction.
+    pub headline: String,
+    /// "CAR leads series 1-0" or "Series tied 1-1". None pre-playoffs.
+    #[serde(default)]
+    pub series_after: Option<String>,
+    /// Up to three top scorers across both teams, sorted by points
+    /// descending. Empty when per-game stats haven't landed yet.
+    #[serde(default)]
+    pub top_scorers: Vec<LastNightScorer>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LastNightScorer {
+    pub name: String,
+    pub team: String,
+    pub goals: i32,
+    pub assists: i32,
+    pub points: i32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -158,4 +192,9 @@ pub struct InsightsNarratives {
     /// Narrative for the Bracket / Stanley Cup Odds section.
     #[serde(default)]
     pub bracket: String,
+    /// Daily Faceoff-style recap of the previous hockey-date's games.
+    /// Contains one `### Sub-heading` per game the narrator chose to
+    /// cover, followed by 2–3 sentence paragraphs. Empty on off-days.
+    #[serde(default)]
+    pub last_night: String,
 }

@@ -115,6 +115,12 @@ async fn generate_pulse(
         .iter()
         .any(|g| matches!(g.game_state.as_str(), "LIVE" | "CRIT"));
 
+    // Best-effort lift of per-NHL-team cup odds from the cached
+    // race-odds payload. Empty map when the cache hasn't warmed yet
+    // (e.g. before the morning Monte Carlo cron) — the narrator simply
+    // skips any cup-odds phrasing in that case.
+    let nhl_team_cup_odds = load_cached_cup_odds(state, league_id, today).await;
+
     Ok(PulseResponse {
         generated_at: Utc::now().to_rfc3339(),
         my_team,
@@ -123,8 +129,39 @@ async fn generate_pulse(
         league_board,
         has_games_today,
         has_live_games,
+        nhl_team_cup_odds,
         narrative: None,
     })
+}
+
+/// Pull the cup-win probability map from the cached `/api/race-odds`
+/// payload. Returns an empty map when the cache is cold, the deserialize
+/// fails, or the Monte Carlo cron has not run against this league yet.
+async fn load_cached_cup_odds(
+    state: &Arc<AppState>,
+    league_id: &str,
+    today: &str,
+) -> HashMap<String, f32> {
+    let key = format!(
+        "race_odds:v4:{}:{}:{}:{}",
+        if league_id.is_empty() { "global" } else { league_id },
+        season(),
+        game_type(),
+        today
+    );
+    match state
+        .db
+        .cache()
+        .get_cached_response::<crate::api::dtos::race_odds::RaceOddsResponse>(&key)
+        .await
+    {
+        Ok(Some(race_odds)) => race_odds
+            .nhl_teams
+            .iter()
+            .map(|t| (t.abbrev.clone(), t.cup_win_prob))
+            .collect(),
+        _ => HashMap::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
