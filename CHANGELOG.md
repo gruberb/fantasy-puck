@@ -4,6 +4,54 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.19.0 — 2026-04-19 (backend) / v1.12.0 (frontend)
+
+### Added — NHL mirror pipeline, layered architecture, prediction port
+
+Every user-facing read path is now served from Postgres. Two background tasks continuously mirror the NHL API into `nhl_*` tables; handlers do not call `api-web.nhle.com` on the request path.
+
+- `backend/src/infra/jobs/meta_poller.rs`: every 5 min, refreshes today's schedule in `nhl_games`. Every 6th tick (30 min) additionally refreshes tomorrow's schedule, the skater + goalie leaderboards (`nhl_skater_season_stats`, `nhl_goalie_season_stats`), standings (`nhl_standings`) and playoff carousel (`nhl_playoff_bracket`). Every 288th tick (24 h) refreshes team rosters (`nhl_team_rosters`). Each source is gated on the corresponding mirror table's `MAX(updated_at)` so a server restart doesn't re-fan every fetch when the data is already fresh.
+- `backend/src/infra/jobs/live_poller.rs`: every 60 s, polls every game in today's slate whose state is `LIVE`/`CRIT`/`PRE`. Updates `nhl_games.home_score`/`away_score`/`game_state`/`period_*` and upserts every skater + goalie line in `nhl_player_game_stats`. When a game's state transitions `LIVE|CRIT → OFF|FINAL`, invalidates `pulse_narrative:{league}:*` for any league with rostered players in that game so the next Pulse visit regenerates its narrative with the final numbers.
+- Both pollers acquire a `pg_advisory_lock` per tick, bound to a dedicated `PgConnection` for the lock's lifetime, so a multi-replica deployment only runs the work on one replica per tick.
+- `GET /api/admin/rehydrate`: admin endpoint that runs every poller step synchronously plus a full boxscore backfill for every game in `nhl_games`. Paced (250 ms between roster fetches) and freshness-gated so repeat invocations are cheap.
+- Cron schedules in `backend/src/tuning.rs` corrected to 6-field format (`0 0 <hour> * * *`). Previously the values were arranged as 5-field patterns with an extra trailing wildcard, which `tokio_cron_scheduler` parsed as "every hour at minute N" — the morning / afternoon rankings cron and the 10:00 UTC prewarm were firing 24× / 48× per day instead of daily.
+- `backend/src/infra/db/nhl_mirror.rs`: typed repository for all eight mirror tables plus read helpers consumed by the rewritten handlers (`list_games_for_date`, `list_player_game_stats_for_games`, `list_player_form` window-function aggregation, `list_league_team_season_totals`, `sum_player_points`, freshness helpers, advisory-lock lifecycle).
+
+Three ports define the swappable edges of the system; adapters live in `infra/`:
+
+- `domain/ports/nhl_source.rs` — `NhlDataSource` trait (placeholder, production adapter is `infra/nhl/client::NhlClient`).
+- `domain/ports/prediction.rs` — `PredictionService` trait. Production adapter `infra/prediction/claude::ClaudeNarrator` wraps Anthropic `/v1/messages`; fallback `NullNarrator` is wired when `ANTHROPIC_API_KEY` is unset so dev boxes without credentials still boot. `AppState` now carries `Arc<dyn PredictionService>`; the Pulse handler calls `state.prediction.pulse_narrative(...)` instead of building a Claude request inline.
+- `domain/ports/draft_engine.rs` — `DraftEngine` trait (placeholder, production impl is the existing in-process WebSocket hub).
+
+### Changed — layered architecture per Bulletproof Rust Web
+
+Backend source regrouped into three architectural layers. No behaviour change in this migration commit; the moves preserve file history via `git mv`.
+
+- `domain/` — pure business logic (no `axum` / `sqlx` / `reqwest`). Subtree: `models/` (moved from `src/models`), `ports/`, `services/` (moved from `src/utils/{nhl,fantasy}.rs`), `prediction/`.
+- `infra/` — outbound-IO adapters. Subtree: `db/` (moved from `src/db`), `nhl/` (moved from `src/nhl_api` plus `src/utils/api.rs`), `jobs/` (moved from `src/utils/{scheduler,player_pool,playoff_ingest,historical_seed}.rs`), `prediction/{elo,claude}.rs`.
+- `api/` — Axum handlers + DTOs + routes (unchanged shape).
+
+### Changed — handlers read from the mirror
+
+- `get_rankings` (overall), `get_daily_rankings`, `get_playoff_rankings`: SQL reads only. `get_rankings` and `get_playoff_rankings` now sum season totals from `nhl_player_game_stats` via `list_league_team_season_totals` rather than joining against the NHL stats-leaders leaderboard — the leaderboard only returns the top ~25 per category, so depth scorers contributed 0 to their fantasy team's total. Totals now match the per-day view.
+- `list_games` (basic + extended) and `get_match_day`: read `nhl_games` + `nhl_player_game_stats` in batch queries. Form data (last 5 completed games per player) comes from `list_player_form`, a single window-function query. Playoff totals come from `list_player_playoff_totals`. No per-game, per-player NHL fan-out. Dropped cache keys: `games_extended:*`, `match_day:*`, `daily_rankings:*`.
+- `get_pulse`: tiered cache. The live block (my team status, series forecast, my games tonight, league board) recomputes from the mirror on every request. Only the Claude narrative stays in `response_cache` under `pulse_narrative:*`; it's invalidated by the live poller on game-end transitions. The 5-day sparkline unions `daily_rankings` (finalized) with `v_daily_fantasy_totals` (today's live total) so the chart fills in on day 1 of a round instead of rendering blank.
+- `generate_and_cache_race_odds`: cache hit path now overlays fresh `current_points` from the mirror and shifts each team's `projected_final_mean` / `p10` / `p90` by the per-team delta, so the Current column stays in lock-step with Rankings throughout the day. Monte Carlo outputs (win% / top-3% / likely range) remain point-in-time from the 10:00 UTC prewarm. Cache key bumped `race_odds:v3` → `v4`.
+
+### Fixed
+
+- Game scores were NULL in `nhl_games` for games finalized before the live poller first saw them LIVE. `upsert_boxscore_players` now derives `home_score` / `away_score` from the boxscore's skater + defense goals and writes them in the same transaction, so both live games and already-finalized ones converge to correct scores on the next poll or `/api/admin/rehydrate`.
+- `GameState` now recognises `"PRE"` (pre-game warm-up). Previously the variant was missing so `nhl_games.game_state = 'UNKNOWN'` for any game NHL marked `PRE`, and `list_live_game_ids_for_date` skipped it because the filter requires `LIVE`/`CRIT`/`PRE`.
+- Poller first ticks staggered (+15 s meta, +45 s live) and roster fetches paced (250 ms between calls) so server boot no longer produces a 429 cascade. Roster refresh tier (24 h) is freshness-gated so a restart within the TTL window is a no-op instead of a full 32-team re-pull.
+- `pg_advisory_lock` acquire and release now happen on the same dedicated `PgConnection` — previously each query took whichever pool connection it got and the release silently failed against a different session, leaving the lock leaked until the holding session eventually cycled and emitting `you don't own a lock of type ExclusiveLock` NOTICEs.
+
+### Changed — frontend automatic live refresh
+
+- `useGamesData`: the opt-in "Auto-refresh" checkbox is gone. React Query's `refetchInterval` is wired to a predicate on the query result: poll every 30 s while any game on the selected date is `LIVE`/`CRIT`; stop otherwise. The Games page shows a passive "Live — auto-updating" badge when polling is active.
+- `usePulse`: polls every `PULSE_STALE_MS` while the response's `hasLiveGames` is true; stops otherwise.
+- `useRankingsData`: polls the daily rankings every 30 s while the selected date is today; historical dates are static.
+- `frontend/src/components/games/GameOptions.tsx` deleted — it was the checkbox's only caller.
+
 ## v1.18.0 — 2026-04-18 (backend) / v1.11.0 (frontend)
 
 ### Fixed — rate-limit cascades during playoff slates
