@@ -1,7 +1,7 @@
 {
   "name": "fantasy-hockey-frontend",
   "private": true,
-  "version": "1.15.0",
+  "version": "1.15.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,7 @@
     "validate": "npm run typecheck && npm run lint"
   },
   "dependencies": {
+    "@gruberb/fun-ui": "^0.1.0",
     "@tailwindcss/postcss": "^4.1.4",
     "@tanstack/react-query": "^5.74.4",
     "@types/react-datepicker": "^6.2.0",

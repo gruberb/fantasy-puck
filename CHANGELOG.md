@@ -4,6 +4,21 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.15.1 — 2026-04-19 (frontend)
+
+### Changed — Games header
+
+- Added `@gruberb/fun-ui` (^0.1.0) as a frontend dependency. First use:
+  the brutalist `LiveIndicator` replaces the bespoke "Live —
+  auto-updating" pill on `/games`. Matches the style of the rest of
+  the app and gives us a single source of truth as more surfaces adopt
+  fun-ui components.
+- Removed the manual **Refresh** button. `useGamesData` already polls
+  via React Query's `refetchInterval` — 30 s cadence while any game is
+  `LIVE|CRIT`, auto-stops when the slate finalises. Manual refresh was
+  redundant and sat there even on off-days, where it did nothing
+  useful.
+
 ## v1.15.0 — 2026-04-19 (frontend)
 
 ### Changed — Split `/admin` into `/my-leagues` and `/admin`
