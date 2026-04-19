@@ -140,3 +140,20 @@ impl CacheService {
         Ok(())
     }
 }
+
+impl CacheService {
+    /// Delete every row whose `cache_key` begins with `prefix`. Used
+    /// by the live poller to invalidate all `pulse_narrative:{league}:*`
+    /// entries when a game a rostered player is in transitions to
+    /// FINAL.
+    pub async fn invalidate_by_prefix(&self, prefix: &str) -> Result<u64> {
+        let query = "DELETE FROM response_cache WHERE cache_key LIKE $1";
+        let pattern = format!("{}%", prefix);
+        let result = sqlx::query(query)
+            .bind(pattern)
+            .execute(&self.pool)
+            .await
+            .map_err(Error::Database)?;
+        Ok(result.rows_affected())
+    }
+}

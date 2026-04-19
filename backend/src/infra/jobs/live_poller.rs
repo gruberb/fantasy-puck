@@ -106,6 +106,11 @@ async fn poll_one_game(
 ) -> anyhow::Result<()> {
     let pool = db.pool();
 
+    // Snapshot the previous state before anything else so we can
+    // detect the LIVE|CRIT -> OFF|FINAL transition and fire the
+    // Pulse-narrative cache invalidation exactly once per game end.
+    let previous_state = nhl_mirror::get_game_state(pool, game_id).await?;
+
     // Boxscore drives player stats and (as a side benefit) carries the
     // current gameState. The existing typed response is just the
     // per-player block, so we also read game_data for state/score
@@ -129,11 +134,13 @@ async fn poll_one_game(
     // `Option<GameData>` because the endpoint occasionally 404s for
     // games that have not registered in game-center yet; skip the
     // update in that case rather than clobber with defaults.
+    let mut new_state_for_invalidation: Option<String> = None;
     if let Ok(Some(data)) = nhl.get_game_data(game_id as u32).await {
         let state_str = serde_json::to_value(&data.game_state)
             .ok()
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_else(|| "LIVE".into());
+        new_state_for_invalidation = Some(state_str.clone());
         let period_number: Option<i16> = data
             .period
             .as_ref()
@@ -148,6 +155,36 @@ async fn poll_one_game(
             data.period.as_deref(),
         )
         .await?;
+    }
+
+    // Post-update: fire pulse-narrative invalidation exactly once
+    // per observed LIVE|CRIT -> OFF|FINAL transition. Done after the
+    // state write so a subsequent tick sees the new state and never
+    // re-fires the invalidation for the same game.
+    if let (Some(prev), Some(new)) = (previous_state, new_state_for_invalidation) {
+        let was_live = matches!(prev.as_str(), "LIVE" | "CRIT");
+        let is_final = matches!(new.as_str(), "OFF" | "FINAL");
+        if was_live && is_final {
+            let leagues = nhl_mirror::list_leagues_with_player_in_game(pool, game_id).await?;
+            let cache = db.cache();
+            for league_id in &leagues {
+                let prefix = format!("pulse_narrative:{}:", league_id);
+                match cache.invalidate_by_prefix(&prefix).await {
+                    Ok(n) => debug!(
+                        game_id,
+                        league_id = %league_id,
+                        removed = n,
+                        "live_poller: invalidated pulse narrative on game end"
+                    ),
+                    Err(e) => warn!(
+                        game_id,
+                        league_id = %league_id,
+                        "live_poller: narrative invalidation failed: {}",
+                        e
+                    ),
+                }
+            }
+        }
     }
 
     Ok(())

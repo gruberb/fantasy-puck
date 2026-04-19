@@ -1,3 +1,18 @@
+//! Pulse — personalised live dashboard.
+//!
+//! Post-Phase-5 the live data (my team status, series forecast, my
+//! games tonight, league board) is recomputed from the NHL mirror
+//! on every request. The expensive bit — the Claude narrative — is
+//! cached separately in `response_cache` under
+//! `pulse_narrative:{league}:{team}:{season}:{gt}:{date}`.
+//!
+//! Cache invalidation: the live poller (see
+//! `infra::jobs::live_poller::poll_one_game`) observes each game's
+//! `LIVE|CRIT -> OFF|FINAL` state transition and deletes narrative
+//! cache rows for the leagues whose rostered players were in that
+//! game. Next Pulse visit from those leagues re-generates the
+//! narrative with the final score in view.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -13,12 +28,14 @@ use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
 use crate::auth::middleware::AuthUser;
-use crate::error::Result;
 use crate::domain::models::fantasy::{FantasyTeamInGame, PlayerInGame};
-use crate::infra::nhl::constants::team_names;
+use crate::domain::models::nhl::{GameState, SeriesStatus};
 use crate::domain::prediction::series_projection::{
     classify, games_remaining, probability_to_advance, SeriesStateCode,
 };
+use crate::error::Result;
+use crate::infra::db::nhl_mirror::{self, NhlGameRow, PlayerGameStatRow};
+use crate::infra::nhl::constants::team_names;
 
 // ---------------------------------------------------------------------------
 // Public handler
@@ -40,59 +57,32 @@ pub async fn get_pulse(
         .verify_user_in_league(&league_id, &auth_user.id)
         .await?;
 
-    // Resolve the caller's fantasy team inside this league (if any).
     let my_team_id = resolve_my_team_id(&state, &league_id, &auth_user.id).await;
-
     let today = hockey_today();
-    // The Pulse response is personalised — `my_team`, `my_games_tonight`,
-    // and the Claude narrative all point at the calling team. Keying the
-    // cache by league alone would serve Team A's personal view to Team B.
-    // Fall back to `0` when the caller has no resolvable team (global
-    // visitor hitting an authenticated endpoint is itself a bug, but at
-    // least caches consistently).
-    let cache_key = format!(
-        "pulse:{}:{}:{}:{}:{}",
-        league_id,
-        my_team_id.unwrap_or(0),
-        season(),
-        game_type(),
-        today
-    );
 
-    if let Some(cached) = state
-        .db
-        .cache()
-        .get_cached_response::<PulseResponse>(&cache_key)
-        .await?
-    {
-        // Self-heal: if the cached response was built when the NHL
-        // schedule hadn't yet been published (empty games list), throw
-        // it out and regenerate. Otherwise the "no games today" copy
-        // sticks all day after the schedule lands.
-        if cached.has_games_today {
-            return Ok(json_success(cached));
-        }
-    }
+    let mut response = generate_pulse(&state, &league_id, my_team_id, &today).await?;
 
-    let response = generate_pulse(&state, &league_id, my_team_id, &today).await?;
-
-    // Only cache when the response has real content. Empty-schedule
-    // responses regenerate cheaply each visit (NhlClient caches the
-    // upstream schedule fetch anyway) rather than committing a
-    // misleading "no games today" narrative for the rest of the day.
-    if response.has_games_today {
-        let _ = state
-            .db
-            .cache()
-            .store_response(&cache_key, &today, &response)
-            .await;
+    // Narrative: cached per (league, team, day). Unlike the rest of
+    // the payload (always freshly computed from the mirror), the
+    // Claude call is expensive and its output only needs to change
+    // when a game ends — at which point `live_poller` invalidates
+    // the cache.
+    if response.my_team.is_some() {
+        response.narrative = resolve_narrative(
+            &state,
+            &league_id,
+            my_team_id.unwrap_or(0),
+            &today,
+            &response,
+        )
+        .await;
     }
 
     Ok(json_success(response))
 }
 
 // ---------------------------------------------------------------------------
-// Top-level orchestrator
+// Pulse assembly (live data — every request)
 // ---------------------------------------------------------------------------
 
 async fn generate_pulse(
@@ -101,36 +91,31 @@ async fn generate_pulse(
     my_team_id: Option<i64>,
     today: &str,
 ) -> Result<PulseResponse> {
-    // Fetch the foundational data once, then compose the response.
+    let pool = state.db.pool();
+
     let teams_with_players = state.db.get_all_teams_with_players(league_id).await?;
-    let carousel = state
-        .nhl_client
-        .get_playoff_carousel(season().to_string())
+    let carousel = nhl_mirror::get_playoff_carousel(pool, season() as i32)
         .await
-        .ok()
-        .flatten();
-    let schedule = state
-        .nhl_client
-        .get_schedule_by_date(today)
-        .await
-        .ok();
-    let games_today = schedule
-        .as_ref()
-        .map(|s| s.games_for_date(today))
-        .unwrap_or_default();
+        .unwrap_or(None);
+    let games_today: Vec<NhlGameRow> = nhl_mirror::list_games_for_date(pool, today).await?;
 
     let series_forecast = build_series_forecast(&teams_with_players, carousel.as_ref());
-    let league_board = build_league_board(state, league_id, &teams_with_players, today, my_team_id, &games_today).await?;
+    let league_board =
+        build_league_board(state, league_id, &teams_with_players, my_team_id, &games_today)
+            .await?;
     let my_team = my_team_id.and_then(|id| compose_my_team(&league_board, &teams_with_players, id));
     let my_games_tonight = if let Some(id) = my_team_id {
-        compute_my_games_tonight(state, &teams_with_players, id, &games_today).await
+        compute_my_games_tonight(state, &teams_with_players, id, &games_today).await?
     } else {
         Vec::new()
     };
-    let has_games_today = !games_today.is_empty();
-    let has_live_games = games_today.iter().any(|g| g.game_state.is_live());
 
-    let mut response = PulseResponse {
+    let has_games_today = !games_today.is_empty();
+    let has_live_games = games_today
+        .iter()
+        .any(|g| matches!(g.game_state.as_str(), "LIVE" | "CRIT"));
+
+    Ok(PulseResponse {
         generated_at: Utc::now().to_rfc3339(),
         my_team,
         series_forecast,
@@ -139,39 +124,47 @@ async fn generate_pulse(
         has_games_today,
         has_live_games,
         narrative: None,
-    };
-
-    // Personal narrative — only meaningful when we've resolved a "my team".
-    // Claude Sonnet 4.6 with a longer budget and a strict anti-AI-voice prompt.
-    if response.my_team.is_some() {
-        response.narrative = generate_pulse_narrative(&response).await;
-    }
-
-    Ok(response)
+    })
 }
 
-/// Call Claude Sonnet 4.6 for a personal Pulse blurb. Returns `None` on
-/// failure — the frontend just hides the block and the rest of the page is
-/// unaffected. We hand Claude the actual numbers (rank, totals, rival,
-/// today's active roster) and demand a columnist's voice: specific,
-/// opinionated, no generic hype.
+// ---------------------------------------------------------------------------
+// Narrative cache (tiered)
+// ---------------------------------------------------------------------------
+
+async fn resolve_narrative(
+    state: &Arc<AppState>,
+    league_id: &str,
+    my_team_id: i64,
+    today: &str,
+    response: &PulseResponse,
+) -> Option<String> {
+    let key = format!(
+        "pulse_narrative:{}:{}:{}:{}:{}",
+        league_id,
+        my_team_id,
+        season(),
+        game_type(),
+        today
+    );
+    if let Ok(Some(cached)) = state.db.cache().get_cached_response::<String>(&key).await {
+        return Some(cached);
+    }
+    let generated = generate_pulse_narrative(response).await?;
+    let _ = state
+        .db
+        .cache()
+        .store_response(&key, today, &generated)
+        .await;
+    Some(generated)
+}
+
 async fn generate_pulse_narrative(response: &PulseResponse) -> Option<String> {
     let api_key = match std::env::var("ANTHROPIC_API_KEY") {
         Ok(v) => v,
         Err(_) => return None,
     };
 
-    // Serialise the Pulse payload so Claude can reference anything it wants,
-    // but hand-feed the headline numbers in natural language so short outputs
-    // don't miss them.
-    let payload = match serde_json::to_string(response) {
-        Ok(v) => v,
-        Err(_) => return None,
-    };
-    // Detect the pre-drop / zero-state. If every team's playoff total
-    // is 0 AND nobody's "Yesterday" bucket is non-zero, no games have
-    // fired in this round yet — any "X points" phrasing in the output
-    // would be wrong.
+    let payload = serde_json::to_string(response).ok()?;
     let no_playoff_scoring_yet = response
         .league_board
         .iter()
@@ -248,7 +241,6 @@ The frame: speak TO the caller (second person — "you", "your team"). This is t
             return None;
         }
     };
-
     let http_response = match client
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", &api_key)
@@ -279,7 +271,6 @@ The frame: speak TO the caller (second person — "you", "your team"). This is t
             return None;
         }
     };
-
     body.get("content")
         .and_then(|c| c.as_array())
         .and_then(|arr| arr.first())
@@ -290,10 +281,9 @@ The frame: speak TO the caller (second person — "you", "your team"). This is t
 }
 
 // ---------------------------------------------------------------------------
-// Series Forecast (flagship)
+// Series Forecast (pure compute against carousel + rosters)
 // ---------------------------------------------------------------------------
 
-/// Map team_abbrev -> (wins, opp_wins, opponent_abbrev, round, is_active_round).
 struct TeamSeriesState {
     wins: u32,
     opp_wins: u32,
@@ -333,20 +323,14 @@ fn build_series_forecast(
     teams: &[FantasyTeamInGame],
     carousel: Option<&crate::domain::models::nhl::PlayoffCarousel>,
 ) -> Vec<FantasyTeamForecast> {
-    let team_states = carousel
-        .map(build_team_states)
-        .unwrap_or_default();
+    let team_states = carousel.map(build_team_states).unwrap_or_default();
 
     teams
         .iter()
         .map(|team| {
             let mut cells: Vec<PlayerForecastCell> = Vec::new();
-            let mut eliminated = 0usize;
-            let mut facing_elim = 0usize;
-            let mut trailing = 0usize;
-            let mut tied = 0usize;
-            let mut leading = 0usize;
-            let mut advanced = 0usize;
+            let (mut eliminated, mut facing_elim, mut trailing, mut tied, mut leading, mut advanced) =
+                (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
 
             for p in &team.players {
                 let (wins, opp_wins, opp_abbrev) = team_states
@@ -355,9 +339,6 @@ fn build_series_forecast(
                     .unwrap_or((0, 0, None));
 
                 let state = classify(wins, opp_wins);
-                // Tied is kept separate from Trailing — a 0-0 series isn't
-                // "losing", so collapsing it into `players_trailing` read as
-                // a bug on the UI.
                 match state {
                     SeriesStateCode::Eliminated => eliminated += 1,
                     SeriesStateCode::FacingElim => facing_elim += 1,
@@ -408,71 +389,45 @@ fn build_series_forecast(
 }
 
 // ---------------------------------------------------------------------------
-// League Live Board (with sparklines + today deltas)
+// League Live Board (mirror-backed)
 // ---------------------------------------------------------------------------
 
 async fn build_league_board(
     state: &Arc<AppState>,
     league_id: &str,
     teams: &[FantasyTeamInGame],
-    today: &str,
     my_team_id: Option<i64>,
-    games_today: &[crate::domain::models::nhl::TodayGame],
+    games_today: &[NhlGameRow],
 ) -> Result<Vec<LeagueBoardEntry>> {
-    // Playoff totals per team via existing skater-stats pipeline.
-    let stats = state
-        .nhl_client
-        .get_skater_stats(&season(), game_type())
-        .await
-        .ok();
+    let pool = state.db.pool();
 
-    // Build player_id -> points (playoff total) map.
-    let mut player_points: HashMap<i64, i32> = HashMap::new();
-    if let Some(s) = stats {
-        for group in [&s.points, &s.goals, &s.assists] {
-            for p in group {
-                let value = p.value as i32;
-                let current = player_points.entry(p.id as i64).or_insert(0);
-                // Use the max across categories — the points category gives the
-                // correct total but may be missing for some; fall back to any.
-                if value > *current {
-                    *current = value;
-                }
-            }
-        }
-        // Overwrite with canonical points category when available.
-        for p in &s.points {
-            player_points.insert(p.id as i64, p.value as i32);
-        }
-    }
+    // Season totals per fantasy team — sum over nhl_player_game_stats
+    // so depth scorers outside the leaderboard are counted.
+    let totals = nhl_mirror::list_league_team_season_totals(
+        pool,
+        league_id,
+        season() as i32,
+        game_type() as i16,
+    )
+    .await?;
+    let totals_by_team: HashMap<i64, i32> =
+        totals.into_iter().map(|r| (r.team_id, r.points as i32)).collect();
 
-    // Sparklines: last 5 days of daily_rankings per team, clipped at
-    // playoff_start so pre-playoff regular-season remnants never show
-    // up as "Yesterday's" points on day 1 of a new round.
     let sparklines = state
         .db
         .get_team_sparklines(league_id, 5, crate::api::playoff_start())
         .await
         .unwrap_or_default();
 
-    // Today's points — use yesterday's daily_ranking if scheduler already
-    // processed; otherwise 0. Since the scheduler runs on yesterday's games,
-    // today's points only become visible after 9am UTC the next day. For live
-    // games we defer to the boxscore-driven Pulse section which is independent.
     let nhl_teams_today: HashSet<String> = games_today
         .iter()
-        .flat_map(|g| vec![g.home_team.abbrev.clone(), g.away_team.abbrev.clone()])
+        .flat_map(|g| [g.home_team.clone(), g.away_team.clone()])
         .collect();
 
-    // Compute total_points + active-today count per team.
     let mut entries: Vec<LeagueBoardEntry> = teams
         .iter()
         .map(|team| {
-            let total_points: i32 = team
-                .players
-                .iter()
-                .map(|p| *player_points.get(&p.nhl_id).unwrap_or(&0))
-                .sum();
+            let total_points = totals_by_team.get(&team.team_id).copied().unwrap_or(0);
             let active_today = team
                 .players
                 .iter()
@@ -493,7 +448,6 @@ async fn build_league_board(
         })
         .collect();
 
-    // Rank descending by total_points, then by team_name for stability.
     entries.sort_by(|a, b| {
         b.total_points
             .cmp(&a.total_points)
@@ -503,16 +457,11 @@ async fn build_league_board(
         e.rank = i + 1;
     }
 
-    // Points-today from yesterday's daily_rankings. If today's games haven't
-    // been processed yet, the most recent entry in the sparkline reflects
-    // yesterday's total — treat that as "latest day" delta.
-    // (For in-progress games the real points will be picked up by the
-    // boxscore-driven My Games Tonight section, not the board.)
+    // "Points from last completed scoring day" — last sparkline entry.
     for entry in &mut entries {
         if let Some(&last) = entry.sparkline.last() {
             entry.points_today = last;
         }
-        let _ = today; // unused today marker; future: live aggregation
     }
 
     Ok(entries)
@@ -541,52 +490,52 @@ fn compose_my_team(
 }
 
 // ---------------------------------------------------------------------------
-// My Games Tonight
+// My Games Tonight (mirror-backed)
 // ---------------------------------------------------------------------------
 
 async fn compute_my_games_tonight(
     state: &Arc<AppState>,
     teams: &[FantasyTeamInGame],
     my_team_id: i64,
-    games_today: &[crate::domain::models::nhl::TodayGame],
-) -> Vec<MyGameTonight> {
+    games_today: &[NhlGameRow],
+) -> Result<Vec<MyGameTonight>> {
     let my_team = match teams.iter().find(|t| t.team_id == my_team_id) {
         Some(t) => t,
-        None => return Vec::new(),
+        None => return Ok(Vec::new()),
     };
 
-    // Group your players by the game they're in.
+    // Pre-load player game stats for every game in today's slate in
+    // one SQL round-trip.
+    let game_ids: Vec<i64> = games_today.iter().map(|g| g.game_id).collect();
+    let all_player_rows =
+        nhl_mirror::list_player_game_stats_for_games(state.db.pool(), &game_ids).await?;
+    let mut by_game: HashMap<i64, Vec<PlayerGameStatRow>> = HashMap::new();
+    for row in all_player_rows {
+        by_game.entry(row.game_id).or_default().push(row);
+    }
+
     let mut out = Vec::new();
     for game in games_today {
-        let home = &game.home_team.abbrev;
-        let away = &game.away_team.abbrev;
         let my_players: Vec<&PlayerInGame> = my_team
             .players
             .iter()
-            .filter(|p| &p.nhl_team == home || &p.nhl_team == away)
+            .filter(|p| p.nhl_team == game.home_team || p.nhl_team == game.away_team)
             .collect();
         if my_players.is_empty() {
             continue;
         }
 
-        // Live stats via boxscore when live/completed.
-        let boxscore = if game.game_state.is_live() || game.game_state.is_completed() {
-            state.nhl_client.get_game_boxscore(game.id).await.ok()
-        } else {
-            None
-        };
+        let stats_by_id: HashMap<i64, &PlayerGameStatRow> = by_game
+            .get(&game.game_id)
+            .map(|rows| rows.iter().map(|r| (r.player_id, r)).collect())
+            .unwrap_or_default();
 
         let mut players_signal = Vec::new();
         for p in &my_players {
-            let (goals, assists) = match &boxscore {
-                Some(bs) => crate::domain::services::nhl_stats::find_player_stats_by_name(
-                    bs,
-                    &p.nhl_team,
-                    &p.player_name,
-                    Some(p.nhl_id),
-                ),
-                None => (0, 0),
-            };
+            let (goals, assists) = stats_by_id
+                .get(&p.nhl_id)
+                .map(|r| (r.goals, r.assists))
+                .unwrap_or((0, 0));
             players_signal.push(MyPlayerInGame {
                 nhl_id: p.nhl_id,
                 name: p.player_name.clone(),
@@ -602,7 +551,11 @@ async fn compute_my_games_tonight(
             });
         }
 
-        let (series_context, is_elimination) = match &game.series_status {
+        let series = game
+            .series_status
+            .as_ref()
+            .and_then(|v| serde_json::from_value::<SeriesStatus>(v.clone()).ok());
+        let (series_context, is_elimination) = match series {
             Some(ss) => {
                 let label = format!(
                     "{} - {} leads {}-{}",
@@ -621,37 +574,28 @@ async fn compute_my_games_tonight(
             None => (None, false),
         };
 
-        let (home_score, away_score) = match &game.game_score {
-            Some(s) => (Some(s.home), Some(s.away)),
-            None => (None, None),
-        };
-        let period = game.period_descriptor.as_ref().and_then(|p| {
-            let n = p.number.unwrap_or(0);
-            p.period_type
-                .as_ref()
-                .map(|pt| format!("{} {}", n, pt))
-        });
+        let period = format_period(game.period_number, game.period_type.as_deref());
 
         out.push(MyGameTonight {
-            game_id: game.id,
-            home_team: home.clone(),
-            home_team_name: team_names::get_team_name(home).to_string(),
-            home_team_logo: state.nhl_client.get_team_logo_url(home),
-            away_team: away.clone(),
-            away_team_name: team_names::get_team_name(away).to_string(),
-            away_team_logo: state.nhl_client.get_team_logo_url(away),
-            start_time_utc: game.start_time_utc.clone(),
-            venue: game.venue.default.clone(),
-            game_state: format!("{:?}", game.game_state),
-            home_score,
-            away_score,
+            game_id: game.game_id as u32,
+            home_team: game.home_team.clone(),
+            home_team_name: team_names::get_team_name(&game.home_team).to_string(),
+            home_team_logo: state.nhl_client.get_team_logo_url(&game.home_team),
+            away_team: game.away_team.clone(),
+            away_team_name: team_names::get_team_name(&game.away_team).to_string(),
+            away_team_logo: state.nhl_client.get_team_logo_url(&game.away_team),
+            start_time_utc: game.start_time_utc.to_rfc3339(),
+            venue: game.venue.clone().unwrap_or_default(),
+            game_state: format_game_state(&game.game_state),
+            home_score: game.home_score,
+            away_score: game.away_score,
             period,
             series_context,
             is_elimination,
             my_players: players_signal,
         });
     }
-    out
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -671,19 +615,31 @@ async fn resolve_my_team_id(
     league_id: &str,
     user_id: &str,
 ) -> Option<i64> {
-    // Look up via league members, matching on user_id.
     match state.db.get_league_members(league_id).await {
-        Ok(members) => {
-            for m in members {
-                if m.user_id == user_id {
-                    return Some(m.fantasy_team_id);
-                }
-            }
-            None
-        }
+        Ok(members) => members
+            .into_iter()
+            .find(|m| m.user_id == user_id)
+            .map(|m| m.fantasy_team_id),
         Err(e) => {
             warn!("Failed to look up league members for my_team_id: {}", e);
             None
         }
     }
+}
+
+fn format_period(number: Option<i16>, period_type: Option<&str>) -> Option<String> {
+    let n = number?;
+    let label = period_type.unwrap_or("");
+    Some(format!("{} {}", n, label))
+}
+
+/// Map the string stored in `nhl_games.game_state` to the debug-form
+/// variant name the existing Pulse DTO uses (`Live`, `Final`, `Off`,
+/// `Fut`, `Preview`, `Crit`, `Unknown`). We round-trip via the typed
+/// `GameState` enum so the string shape matches what the handler
+/// produced before.
+fn format_game_state(raw: &str) -> String {
+    use std::str::FromStr;
+    let state: GameState = GameState::from_str(raw).unwrap_or_default();
+    format!("{:?}", state)
 }

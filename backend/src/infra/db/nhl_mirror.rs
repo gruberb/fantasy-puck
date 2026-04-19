@@ -1130,3 +1130,46 @@ pub async fn list_league_team_season_totals(
     .map_err(Error::Database)?;
     Ok(rows)
 }
+
+/// Deserialise the most recent playoff bracket JSONB for `season`
+/// into the typed `PlayoffCarousel` shape. Returns `None` if the
+/// bracket hasn't been captured yet.
+pub async fn get_playoff_carousel(
+    pool: &PgPool,
+    season: i32,
+) -> Result<Option<crate::domain::models::nhl::PlayoffCarousel>> {
+    let raw: Option<Value> = sqlx::query_scalar(
+        "SELECT carousel FROM nhl_playoff_bracket WHERE season = $1",
+    )
+    .bind(season)
+    .fetch_optional(pool)
+    .await
+    .map_err(Error::Database)?;
+    let Some(v) = raw else { return Ok(None) };
+    let c: crate::domain::models::nhl::PlayoffCarousel =
+        serde_json::from_value(v).map_err(|e| Error::Internal(format!("carousel decode: {e}")))?;
+    Ok(Some(c))
+}
+
+/// League IDs whose rostered players appear in `game_id`. Used by
+/// the live poller to target narrative-cache invalidation at just
+/// the leagues whose Pulse would change when this game ends.
+pub async fn list_leagues_with_player_in_game(
+    pool: &PgPool,
+    game_id: i64,
+) -> Result<Vec<String>> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        r#"
+        SELECT DISTINCT ft.league_id::text
+          FROM nhl_player_game_stats pgs
+          JOIN fantasy_players fp ON fp.nhl_id = pgs.player_id
+          JOIN fantasy_teams  ft ON ft.id = fp.team_id
+         WHERE pgs.game_id = $1
+        "#,
+    )
+    .bind(game_id)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
