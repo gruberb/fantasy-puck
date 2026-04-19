@@ -121,6 +121,14 @@ async fn generate_pulse(
     // skips any cup-odds phrasing in that case.
     let nhl_team_cup_odds = load_cached_cup_odds(state, league_id, today).await;
 
+    let games_today_matchups: Vec<crate::api::dtos::pulse::GameMatchup> = games_today
+        .iter()
+        .map(|g| crate::api::dtos::pulse::GameMatchup {
+            home_team: g.home_team.clone(),
+            away_team: g.away_team.clone(),
+        })
+        .collect();
+
     Ok(PulseResponse {
         generated_at: Utc::now().to_rfc3339(),
         my_team,
@@ -129,6 +137,7 @@ async fn generate_pulse(
         league_board,
         has_games_today,
         has_live_games,
+        games_today: games_today_matchups,
         nhl_team_cup_odds,
         narrative: None,
     })

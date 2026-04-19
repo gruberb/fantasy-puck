@@ -20,6 +20,12 @@ pub struct PulseResponse {
     pub league_board: Vec<LeagueBoardEntry>,
     pub has_games_today: bool,
     pub has_live_games: bool,
+    /// Every NHL matchup on today's slate (home / away abbrev pairs).
+    /// Used by the Live Rankings section on the dashboard to render a
+    /// per-fantasy-team "games you have a stake in" cell. Empty on
+    /// off-days.
+    #[serde(default)]
+    pub games_today: Vec<GameMatchup>,
     /// Cup-win probability per NHL team from the last Monte Carlo run
     /// (values in 0.0 – 1.0). Keyed by 3-letter abbreviation. Populated
     /// opportunistically from the cached `/api/race-odds` payload; empty
@@ -32,6 +38,17 @@ pub struct PulseResponse {
     /// fails or no `my_team` is resolved (nothing personal to say).
     #[serde(default)]
     pub narrative: Option<String>,
+}
+
+/// A single matchup on today's slate, surfaced at the top level of
+/// `PulseResponse` so the dashboard's Live Rankings section can
+/// cross-reference with each fantasy team's rostered NHL teams
+/// without a second fetch.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GameMatchup {
+    pub home_team: String,
+    pub away_team: String,
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,35 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.21.3 — 2026-04-19 (backend) / v1.17.2 (frontend)
+
+### Changed — Live Rankings gets its own layout
+
+First try used the shared `RankingTable` to match Overall Rankings
+visually; that cost the red header and pulse dot the dashboard needs
+to telegraph "this only exists while games are live." This pass
+drops `RankingTable` and lays out the table directly:
+
+- Red header (`#EF4444`) + white pulsing dot, matching the LIVE pill
+  on the Games page. "→ Live Games" button stays on the right.
+- Sort reversed: highest-points-today at the top (was upside-down,
+  rank 14 at the top).
+- Columns: Rank · Team · **Today** · Players · **Games**. "Total"
+  dropped (already on Overall Rankings below), "Games" added.
+- Games cell lists the NHL matchups this fantasy team has a stake
+  in (either side rostered). The rostered side(s) render bold.
+  E.g. "**CAR**–OTT, MIN–**DAL**" when the team rosters a Hurricane
+  and a Star. Teams with no stake in any game tonight show "—".
+
+Backend: `PulseResponse` gains `gamesToday: Vec<GameMatchup>` — the
+flat list of today's home/away abbrev pairs. Populated from the
+`games_today` vec already computed in `generate_pulse`. FE derives
+per-team rosters from `seriesForecast.cells` and intersects.
+
+Also dropped the short-lived `useLiveRankingsColumns` helper — the
+section no longer uses `RankingTable`, and the column shapes are
+inlined in `LiveRankingsTable`.
+
 ## v1.17.1 — 2026-04-19 (frontend)
 
 ### Changed — Live Rankings renders through `RankingTable`

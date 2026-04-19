@@ -89,6 +89,11 @@ export interface LeagueBoardEntry {
   isMyTeam: boolean;
 }
 
+export interface GameMatchup {
+  homeTeam: string;
+  awayTeam: string;
+}
+
 export interface PulseResponse {
   generatedAt: string;
   myTeam: MyTeamStatus | null;
@@ -97,6 +102,10 @@ export interface PulseResponse {
   leagueBoard: LeagueBoardEntry[];
   hasGamesToday: boolean;
   hasLiveGames: boolean;
+  /** Every NHL matchup on today's slate (home / away abbrevs). Used
+   *  by the Live Rankings section to cross-reference each fantasy
+   *  team's rostered NHL teams. Empty on off-days. */
+  gamesToday: GameMatchup[];
   /** Personal narrative from Claude Sonnet 4.6, or null if unavailable. */
   narrative: string | null;
 }
