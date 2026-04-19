@@ -4,6 +4,12 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.19.3 — 2026-04-19 (backend)
+
+### Fixed
+
+- Skaters page (playoff branch) now shows real points/goals/assists per skater. The handler used to hard-code `points = 0` for every entry — it was treating the playoff endpoint as an eligible-roster lookup rather than a leaderboard, leftover from before there was anywhere to aggregate per-player playoff totals from. New `nhl_mirror::aggregate_skater_totals` sums each rostered player's rows in `nhl_player_game_stats` for the current `(season, game_type)`; the handler layers that onto the cached roster pool and sorts by points descending. Players with no games yet still show 0, which is correct.
+
 ## v1.19.2 — 2026-04-19 (backend)
 
 ### Fixed

@@ -1347,3 +1347,42 @@ pub async fn sum_player_points(
     .map_err(Error::Database)?;
     Ok(rows.into_iter().map(|(id, p)| (id, p as i32)).collect())
 }
+
+/// Per-player goals/assists/points aggregate over the playoff (or
+/// regular-season) `nhl_player_game_stats` rows. Returns a map
+/// keyed by `player_id`; missing players (no boxscore appearances
+/// yet) are simply absent — callers default to `(0, 0, 0)`.
+pub async fn aggregate_skater_totals(
+    pool: &PgPool,
+    player_ids: &[i64],
+    season: i32,
+    game_type: i16,
+) -> Result<std::collections::HashMap<i64, (i32, i32, i32)>> {
+    if player_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
+        r#"
+        SELECT pgs.player_id,
+               COALESCE(SUM(pgs.goals), 0)::bigint   AS goals,
+               COALESCE(SUM(pgs.assists), 0)::bigint AS assists,
+               COALESCE(SUM(pgs.points), 0)::bigint  AS points
+          FROM nhl_player_game_stats pgs
+          JOIN nhl_games g ON g.game_id = pgs.game_id
+         WHERE pgs.player_id = ANY($1)
+           AND g.season      = $2
+           AND g.game_type   = $3
+         GROUP BY pgs.player_id
+        "#,
+    )
+    .bind(player_ids)
+    .bind(season)
+    .bind(game_type)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, g, a, p)| (id, (g as i32, a as i32, p as i32)))
+        .collect())
+}
