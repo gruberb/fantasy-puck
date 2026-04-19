@@ -4,6 +4,12 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.20.1 — 2026-04-19 (backend)
+
+### Fixed
+
+- Pulse 5-DAY sparkline was still rendering as one thick block after v1.20.0 when `min_date = playoff_start` clamped the window to ≤ 2 days. `get_team_sparklines_with_live` now keeps `min_date` as an SQL-side clamp only (avoiding pre-playoff scans of `daily_rankings`) but always returns a vector of exactly `days` entries — padded with zeros on the older-date edge. A team with a single scoring day now renders `[0, 0, 0, P, 0]` → five distinct bars regardless of when playoffs started.
+
 ## v1.20.0 — 2026-04-19 (backend) / v1.13.0 (frontend)
 
 ### Changed — Insights is now mirror-only

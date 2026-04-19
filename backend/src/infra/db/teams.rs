@@ -436,29 +436,29 @@ impl<'a> TeamDbService<'a> {
         days: i32,
         min_date: &str,
     ) -> Result<HashMap<i64, Vec<i32>>> {
-        // Window covers the last `days` calendar days ending today,
-        // clamped forward by `min_date` so the caller can refuse dates
-        // before playoff_start. Every team that has *any* row in the
-        // window is returned with a fixed-length vector: one slot per
-        // day, zero-filled where there was no scoring. Without the
-        // padding the frontend's Sparkbars renders a single full-width
-        // bar when a team has exactly one scoring day, because the
-        // component normalises `h = (v / max) × height` and with one
-        // point max == v and the one bar fills the whole box.
+        // Visible window is always the last `days` calendar days
+        // ending today — the frontend's 5-DAY column needs a stable
+        // number of bars regardless of when playoffs started, because
+        // with fewer data points `Sparkbars` renders each bar as
+        // `width / count` and a single-point series fills the whole
+        // box. `min_date` still clamps the SQL read (we don't want to
+        // scan pre-playoff daily_rankings) but the returned vector is
+        // always zero-padded to `days` entries at the older edge.
         let today = chrono::Utc::now().date_naive();
-        let window_start_candidate = today - chrono::Duration::days((days - 1).max(0) as i64);
+        let window_start = today - chrono::Duration::days((days - 1).max(0) as i64);
         let min_date_parsed = chrono::NaiveDate::parse_from_str(min_date, "%Y-%m-%d").ok();
-        let since = match min_date_parsed {
-            Some(d) if d > window_start_candidate => d,
-            _ => window_start_candidate,
+        let sql_since = match min_date_parsed {
+            Some(d) if d > window_start => d,
+            _ => window_start,
         };
-        let since_str = since.format("%Y-%m-%d").to_string();
+        let since_str = sql_since.format("%Y-%m-%d").to_string();
 
-        // Pre-build the expected date sequence (inclusive on both ends)
-        // so per-team padding has stable ordering — the callers rely on
-        // `Vec::last()` as the "latest" entry.
+        // Expected-date sequence covers the full visible window, even
+        // where the SQL side clamps it shorter — padding fills the
+        // older slots with zeros so teams with one scoring day render
+        // as five distinct bars (`[0, 0, 0, P, 0]`) instead of one.
         let mut expected_dates: Vec<String> = Vec::new();
-        let mut cur = since;
+        let mut cur = window_start;
         while cur <= today {
             expected_dates.push(cur.format("%Y-%m-%d").to_string());
             cur += chrono::Duration::days(1);
