@@ -4,6 +4,22 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.20.5 - 2026-04-19 (backend)
+
+### Changed - Documentation rewrite
+
+The `/docs` folder has been rewritten from scratch. Eleven files covering backend architecture, database schema, HTTP API, NHL integration, prediction engine, business logic, background jobs, draft system, frontend architecture, and frontend data flow. Indexed by `docs/README.md` with three reader paths (new backend contributor, new frontend contributor, operator). Every claim cites a source file and line number.
+
+Old docs removed: `PREDICTION_MODEL.md`, `PREDICTION_SERVICE.md`, `TECHNICAL-CACHING.md` at the repo root, and nine overlapping files under `docs/` (api-reference, architecture, caching, CALIBRATION, data-flow, DATA-PIPELINE-REDESIGN, operations, PREDICTION_MODEL, PREDICTION_SERVICE, TECHNICAL-CACHING).
+
+### Changed - CLAUDE.md and AGENTS.md
+
+Added three sections to both files:
+
+- **Documentation** - points at `/docs` and requires same-commit updates when documented behaviour changes.
+- **Comments** (bullet under Code style) - comments are written in the voice of a Staff Software Engineer addressing teammates and future maintainers, not in the voice of an LLM. Explain *why*, not *what*; no task references, no hedging.
+- **Release workflow** - describes the commit / version / CHANGELOG / push / tag sequence, with explicit instruction to ask the user before running it after a substantial change rather than running it unprompted.
+
 ## v1.20.4 — 2026-04-19 (backend)
 
 ### Fixed
