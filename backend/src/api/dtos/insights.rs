@@ -50,6 +50,7 @@ pub struct TeamSeriesProjection {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RosteredPlayerTag {
+    pub fantasy_team_id: i64,
     pub fantasy_team_name: String,
     pub count: usize,
 }
@@ -80,6 +81,11 @@ pub struct HotPlayerSignal {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerLeader {
+    /// NHL player id — optional because the pre-game landing matchup
+    /// block occasionally omits it. When present the frontend can link
+    /// the leader to `nhl.com/player/{id}`.
+    #[serde(default)]
+    pub player_id: Option<i64>,
     pub name: String,
     pub position: String,
     pub value: i32,

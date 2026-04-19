@@ -45,11 +45,16 @@ export interface TeamSeriesProjection {
 }
 
 export interface RosteredPlayerTag {
+  fantasyTeamId: number;
   fantasyTeamName: string;
   count: number;
 }
 
 export interface PlayerLeader {
+  /** NHL player id — optional because the pre-game landing response
+   *  occasionally omits it. When present, renderers link the leader's
+   *  name to `nhl.com/player/{id}`. */
+  playerId?: number;
   name: string;
   position: string;
   value: number;

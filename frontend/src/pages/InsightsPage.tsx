@@ -8,13 +8,17 @@ import { FantasyChampionBoard } from "@/features/race-odds/components/FantasyCha
 import { useRaceOdds } from "@/features/race-odds/hooks/use-race-odds";
 import { PlayoffBracketTree } from "@/features/insights/components/PlayoffBracketTree";
 import { StanleyCupOdds } from "@/features/insights/components/StanleyCupOdds";
+import { Link } from "react-router-dom";
+import { useLeague } from "@/contexts/LeagueContext";
 import {
   getNHLTeamShortName,
   getNHLTeamLogoUrl,
+  getNHLTeamUrlSlug,
   nhlPlayerProfileUrl,
 } from "@/utils/nhlTeams";
 import type {
   HotPlayerSignal,
+  PlayerLeader,
   TodaysGameSignal,
 } from "@/features/insights";
 
@@ -207,11 +211,19 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
       <div className={`px-4 py-3 ${game.isElimination ? "bg-red-50" : "bg-gray-50"}`}>
         {/* Away team */}
         <div className="flex items-center gap-3">
-          <img src={getNHLTeamLogoUrl(game.awayTeam)} alt={game.awayTeam} className="w-8 h-8 flex-shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="font-extrabold text-sm uppercase tracking-wider leading-tight">{getNHLTeamShortName(game.awayTeam)}</p>
-            {game.awayRecord && <p className="text-[11px] text-gray-400">{game.awayRecord}</p>}
-          </div>
+          <a
+            href={`https://www.nhl.com/${getNHLTeamUrlSlug(game.awayTeam)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 flex-1 min-w-0 hover:opacity-80"
+            aria-label={`${getNHLTeamShortName(game.awayTeam)} on NHL.com`}
+          >
+            <img src={getNHLTeamLogoUrl(game.awayTeam)} alt={game.awayTeam} className="w-8 h-8 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="font-extrabold text-sm uppercase tracking-wider leading-tight">{getNHLTeamShortName(game.awayTeam)}</p>
+              {game.awayRecord && <p className="text-[11px] text-gray-400">{game.awayRecord}</p>}
+            </div>
+          </a>
           <div className="flex items-center gap-2 flex-shrink-0">
             {game.awayStreak && (
               <span className={`text-[10px] font-bold px-1.5 py-0.5 leading-none ${game.awayStreak.startsWith("W") ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
@@ -231,11 +243,19 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
 
         {/* Home team */}
         <div className="flex items-center gap-3">
-          <img src={getNHLTeamLogoUrl(game.homeTeam)} alt={game.homeTeam} className="w-8 h-8 flex-shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="font-extrabold text-sm uppercase tracking-wider leading-tight">{getNHLTeamShortName(game.homeTeam)}</p>
-            {game.homeRecord && <p className="text-[11px] text-gray-400">{game.homeRecord}</p>}
-          </div>
+          <a
+            href={`https://www.nhl.com/${getNHLTeamUrlSlug(game.homeTeam)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 flex-1 min-w-0 hover:opacity-80"
+            aria-label={`${getNHLTeamShortName(game.homeTeam)} on NHL.com`}
+          >
+            <img src={getNHLTeamLogoUrl(game.homeTeam)} alt={game.homeTeam} className="w-8 h-8 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="font-extrabold text-sm uppercase tracking-wider leading-tight">{getNHLTeamShortName(game.homeTeam)}</p>
+              {game.homeRecord && <p className="text-[11px] text-gray-400">{game.homeRecord}</p>}
+            </div>
+          </a>
           <div className="flex items-center gap-2 flex-shrink-0">
             {game.homeStreak && (
               <span className={`text-[10px] font-bold px-1.5 py-0.5 leading-none ${game.homeStreak.startsWith("W") ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
@@ -280,19 +300,13 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
             return (
               <div key={label} className="mb-4 last:mb-0">
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                    <img src={away.headshot} alt="" className="w-7 h-7 rounded-full bg-gray-100 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                    <span className="text-xs font-medium truncate">{away.name}</span>
-                  </div>
+                  <LeaderCell leader={away} align="left" />
                   <div className="flex items-baseline gap-1.5 flex-shrink-0">
                     <span className="font-bold text-base tabular-nums text-right w-5">{away.value}</span>
                     <span className="text-[10px] text-gray-400 uppercase w-12 text-center">{label}</span>
                     <span className="font-bold text-base tabular-nums w-5">{home.value}</span>
                   </div>
-                  <div className="flex items-center gap-1.5 flex-1 min-w-0 justify-end">
-                    <span className="text-xs font-medium truncate text-right">{home.name}</span>
-                    <img src={home.headshot} alt="" className="w-7 h-7 rounded-full bg-gray-100 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                  </div>
+                  <LeaderCell leader={home} align="right" />
                 </div>
                 <div className="flex h-1 mt-1.5 gap-px">
                   <div className="bg-[#1A1A1A]" style={{ width: `${awayPct}%` }} />
@@ -335,12 +349,17 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
  * game, sorted by player count desc (backend already sorts). Replaces the
  * earlier yellow-chip cluster, which became unreadable in leagues where
  * ten-plus teams own players across the matchup.
+ *
+ * Each row links to the fantasy team detail page inside the active
+ * league. Outside a league context (global /insights route) the rows
+ * render as plain text since there's no team route to deep-link to.
  */
 function RosteredStakesTable({
   tags,
 }: {
-  tags: { fantasyTeamName: string; count: number }[];
+  tags: { fantasyTeamId: number; fantasyTeamName: string; count: number }[];
 }) {
+  const { activeLeagueId } = useLeague();
   const total = tags.reduce((acc, t) => acc + t.count, 0);
   const max = tags[0]?.count ?? 1;
   return (
@@ -357,14 +376,23 @@ function RosteredStakesTable({
       <ul className="grid grid-cols-2 gap-x-4 px-4 py-2">
         {tags.map((tag) => {
           const pct = Math.round((tag.count / max) * 100);
-          return (
-            <li
-              key={tag.fantasyTeamName}
-              className="flex items-center gap-2 py-0.5 text-[10px]"
-            >
-              <span className="flex-1 truncate font-medium uppercase tracking-wider text-[#1A1A1A]">
-                {tag.fantasyTeamName}
-              </span>
+          const name = (
+            <span className="flex-1 truncate font-medium uppercase tracking-wider text-[#1A1A1A]">
+              {tag.fantasyTeamName}
+            </span>
+          );
+          const row = (
+            <>
+              {activeLeagueId ? (
+                <Link
+                  to={`/league/${activeLeagueId}/teams/${tag.fantasyTeamId}`}
+                  className="flex-1 truncate font-medium uppercase tracking-wider text-[#1A1A1A] hover:underline"
+                >
+                  {tag.fantasyTeamName}
+                </Link>
+              ) : (
+                name
+              )}
               <span className="relative h-1.5 w-10 bg-[#FACC15]/25">
                 <span
                   className="absolute inset-y-0 left-0 bg-[#FACC15]"
@@ -374,11 +402,92 @@ function RosteredStakesTable({
               <span className="w-4 text-right tabular-nums font-bold text-[#1A1A1A]">
                 {tag.count}
               </span>
+            </>
+          );
+          return (
+            <li
+              key={tag.fantasyTeamId}
+              className="flex items-center gap-2 py-0.5 text-[10px]"
+            >
+              {row}
             </li>
           );
         })}
       </ul>
     </div>
+  );
+}
+
+/**
+ * One side of the "Players to Watch" matchup row. Wraps the headshot
+ * and name in an nhl.com link when the leader carries a `playerId`,
+ * falling back to plain text when the pre-game landing payload omitted
+ * it (rare but the DTO keeps the field optional).
+ */
+function LeaderCell({
+  leader,
+  align,
+}: {
+  leader: PlayerLeader;
+  align: "left" | "right";
+}) {
+  const headshot = (
+    <img
+      src={leader.headshot}
+      alt=""
+      className="w-7 h-7 rounded-full bg-gray-100 flex-shrink-0"
+      onError={(e) => {
+        (e.target as HTMLImageElement).style.display = "none";
+      }}
+    />
+  );
+  const name = (
+    <span
+      className={`text-xs font-medium truncate ${align === "right" ? "text-right" : ""}`}
+    >
+      {leader.name}
+    </span>
+  );
+  const wrapperClass = `flex items-center gap-1.5 flex-1 min-w-0 ${
+    align === "right" ? "justify-end" : ""
+  }`;
+  if (!leader.playerId) {
+    return (
+      <div className={wrapperClass}>
+        {align === "left" ? (
+          <>
+            {headshot}
+            {name}
+          </>
+        ) : (
+          <>
+            {name}
+            {headshot}
+          </>
+        )}
+      </div>
+    );
+  }
+  return (
+    <a
+      href={nhlPlayerProfileUrl(leader.playerId)}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`${wrapperClass} hover:opacity-80`}
+      aria-label={`${leader.name} on NHL.com`}
+    >
+      {align === "left" ? (
+        <>
+          {headshot}
+          {name}
+        </>
+      ) : (
+        <>
+          {name}
+          {headshot}
+        </>
+      )}
+    </a>
   );
 }
 

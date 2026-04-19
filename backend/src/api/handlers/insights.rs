@@ -178,13 +178,16 @@ async fn enrich_projections(
                 .await
             {
                 Ok(teams) => {
-                    let mut by_abbrev: HashMap<String, HashMap<String, usize>> = HashMap::new();
+                    // Key by (fantasy_team_id, fantasy_team_name) so the
+                    // id survives into the tag for frontend deep-linking.
+                    let mut by_abbrev: HashMap<String, HashMap<(i64, String), usize>> =
+                        HashMap::new();
                     for team in &teams {
                         for player in &team.players {
                             *by_abbrev
                                 .entry(player.nhl_team.clone())
                                 .or_default()
-                                .entry(team.team_name.clone())
+                                .entry((team.team_id, team.team_name.clone()))
                                 .or_insert(0) += 1;
                         }
                     }
@@ -193,12 +196,15 @@ async fn enrich_projections(
                         .map(|(abbrev, counts)| {
                             let mut tags: Vec<_> = counts
                                 .into_iter()
-                                .map(|(fantasy_team_name, count)| {
-                                    crate::api::dtos::insights::RosteredPlayerTag {
-                                        fantasy_team_name,
-                                        count,
-                                    }
-                                })
+                                .map(
+                                    |((fantasy_team_id, fantasy_team_name), count)| {
+                                        crate::api::dtos::insights::RosteredPlayerTag {
+                                            fantasy_team_id,
+                                            fantasy_team_name,
+                                            count,
+                                        }
+                                    },
+                                )
                                 .collect();
                             tags.sort_by(|a, b| b.count.cmp(&a.count));
                             (abbrev, tags)
@@ -541,32 +547,30 @@ pub async fn enrich_games_with_ownership(
         Err(_) => return,
     };
 
-    // Build team -> HashMap<fantasy_team_name, count>
-    let mut by_nhl: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    // Build nhl_abbrev → {(fantasy_team_id, name) → player_count}.
+    // Keying on the tuple keeps the id around so each tag carries a
+    // deep-linkable team_id for the frontend.
+    let mut by_nhl: HashMap<String, HashMap<(i64, String), usize>> = HashMap::new();
     for team in &ft {
         for p in &team.players {
             *by_nhl
                 .entry(p.nhl_team.clone())
                 .or_default()
-                .entry(team.team_name.clone())
+                .entry((team.team_id, team.team_name.clone()))
                 .or_insert(0) += 1;
         }
     }
 
     for g in signals.iter_mut() {
-        let mut tags = Vec::new();
+        let mut tags: Vec<crate::api::dtos::insights::RosteredPlayerTag> = Vec::new();
         for abbrev in [&g.home_team, &g.away_team] {
             if let Some(counts) = by_nhl.get(abbrev) {
-                for (fantasy_name, count) in counts {
-                    if let Some(existing) = tags
-                        .iter_mut()
-                        .find(|t: &&mut crate::api::dtos::insights::RosteredPlayerTag| {
-                            t.fantasy_team_name == *fantasy_name
-                        })
-                    {
+                for ((ft_id, fantasy_name), count) in counts {
+                    if let Some(existing) = tags.iter_mut().find(|t| t.fantasy_team_id == *ft_id) {
                         existing.count += count;
                     } else {
                         tags.push(crate::api::dtos::insights::RosteredPlayerTag {
+                            fantasy_team_id: *ft_id,
                             fantasy_team_name: fantasy_name.clone(),
                             count: *count,
                         });
@@ -647,6 +651,7 @@ fn build_landing_from_matchup(matchup: &serde_json::Value) -> LandingCached {
 fn extract_player_leader(leader: &serde_json::Value, side: &str) -> Option<PlayerLeader> {
     let p = leader.get(side)?;
     Some(PlayerLeader {
+        player_id: p.get("playerId").and_then(|v| v.as_i64()),
         name: p.get("name").and_then(|n| n.get("default")).and_then(|n| n.as_str()).unwrap_or("").to_string(),
         position: p.get("positionCode").and_then(|p| p.as_str()).unwrap_or("").to_string(),
         value: p.get("value").and_then(|v| v.as_i64()).unwrap_or(0) as i32,

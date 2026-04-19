@@ -4,6 +4,18 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.20.3 — 2026-04-19 (backend) / v1.13.3 (frontend)
+
+### Changed — Insights "What to Watch" deep-linking
+
+Every entity mentioned on the Insights game card is now a link:
+
+- **NHL team headers** (away + home) link to `nhl.com/{slug}` — existing `getNHLTeamUrlSlug` helper.
+- **Players to Watch leaders** (points / goals / assists head-to-head) link to `nhl.com/player/{id}`. `PlayerLeader` DTO adds an optional `player_id` field, populated from the NHL landing response's `playerId`. Missing IDs render as plain text — no breakage when the upstream omits the field.
+- **Fantasy teams** in the `RosteredStakesTable` link to `/league/:leagueId/teams/:teamId` inside the active league. `RosteredPlayerTag` DTO adds `fantasy_team_id` so the frontend doesn't need a name-based lookup. Outside a league context (global `/insights` route) rows render as plain text.
+
+Narrative text is still plain — auto-linking Claude's prose against the signal payload is punted to a follow-up; the risk of mismatching partial names or missing entities is non-trivial and not worth the complexity for this pass.
+
 ## v1.20.2 — 2026-04-19 (backend)
 
 ### Fixed
