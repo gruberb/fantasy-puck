@@ -4,6 +4,12 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.13.2 — 2026-04-19 (frontend)
+
+### Changed
+
+- Insights "What to Watch Today" game card: the yellow fantasy-team chip cluster under each matchup is replaced with a compact two-column mini-table (`RosteredStakesTable`). Shows team name, a scaled horizontal bar representing roster count relative to the heaviest-invested team in that game, and the raw count. Header tallies total teams and total rostered players across the matchup. In leagues where ten-plus teams own players in a single game, the chip layout wrapped into a wall of uppercase yellow; the table scans linearly and lets you compare counts at a glance.
+
 ## v1.13.1 — 2026-04-19 (frontend)
 
 ### Fixed

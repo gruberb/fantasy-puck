@@ -251,16 +251,7 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
         )}
 
         {game.rosteredPlayerTags && game.rosteredPlayerTags.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1 mt-2 justify-center">
-            {game.rosteredPlayerTags.map((tag) => (
-              <span
-                key={tag.fantasyTeamName}
-                className="text-[10px] bg-[#FACC15]/30 text-[#1A1A1A] px-1.5 py-0.5 uppercase tracking-wider font-bold"
-              >
-                {tag.fantasyTeamName}: {tag.count}
-              </span>
-            ))}
-          </div>
+          <RosteredStakesTable tags={game.rosteredPlayerTags} />
         )}
       </div>
 
@@ -335,6 +326,58 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Compact two-column table of fantasy teams with players in the current
+ * game, sorted by player count desc (backend already sorts). Replaces the
+ * earlier yellow-chip cluster, which became unreadable in leagues where
+ * ten-plus teams own players across the matchup.
+ */
+function RosteredStakesTable({
+  tags,
+}: {
+  tags: { fantasyTeamName: string; count: number }[];
+}) {
+  const total = tags.reduce((acc, t) => acc + t.count, 0);
+  const max = tags[0]?.count ?? 1;
+  return (
+    <div className="mt-3 -mx-4 border-t-2 border-[#1A1A1A] bg-[#FACC15]/10">
+      <div className="flex items-baseline justify-between px-4 py-1.5 border-b border-[#1A1A1A]/10">
+        <p className="text-[9px] font-bold uppercase tracking-widest text-[#1A1A1A]">
+          Fantasy Stakes
+        </p>
+        <p className="text-[9px] font-bold tabular-nums text-[#1A1A1A]/70">
+          {tags.length} {tags.length === 1 ? "team" : "teams"} &middot; {total}{" "}
+          {total === 1 ? "player" : "players"}
+        </p>
+      </div>
+      <ul className="grid grid-cols-2 gap-x-4 px-4 py-2">
+        {tags.map((tag) => {
+          const pct = Math.round((tag.count / max) * 100);
+          return (
+            <li
+              key={tag.fantasyTeamName}
+              className="flex items-center gap-2 py-0.5 text-[10px]"
+            >
+              <span className="flex-1 truncate font-medium uppercase tracking-wider text-[#1A1A1A]">
+                {tag.fantasyTeamName}
+              </span>
+              <span className="relative h-1.5 w-10 bg-[#FACC15]/25">
+                <span
+                  className="absolute inset-y-0 left-0 bg-[#FACC15]"
+                  style={{ width: `${pct}%` }}
+                />
+              </span>
+              <span className="w-4 text-right tabular-nums font-bold text-[#1A1A1A]">
+                {tag.count}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
