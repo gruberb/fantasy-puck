@@ -23,7 +23,7 @@
 //! not acquired the caller should skip the tick.
 
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 use crate::domain::models::nhl::{BoxscorePlayer, GameBoxscore, Player, StatsLeaders, TodayGame};
 use crate::error::{Error, Result};
@@ -40,42 +40,54 @@ const META_LOCK_KEY: i64 = 884_471_193_001;
 /// Postgres advisory-lock key for the live poller.
 const LIVE_LOCK_KEY: i64 = 884_471_193_002;
 
-/// Acquire the metadata-poller advisory lock. Returns `true` if this
-/// process is now the leader for one tick. Caller must invoke
-/// [`release_meta_lock`] before returning.
-pub async fn try_meta_lock(pool: &PgPool) -> Result<bool> {
-    try_lock(pool, META_LOCK_KEY).await
+/// Acquire the metadata-poller advisory lock. `pg_advisory_lock` is
+/// session-scoped — the same connection that acquires it must
+/// release it, otherwise Postgres emits
+/// `you don't own a lock of type ExclusiveLock` and the lock leaks
+/// until the holding session ends.
+///
+/// Callers therefore pass a dedicated `PgConnection` (acquired via
+/// `pool.acquire()`), hold it for the duration of the tick, and
+/// pass the same one to [`release_meta_lock`]. The connection is
+/// *only* used for lock management; the tick body's own SQL goes
+/// through the pool as usual.
+pub async fn try_meta_lock(conn: &mut PgConnection) -> Result<bool> {
+    try_lock(conn, META_LOCK_KEY).await
 }
 
-pub async fn release_meta_lock(pool: &PgPool) -> Result<()> {
-    release_lock(pool, META_LOCK_KEY).await
+pub async fn release_meta_lock(conn: &mut PgConnection) -> Result<()> {
+    release_lock(conn, META_LOCK_KEY).await
 }
 
-pub async fn try_live_lock(pool: &PgPool) -> Result<bool> {
-    try_lock(pool, LIVE_LOCK_KEY).await
+pub async fn try_live_lock(conn: &mut PgConnection) -> Result<bool> {
+    try_lock(conn, LIVE_LOCK_KEY).await
 }
 
-pub async fn release_live_lock(pool: &PgPool) -> Result<()> {
-    release_lock(pool, LIVE_LOCK_KEY).await
+pub async fn release_live_lock(conn: &mut PgConnection) -> Result<()> {
+    release_lock(conn, LIVE_LOCK_KEY).await
 }
 
-async fn try_lock(pool: &PgPool, key: i64) -> Result<bool> {
+async fn try_lock(conn: &mut PgConnection, key: i64) -> Result<bool> {
     let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
         .bind(key)
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await
         .map_err(Error::Database)?;
     Ok(acquired)
 }
 
-async fn release_lock(pool: &PgPool, key: i64) -> Result<()> {
+async fn release_lock(conn: &mut PgConnection, key: i64) -> Result<()> {
     let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
         .bind(key)
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await
         .map_err(Error::Database)?;
     Ok(())
 }
+
+// PgPool is re-exported here so poller call sites don't have to
+// import `sqlx::PgPool` directly just to type their signatures.
+pub use sqlx::PgPool as Pool;
 
 // ---------------------------------------------------------------------
 // nhl_games

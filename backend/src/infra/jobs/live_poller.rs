@@ -52,7 +52,16 @@ pub async fn run(db: FantasyDb, nhl: Arc<NhlClient>, cancel: CancellationToken) 
 
 async fn run_one_tick(db: &FantasyDb, nhl: &Arc<NhlClient>) {
     let pool = db.pool();
-    match nhl_mirror::try_live_lock(pool).await {
+    // Dedicated session for lock lifecycle; see
+    // `nhl_mirror::try_live_lock`.
+    let mut lock_conn = match pool.acquire().await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("live_poller: failed to acquire lock connection: {}", e);
+            return;
+        }
+    };
+    match nhl_mirror::try_live_lock(&mut lock_conn).await {
         Ok(true) => {}
         Ok(false) => {
             debug!("live_poller: another replica holds the lock, skipping tick");
@@ -64,7 +73,7 @@ async fn run_one_tick(db: &FantasyDb, nhl: &Arc<NhlClient>) {
         }
     }
     let result = tick_body(db, nhl).await;
-    if let Err(e) = nhl_mirror::release_live_lock(pool).await {
+    if let Err(e) = nhl_mirror::release_live_lock(&mut lock_conn).await {
         warn!("live_poller: failed to release lock: {}", e);
     }
     if let Err(e) = result {

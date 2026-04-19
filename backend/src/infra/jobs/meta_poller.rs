@@ -63,7 +63,17 @@ pub async fn run(db: FantasyDb, nhl: Arc<NhlClient>, cancel: CancellationToken) 
 
 async fn run_one_tick(db: &FantasyDb, nhl: &Arc<NhlClient>, refresh_rosters: bool) {
     let pool = db.pool();
-    match nhl_mirror::try_meta_lock(pool).await {
+    // Hold a dedicated connection for the lock's lifetime so acquire
+    // and release run on the same Postgres session — see the doc
+    // on `nhl_mirror::try_meta_lock`.
+    let mut lock_conn = match pool.acquire().await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("meta_poller: failed to acquire lock connection: {}", e);
+            return;
+        }
+    };
+    match nhl_mirror::try_meta_lock(&mut lock_conn).await {
         Ok(true) => {}
         Ok(false) => {
             debug!("meta_poller: another replica holds the lock, skipping tick");
@@ -75,7 +85,7 @@ async fn run_one_tick(db: &FantasyDb, nhl: &Arc<NhlClient>, refresh_rosters: boo
         }
     }
     let result = tick_body(db, nhl, refresh_rosters).await;
-    if let Err(e) = nhl_mirror::release_meta_lock(pool).await {
+    if let Err(e) = nhl_mirror::release_meta_lock(&mut lock_conn).await {
         warn!("meta_poller: failed to release lock: {}", e);
     }
     if let Err(e) = result {
@@ -165,11 +175,19 @@ async fn tick_body(
     }
 
     // ---- Rosters (every Nth tick) ----
+    //
+    // Paced: 32 back-to-back roster fetches at full speed trip NHL's
+    // per-IP rate limit (~20 req/s observed). A 250 ms sleep between
+    // calls keeps us well under the threshold and the whole pass
+    // still completes in ~14 s per 30-minute cycle.
     if refresh_rosters {
         match nhl.get_all_teams().await {
             Ok(teams) => {
                 let mut count = 0;
-                for team in &teams {
+                for (i, team) in teams.iter().enumerate() {
+                    if i > 0 {
+                        tokio::time::sleep(live_mirror::ROSTER_FETCH_DELAY).await;
+                    }
                     match nhl.get_team_roster(team).await {
                         Ok(players) => {
                             if let Err(e) =

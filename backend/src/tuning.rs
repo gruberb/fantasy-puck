@@ -277,4 +277,13 @@ pub mod live_mirror {
     /// wakes to an empty table and has no games to poll for one
     /// whole interval.
     pub const LIVE_POLL_STARTUP_DELAY: Duration = Duration::from_secs(45);
+
+    /// Sleep between consecutive roster fetches inside a single meta
+    /// tick. The meta poller walks all 32 NHL rosters in sequence;
+    /// back-to-back requests at full speed trip the NHL per-IP rate
+    /// limit (~20 req/s observed) and the last third of teams gets
+    /// served exhausted-budget 429s. 250 ms inflates one roster-
+    /// refresh tick from ~6 s to ~14 s but gives every team a clean
+    /// fetch.
+    pub const ROSTER_FETCH_DELAY: Duration = Duration::from_millis(250);
 }
