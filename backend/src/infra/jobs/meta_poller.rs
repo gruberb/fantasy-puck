@@ -42,6 +42,7 @@ pub async fn run(db: FantasyDb, nhl: Arc<NhlClient>, cancel: CancellationToken) 
     info!(
         interval_secs = live_mirror::META_POLL_INTERVAL.as_secs(),
         startup_delay_secs = live_mirror::META_POLL_STARTUP_DELAY.as_secs(),
+        aggregates_every = live_mirror::AGGREGATES_REFRESH_EVERY_N_META_TICKS,
         roster_every = live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS,
         "meta_poller: started"
     );
@@ -53,15 +54,36 @@ pub async fn run(db: FantasyDb, nhl: Arc<NhlClient>, cancel: CancellationToken) 
             }
             _ = tick.tick() => {
                 counter = counter.wrapping_add(1);
-                let refresh_rosters =
-                    counter % live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS == 1;
-                run_one_tick(&db, &nhl, refresh_rosters).await;
+                let work = TickWork {
+                    refresh_aggregates:
+                        counter % live_mirror::AGGREGATES_REFRESH_EVERY_N_META_TICKS == 1,
+                    refresh_rosters:
+                        counter % live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS == 1,
+                };
+                run_one_tick(&db, &nhl, work).await;
             }
         }
     }
 }
 
-async fn run_one_tick(db: &FantasyDb, nhl: &Arc<NhlClient>, refresh_rosters: bool) {
+/// Which subsets of the meta-poller's work to run on this tick.
+/// Every tick refreshes today's schedule (state transitions are the
+/// only thing that benefits from tight polling). Aggregates and
+/// rosters run on coarser cadences defined in
+/// [`crate::tuning::live_mirror`].
+#[derive(Debug, Clone, Copy)]
+struct TickWork {
+    /// Tomorrow's schedule + standings + skater/goalie leaderboards
+    /// + playoff carousel. All change only on game-end events, so
+    /// 30-min is plenty.
+    refresh_aggregates: bool,
+    /// All 32 team rosters. Essentially static during playoffs;
+    /// the 10:00 UTC daily prewarm also covers this, so
+    /// 24-hour here is belt-and-braces.
+    refresh_rosters: bool,
+}
+
+async fn run_one_tick(db: &FantasyDb, nhl: &Arc<NhlClient>, work: TickWork) {
     let pool = db.pool();
     // Hold a dedicated connection for the lock's lifetime so acquire
     // and release run on the same Postgres session — see the doc
@@ -84,7 +106,7 @@ async fn run_one_tick(db: &FantasyDb, nhl: &Arc<NhlClient>, refresh_rosters: boo
             return;
         }
     }
-    let result = tick_body(db, nhl, refresh_rosters).await;
+    let result = tick_body(db, nhl, work).await;
     if let Err(e) = nhl_mirror::release_meta_lock(&mut lock_conn).await {
         warn!("meta_poller: failed to release lock: {}", e);
     }
@@ -96,15 +118,44 @@ async fn run_one_tick(db: &FantasyDb, nhl: &Arc<NhlClient>, refresh_rosters: boo
 async fn tick_body(
     db: &FantasyDb,
     nhl: &Arc<NhlClient>,
-    refresh_rosters: bool,
+    work: TickWork,
 ) -> anyhow::Result<()> {
     let season = cfg_season();
     let game_type = cfg_game_type();
     let pool = db.pool();
 
-    // ---- Schedule: today + tomorrow ----
+    // ---- Today's schedule — every tick.
+    // This is the only data that genuinely benefits from 5-min
+    // polling: `game_state` transitions FUT → PRE → LIVE → OFF on
+    // a short timescale and the live-poller only picks up the
+    // switch once a game is already LIVE/CRIT/PRE.
     let today = Utc::now().date_naive();
-    for offset in [0i64, 1] {
+    let today_str = today.format("%Y-%m-%d").to_string();
+    match nhl.get_schedule_by_date(&today_str).await {
+        Ok(schedule) => {
+            let games = schedule.games_for_date(&today_str);
+            for g in &games {
+                if let Err(e) = nhl_mirror::upsert_game(pool, g, &today_str).await {
+                    warn!(date = %today_str, game_id = g.id, "meta_poller: upsert_game failed: {}", e);
+                }
+            }
+            debug!(date = %today_str, count = games.len(), "meta_poller: today's schedule mirrored");
+        }
+        Err(e) => warn!(date = %today_str, "meta_poller: today's schedule fetch failed: {}", e),
+    }
+
+    if !work.refresh_aggregates {
+        return Ok(());
+    }
+
+    // ---- Everything below runs on the aggregates cadence
+    // (default: every 6th tick = 30 min). Standings / leaderboards /
+    // carousel only change when a game ends, so 5-min polling of
+    // them was mostly wasted NHL calls. Tomorrow's schedule sits
+    // here too — postponements are rare.
+
+    // ---- Schedule: tomorrow ----
+    for offset in [1i64] {
         let date = (today + ChronoDuration::days(offset))
             .format("%Y-%m-%d")
             .to_string();
@@ -174,13 +225,13 @@ async fn tick_body(
         }
     }
 
-    // ---- Rosters (every Nth tick) ----
+    // ---- Rosters (every Nth tick, default 24 h) ----
     //
     // Paced: 32 back-to-back roster fetches at full speed trip NHL's
     // per-IP rate limit (~20 req/s observed). A 250 ms sleep between
     // calls keeps us well under the threshold and the whole pass
-    // still completes in ~14 s per 30-minute cycle.
-    if refresh_rosters {
+    // still completes in ~14 s per run.
+    if work.refresh_rosters {
         match nhl.get_all_teams().await {
             Ok(teams) => {
                 let mut count = 0;

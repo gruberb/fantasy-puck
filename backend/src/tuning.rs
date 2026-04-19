@@ -259,11 +259,27 @@ pub mod live_mirror {
     /// times per day.
     pub const META_POLL_INTERVAL: Duration = Duration::from_secs(300);
 
-    /// How often, measured in meta-poller ticks, to also refresh
-    /// team rosters. At `META_POLL_INTERVAL = 300 s` and this value
-    /// = 6, rosters refresh once every 30 min — matching
-    /// [`super::nhl_client::ROSTER_TTL`].
-    pub const ROSTER_REFRESH_EVERY_N_META_TICKS: u32 = 6;
+    /// How often, measured in meta-poller ticks, to refresh team
+    /// rosters. NHL rosters change via call-ups and trade-deadline
+    /// moves — none of which happen during the playoffs, and all
+    /// of which are tolerable at day-fresh resolution during the
+    /// regular season. 288 ticks × 5 min = 24 h; the 10:00 UTC
+    /// daily prewarm refreshes rosters explicitly anyway, so this
+    /// is just belt-and-braces.
+    pub const ROSTER_REFRESH_EVERY_N_META_TICKS: u32 = 288;
+
+    /// How often, measured in meta-poller ticks, to refresh the
+    /// "aggregates" — tomorrow's schedule, standings, skater and
+    /// goalie leaderboards, and the playoff carousel. All change
+    /// only when a game ends or a series resolves, not
+    /// minute-to-minute. 6 ticks × 5 min = 30 min is generous.
+    ///
+    /// The long-term plan (noted in `docs/DATA-PIPELINE-REDESIGN.md`)
+    /// is to make these event-driven: the live poller detects a
+    /// `LIVE → OFF/FINAL` transition and triggers an aggregates
+    /// refresh at that instant. Time-based polling here then
+    /// becomes a safety net.
+    pub const AGGREGATES_REFRESH_EVERY_N_META_TICKS: u32 = 6;
 
     /// Delay between process boot and the meta poller's first tick.
     /// `tokio::time::interval` fires immediately on the first poll,
