@@ -95,9 +95,15 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>) -> anyhow::Result<()> {
         .to_string();
     let pool = db.pool();
 
-    let game_ids = nhl_mirror::list_live_game_ids_for_date(pool, &today).await?;
+    // Poll anything in LIVE|CRIT from any date plus today's PRE rows.
+    // The any-date sweep is the self-heal pass: a process restart or
+    // rate-limit blip mid-game can leave a row stuck on LIVE after the
+    // real game has finalised. A today-only query would never re-check
+    // it, and the stuck row would keep rendering as live on the Games
+    // page until someone manually ran /api/admin/rehydrate.
+    let game_ids = nhl_mirror::list_games_needing_poll(pool, &today).await?;
     if game_ids.is_empty() {
-        debug!("live_poller: no live games");
+        debug!("live_poller: no games needing poll");
         return Ok(());
     }
 

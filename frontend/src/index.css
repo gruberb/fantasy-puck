@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "@gruberb/fun-ui/styles";
 
+
 /* Color variables */
 :root {
     --brutal-black: #1A1A1A;

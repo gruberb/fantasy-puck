@@ -4,6 +4,41 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.21.1 — 2026-04-19 (backend) / v1.16.1 (frontend)
+
+### Fixed — fun-ui components rendered unstyled
+
+Arbitrary-value Tailwind classes baked into the `@gruberb/fun-ui`
+bundle (`border-[var(--color-brutal-black)]`,
+`border-t-[var(--color-brutal-yellow)]`, etc.) were missing from the
+output CSS. Tailwind v4 skips `node_modules/` when scanning for class
+names, and the `@source` directive didn't pick up the deep path
+either.
+
+Symptom: `LoadingSpinner` was invisible because its border ring and
+yellow accent class weren't emitted. Other fun-ui components inherited
+the same issue (modals, badges).
+
+Fix: new `frontend/src/funUiSafelist.ts` lists every arbitrary-value
+class fun-ui references. Tailwind scans `src/` by default, so the
+classes are emitted without any additional config. Regenerate the
+list by grep'ing the fun-ui bundle — the file's header comment has
+the one-liner.
+
+### Fixed — live poller: stuck LIVE rows from past dates
+
+The live poller only queried `nhl_games` rows with `game_date = today`
+and state in (`LIVE`, `CRIT`, `PRE`). A row stuck in `LIVE` from a
+previous date (process restart, rate-limit blip, whatever) would
+never get re-checked, so the Games page kept rendering a finalised
+game as live until someone manually ran `/api/admin/rehydrate`.
+
+New `nhl_mirror::list_games_needing_poll` sweeps `LIVE|CRIT` rows
+regardless of date and adds today's `PRE` rows on top. Old function
+(`list_live_game_ids_for_date`) kept untouched — it's still used by
+the daily-rankings safety gate, which genuinely wants per-date
+semantics.
+
 ## v1.16.0 — 2026-04-19 (frontend)
 
 ### Changed — Consolidate onto @gruberb/fun-ui

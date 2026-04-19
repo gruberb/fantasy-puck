@@ -221,6 +221,29 @@ pub async fn list_live_game_ids_for_date(pool: &PgPool, date: &str) -> Result<Ve
     Ok(rows)
 }
 
+/// Games the live poller should re-check on every tick:
+///   - anything in `LIVE` / `CRIT` from *any* date (self-heal for rows
+///     stuck in a non-final state after a crash or rate-limit blip),
+///   - plus `PRE` rows for `today` (today's upcoming puck-drops).
+///
+/// The date-scoped variant (`list_live_game_ids_for_date`) is still
+/// used by `process_daily_rankings` as a "is the day settled yet"
+/// safety gate; that caller wants strict per-date semantics.
+pub async fn list_games_needing_poll(pool: &PgPool, today: &str) -> Result<Vec<i64>> {
+    let rows: Vec<i64> = sqlx::query_scalar(
+        r#"
+        SELECT game_id FROM nhl_games
+         WHERE game_state IN ('LIVE', 'CRIT')
+            OR (game_state = 'PRE' AND game_date = $1::date)
+        "#,
+    )
+    .bind(today)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
 /// All game IDs on `date`, regardless of state. Used by rehydrate to
 /// rebuild `nhl_player_game_stats` from completed games.
 pub async fn list_all_game_ids_for_date(pool: &PgPool, date: &str) -> Result<Vec<i64>> {
