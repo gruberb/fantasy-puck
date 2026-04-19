@@ -17,8 +17,6 @@ const GamesPage = () => {
     refetchGames,
     expandedGames,
     toggleGameExpansion,
-    autoRefresh,
-    setAutoRefresh,
     hasLiveGames,
     getTeamPrimaryColor,
   } = useGamesData(dateParam);
@@ -60,20 +58,9 @@ const GamesPage = () => {
             <span className="inline-block px-2 py-0.5 text-xs uppercase tracking-wider bg-[#FACC15]">{formattedDate}</span>
             <div className="flex items-center gap-2">
               {hasLiveGames && (
-                <div className="flex items-center bg-[#1A1A1A]/5 px-3 py-1.5 rounded-none text-sm border border-[#1A1A1A]/20">
-                  <input
-                    type="checkbox"
-                    id="autoRefresh"
-                    checked={autoRefresh}
-                    onChange={(e) => setAutoRefresh(e.target.checked)}
-                    className="mr-2"
-                  />
-                  <label htmlFor="autoRefresh" className="text-[#1A1A1A] flex items-center text-sm">
-                    Auto-refresh
-                    {autoRefresh && (
-                      <span className="ml-1 h-2 w-2 rounded-full bg-red-500 animate-pulse" title="Refreshing every 30 seconds"></span>
-                    )}
-                  </label>
+                <div className="flex items-center gap-1.5 bg-[#1A1A1A]/5 px-3 py-1.5 rounded-none text-sm border border-[#1A1A1A]/20 text-[#1A1A1A]">
+                  <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" aria-hidden="true"></span>
+                  Live — auto-updating
                 </div>
               )}
               <button

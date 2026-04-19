@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api/client";
@@ -27,7 +27,6 @@ export function useGamesData(dateParam?: string) {
   });
 
   const [expandedGames, setExpandedGames] = useState<Set<number>>(new Set());
-  const [autoRefresh, setAutoRefresh] = useState<boolean>(false);
 
   const updateSelectedDate = (newDate: string) => {
     setSelectedDate(newDate);
@@ -43,6 +42,13 @@ export function useGamesData(dateParam?: string) {
     });
   };
 
+  // Two-pass query pattern: the first pass discovers `hasLiveGames` from
+  // the current data, the second pass (via `refetchInterval`) keeps the
+  // page live-updating only while the mirror says something is live.
+  // The server-side live poller updates `nhl_games` + `nhl_player_game_stats`
+  // every 60 s, so aligning the client at 30 s catches the next write
+  // within one boxscore tick's worth of lag. When the slate is done
+  // `refetchInterval` returns `false` and polling stops automatically.
   const {
     data: gamesData,
     isLoading: gamesLoading,
@@ -52,25 +58,21 @@ export function useGamesData(dateParam?: string) {
     queryKey: ["games", selectedDate, activeLeagueId],
     queryFn: () => api.getGames(selectedDate, activeLeagueId ?? undefined),
     retry: 1,
+    refetchInterval: (query) => {
+      const state = (query.state.data as typeof gamesData | undefined)?.games ?? [];
+      const anyLive = state.some((g) => {
+        const s = (g.gameState || "").toUpperCase();
+        return s === "LIVE" || s === "CRIT";
+      });
+      return anyLive ? QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS : false;
+    },
   });
 
   const hasLiveGames =
-    gamesData?.games?.some(
-      (game) => {
-        const state = (game.gameState || "").toUpperCase();
-        return state === "LIVE" || state === "CRIT";
-      },
-    ) ?? false;
-
-  useEffect(() => {
-    if (!autoRefresh || !hasLiveGames) return;
-    const id = setInterval(() => refetchGames(), QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [autoRefresh, hasLiveGames, refetchGames]);
-
-  useEffect(() => {
-    if (autoRefresh && !hasLiveGames) setAutoRefresh(false);
-  }, [selectedDate, hasLiveGames, autoRefresh]);
+    gamesData?.games?.some((game) => {
+      const state = (game.gameState || "").toUpperCase();
+      return state === "LIVE" || state === "CRIT";
+    }) ?? false;
 
   const isTodaySelected = isSameLocalDay(
     dateStringToLocalDate(selectedDate),
@@ -87,8 +89,6 @@ export function useGamesData(dateParam?: string) {
     refetchGames,
     expandedGames,
     toggleGameExpansion,
-    autoRefresh,
-    setAutoRefresh,
     hasLiveGames,
     isTodaySelected,
     getTeamPrimaryColor,
