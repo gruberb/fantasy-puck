@@ -1,3 +1,10 @@
+//! Rankings handlers.
+//!
+//! Post-Phase-3 all three handlers are pure database reads. The NHL
+//! mirror pollers (`infra/jobs/{meta_poller, live_poller}`) keep the
+//! source tables fresh; this module joins them with the per-league
+//! fantasy_* tables and applies the domain ranking rules.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -5,256 +12,125 @@ use axum::{
     extract::{Query, State},
     Json,
 };
-use futures::{stream, StreamExt, TryStreamExt};
-use tracing::error;
 
 use crate::api::dtos::*;
 use crate::api::dtos::conversion::IntoResponse;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
-use crate::Error;
-use crate::error::Result;
 use crate::domain::models::db::FantasyTeamWithPlayers;
-use crate::domain::models::fantasy::{DailyRanking, TeamDailyPerformance, TeamRanking};
+use crate::domain::models::fantasy::TeamRanking;
+use crate::domain::models::nhl::PlayoffCarousel;
+use crate::domain::services::rankings::{
+    build_daily_rankings, calculate_team_rankings, DailyPlayerStat, SeasonSkaterStat,
+};
+use crate::error::Result;
+use crate::infra::db::nhl_mirror;
 use crate::infra::nhl::urls::parse_date_param;
-use crate::domain::services::fantasy_points::process_game_performances;
 
-/// Get current total rankings of all Fantasy Teams in a league
+// ---------------------------------------------------------------------
+// Overall season rankings: GET /api/fantasy/rankings
+// ---------------------------------------------------------------------
+
 pub async fn get_rankings(
     State(state): State<Arc<AppState>>,
     Query(league_params): Query<LeagueParams>,
 ) -> Result<Json<ApiResponse<Vec<TeamRanking>>>> {
     let league_id = &league_params.league_id;
-    let teams = state.db.get_all_teams(league_id).await?;
-
-    let mut list_of_teams_with_players: Vec<FantasyTeamWithPlayers> = Vec::default();
-
-    for team in teams {
-        list_of_teams_with_players.push(FantasyTeamWithPlayers {
-            id: team.id,
-            name: team.name,
-            players: state.db.get_team_players(team.id).await?,
-        })
-    }
-
-    let stats = state
-        .nhl_client
-        .get_skater_stats(&season(), game_type())
-        .await?;
-
-    Ok(json_success(TeamRanking::calculate_rankings(
-        list_of_teams_with_players,
-        stats,
-    )))
+    let teams = load_league_teams(&state, league_id).await?;
+    let stats = load_skater_leaderboard(&state).await?;
+    Ok(json_success(calculate_team_rankings(teams, &stats)))
 }
+
+// ---------------------------------------------------------------------
+// Daily rankings: GET /api/fantasy/rankings/daily
+// ---------------------------------------------------------------------
 
 pub async fn get_daily_rankings(
     State(state): State<Arc<AppState>>,
     Query(params): Query<DailyRankingsParams>,
 ) -> Result<Json<ApiResponse<DailyRankingsResponse>>> {
     let league_id = &params.league_id;
-
-    // Validate date format (has to be YYYY-MM-DD)
     let date = parse_date_param(params.date)?;
 
-    // Cache the response per (league, date, game_type). Without this,
-    // every page hit fans out N boxscore fetches (one per game that
-    // day) even for fully completed days — which both burns NHL rate
-    // limit and returns 500 when any one boxscore 429s. Short TTL so
-    // live-game updates still reach the page within a couple minutes.
-    let cache_key = format!(
-        "daily_rankings:{}:{}:{}",
-        league_id,
-        game_type(),
-        date
-    );
-    if let Some(cached) = state
-        .db
-        .cache()
-        .get_cached_response::<DailyRankingsResponse>(&cache_key)
+    let rows = nhl_mirror::list_league_player_stats_for_date(state.db.pool(), league_id, &date)
         .await?
-    {
-        return Ok(json_success(cached));
-    }
-
-    // Fetch the games for the specified date
-    let games_response = state.nhl_client.get_schedule_by_date(&date).await?;
-
-    // Extract LIVE or FINISHED games for this date
-    let games_for_date = games_response
-        .games_for_date(&date)
         .into_iter()
-        .filter(|game| game.game_state.is_completed() || game.game_state.is_live())
+        .map(|r| DailyPlayerStat {
+            team_id: r.team_id,
+            team_name: r.team_name,
+            nhl_id: r.nhl_id,
+            player_name: r.player_name,
+            nhl_team: r.nhl_team,
+            goals: r.goals,
+            assists: r.assists,
+            points: r.points,
+        })
         .collect::<Vec<_>>();
 
-    // If no Game is found, we return an Error
-    if games_for_date.is_empty() {
-        return Err(Error::NotFound(format!("No games found for date {}", date)));
-    }
-
-    // Process all completed games and aggregate team performances
-    let all_team_performances = stream::iter(games_for_date)
-        .map(|game| {
-            let state_cloned = state.clone();
-            let league_id_owned = league_id.to_string();
-            async move {
-                // Try to get boxscore for this game
-                let boxscore = state_cloned
-                    .nhl_client
-                    .get_game_boxscore(game.id)
-                    .await
-                    .map_err(|e| {
-                        error!(
-                            "Warning: Could not fetch boxscore for game {}: {}",
-                            game.id, e
-                        );
-                        Error::Internal(
-                            "Internal Server Error trying to get NHL Game information".to_string(),
-                        )
-                    })?;
-
-                // Get fantasy players for both teams
-                let home_team = game.home_team.abbrev.as_str();
-                let away_team = game.away_team.abbrev.as_str();
-                let fantasy_players = state_cloned
-                    .db
-                    .get_fantasy_players_for_nhl_teams(&[home_team, away_team], &league_id_owned)
-                    .await?;
-
-                // Process performances for this game
-                Ok::<Vec<TeamDailyPerformance>, Error>(process_game_performances(
-                    &fantasy_players,
-                    &boxscore,
-                ))
-            }
-        })
-        .buffer_unordered(4) // Process up to 4 games concurrently
-        .try_fold(
-            HashMap::<i64, TeamDailyPerformance>::new(),
-            |mut acc, performances| async move {
-                // Merge these performances into the accumulator
-                for perf in performances {
-                    acc.entry(perf.team_id)
-                        .and_modify(|existing| {
-                            existing
-                                .player_performances
-                                .extend(perf.player_performances.clone());
-                            existing.total_points += perf.total_points;
-                            existing.total_assists += perf.total_assists;
-                            existing.total_goals += perf.total_goals;
-                        })
-                        .or_insert(perf);
-                }
-                Ok(acc)
-            },
-        )
-        .await?;
-
-    // Convert to rankings domain model
-    let daily_rankings = DailyRanking::build_rankings(all_team_performances);
-
-    // Convert to API response DTOs
-    let response_rankings = daily_rankings
-        .into_iter()
-        .map(|r| r.into_response())
-        .collect();
-
+    let rankings = build_daily_rankings(rows);
     let response = DailyRankingsResponse {
         date: date.clone(),
-        rankings: response_rankings,
+        rankings: rankings.into_iter().map(|r| r.into_response()).collect(),
     };
-
-    // Cache the computed response. The source-of-truth `daily_rankings`
-    // table is only updated twice per day by the scheduler (9am/3pm
-    // UTC), so serving a cached copy for the rest of the day matches
-    // the actual data cadence and stops N boxscore fetches per request.
-    let _ = state
-        .db
-        .cache()
-        .store_response(&cache_key, &date, &response)
-        .await;
-
     Ok(json_success(response))
 }
 
-/// Compute playoff rankings — combines rankings, team bets, player rosters,
-/// top skaters, and playoff state into a single response.
+// ---------------------------------------------------------------------
+// Playoff rankings: GET /api/fantasy/rankings/playoffs
+// ---------------------------------------------------------------------
+
 pub async fn get_playoff_rankings(
     State(state): State<Arc<AppState>>,
     Query(league_params): Query<LeagueParams>,
 ) -> Result<Json<ApiResponse<Vec<PlayoffRankingResponse>>>> {
     let league_id = &league_params.league_id;
 
-    // 1. Get all fantasy teams with players
-    let teams = state.db.get_all_teams(league_id).await?;
-    let mut teams_with_players: Vec<FantasyTeamWithPlayers> = Vec::new();
-    for team in &teams {
-        teams_with_players.push(FantasyTeamWithPlayers {
-            id: team.id,
-            name: team.name.clone(),
-            players: state.db.get_team_players(team.id).await?,
-        });
-    }
+    let teams = load_league_teams(&state, league_id).await?;
+    let stats = load_skater_leaderboard(&state).await?;
+    let base_rankings = calculate_team_rankings(teams.clone(), &stats);
 
-    // 2. Get NHL skater stats and calculate base rankings
-    let stats = state.nhl_client.get_skater_stats(&season(), game_type()).await?;
-    let base_rankings = TeamRanking::calculate_rankings(teams_with_players.clone(), stats.clone());
-
-    // 3. Get team bets (which NHL teams each fantasy team has players on)
     let bets = state.db.get_fantasy_bets_by_nhl_team(league_id).await?;
     let bets_by_team: HashMap<i64, Vec<String>> = bets
         .into_iter()
         .map(|b| (b.team_id, b.bets.into_iter().map(|bet| bet.nhl_team).collect()))
         .collect();
 
-    // 4. Get playoff data to determine which teams are still in
-    let playoff_raw = state
-        .nhl_client
-        .get_playoff_carousel(season().to_string())
-        .await
-        .map_err(|_| crate::error::Error::NotFound("Playoff data not available".into()))?;
+    let teams_in_playoffs = load_teams_in_playoffs(&state).await?;
 
-    let teams_in_playoffs: HashSet<String> = if let Some(carousel) = playoff_raw {
-        let val = serde_json::to_value(carousel)
-            .map_err(|e| crate::error::Error::Internal(format!("serialization error: {e}")))?;
-        let parsed: PlayoffCarouselResponse = serde_json::from_value(val)
-            .map_err(|e| crate::error::Error::Internal(format!("conversion error: {e}")))?;
-        let computed = parsed.with_computed_state();
-        computed.teams_in_playoffs.into_iter().collect()
-    } else {
-        HashSet::new()
-    };
-
-    // 5. Get top 10 skaters and count per fantasy team
-    let top_skaters = state.nhl_client.get_skater_stats(&season(), game_type()).await?;
-    let mut top_player_ids: Vec<(i64, i32)> = top_skaters
-        .points
+    // Top 10 scorers: stats are already sorted by points desc.
+    let mut top_ten: Vec<(i64, i32)> = stats
         .iter()
         .take(10)
-        .map(|p| (p.id as i64, p.value as i32))
+        .map(|s| (s.nhl_id, s.goals + s.assists))
         .collect();
-    top_player_ids.sort_by(|a, b| b.1.cmp(&a.1));
+    top_ten.sort_by(|a, b| b.1.cmp(&a.1));
+    let top_ids: HashSet<i64> = top_ten.iter().map(|(id, _)| *id).collect();
 
-    let top_ids: HashSet<i64> = top_player_ids.iter().map(|(id, _)| *id).collect();
-
-    let mut top_count_by_team: HashMap<i64, i32> = HashMap::new();
-    for twp in &teams_with_players {
-        let count = twp.players.iter().filter(|p| top_ids.contains(&p.nhl_id)).count() as i32;
-        top_count_by_team.insert(twp.id, count);
-    }
-
-    // 6. Build response
-    let mut response: Vec<PlayoffRankingResponse> = teams_with_players
+    let top_count_by_team: HashMap<i64, i32> = teams
         .iter()
         .map(|twp| {
-            let base = base_rankings.iter().find(|r| r.team_id == twp.id);
-            let total_points = base.map(|r| r.total_points).unwrap_or(0);
+            let n = twp
+                .players
+                .iter()
+                .filter(|p| top_ids.contains(&p.nhl_id))
+                .count() as i32;
+            (twp.id, n)
+        })
+        .collect();
 
+    let mut response: Vec<PlayoffRankingResponse> = teams
+        .iter()
+        .map(|twp| {
+            let total_points = base_rankings
+                .iter()
+                .find(|r| r.team_id == twp.id)
+                .map(|r| r.total_points)
+                .unwrap_or(0);
             let nhl_teams = bets_by_team.get(&twp.id).cloned().unwrap_or_default();
-            let player_nhl_teams: Vec<String> = twp.players.iter().map(|p| p.nhl_team.clone()).collect();
+            let player_nhl_teams: Vec<String> =
+                twp.players.iter().map(|p| p.nhl_team.clone()).collect();
             let top_count = top_count_by_team.get(&twp.id).copied().unwrap_or(0);
-
             PlayoffRankingResponse::compute(
                 twp.id,
                 twp.name.clone(),
@@ -267,13 +143,74 @@ pub async fn get_playoff_rankings(
         })
         .collect();
 
-    // Sort by playoff score descending
     response.sort_by(|a, b| b.playoff_score.cmp(&a.playoff_score));
-
-    // Assign ranks
     for (i, entry) in response.iter_mut().enumerate() {
         entry.rank = i + 1;
     }
-
     Ok(json_success(response))
+}
+
+// ---------------------------------------------------------------------
+// Private helpers — DB loaders shared across the three handlers.
+// ---------------------------------------------------------------------
+
+async fn load_league_teams(
+    state: &Arc<AppState>,
+    league_id: &str,
+) -> Result<Vec<FantasyTeamWithPlayers>> {
+    let teams = state.db.get_all_teams(league_id).await?;
+    let mut out = Vec::with_capacity(teams.len());
+    for team in teams {
+        out.push(FantasyTeamWithPlayers {
+            id: team.id,
+            name: team.name,
+            players: state.db.get_team_players(team.id).await?,
+        });
+    }
+    Ok(out)
+}
+
+/// Load the skater leaderboard from the mirror and adapt to the
+/// shape the domain service consumes.
+async fn load_skater_leaderboard(state: &Arc<AppState>) -> Result<Vec<SeasonSkaterStat>> {
+    let rows = nhl_mirror::list_skater_season_stats(
+        state.db.pool(),
+        season() as i32,
+        game_type() as i16,
+    )
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| SeasonSkaterStat {
+            nhl_id: r.player_id,
+            goals: r.goals,
+            assists: r.assists,
+        })
+        .collect())
+}
+
+/// Parse the playoff carousel JSONB out of `nhl_playoff_bracket` and
+/// extract the set of NHL team abbrevs that are still alive.
+async fn load_teams_in_playoffs(state: &Arc<AppState>) -> Result<HashSet<String>> {
+    let carousel_json: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT carousel FROM nhl_playoff_bracket WHERE season = $1",
+    )
+    .bind(season() as i32)
+    .fetch_optional(state.db.pool())
+    .await
+    .map_err(crate::error::Error::Database)?;
+
+    let Some(json) = carousel_json else {
+        return Ok(HashSet::new());
+    };
+    let carousel: PlayoffCarousel = match serde_json::from_value(json) {
+        Ok(c) => c,
+        Err(_) => return Ok(HashSet::new()),
+    };
+    let val = serde_json::to_value(carousel)
+        .map_err(|e| crate::error::Error::Internal(format!("serialization error: {e}")))?;
+    let parsed: PlayoffCarouselResponse = serde_json::from_value(val)
+        .map_err(|e| crate::error::Error::Internal(format!("conversion error: {e}")))?;
+    let computed = parsed.with_computed_state();
+    Ok(computed.teams_in_playoffs.into_iter().collect())
 }

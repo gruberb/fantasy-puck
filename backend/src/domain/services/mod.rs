@@ -3,3 +3,4 @@
 
 pub mod fantasy_points;
 pub mod nhl_stats;
+pub mod rankings;

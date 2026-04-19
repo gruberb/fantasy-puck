@@ -791,3 +791,102 @@ pub async fn capture_game_landing(
     .map_err(Error::Database)?;
     Ok(inserted.rows_affected() > 0)
 }
+
+// ---------------------------------------------------------------------
+// Read-side queries consumed by handlers (Phase 3+).
+// ---------------------------------------------------------------------
+
+use sqlx::FromRow;
+
+/// One row per (fantasy_team, rostered_player) with that player's
+/// NHL performance on `date`. A team with no rostered player in a
+/// completed game that day will not appear. Caller is expected to
+/// LEFT JOIN the handler response against every league team so that
+/// the final output lists every team, zeros included.
+#[derive(Debug, FromRow)]
+pub struct LeagueTeamPlayerDailyRow {
+    pub team_id: i64,
+    pub team_name: String,
+    pub nhl_id: i64,
+    pub player_name: String,
+    pub nhl_team: String,
+    pub goals: i32,
+    pub assists: i32,
+    pub points: i32,
+}
+
+/// Every rostered skater from `league_id` who appeared in any game
+/// on `date`, with their boxscore stats for that game.
+pub async fn list_league_player_stats_for_date(
+    pool: &PgPool,
+    league_id: &str,
+    date: &str,
+) -> Result<Vec<LeagueTeamPlayerDailyRow>> {
+    let rows = sqlx::query_as::<_, LeagueTeamPlayerDailyRow>(
+        r#"
+        SELECT
+            ft.id              AS team_id,
+            ft.name            AS team_name,
+            fp.nhl_id          AS nhl_id,
+            fp.name            AS player_name,
+            fp.nhl_team        AS nhl_team,
+            pgs.goals          AS goals,
+            pgs.assists        AS assists,
+            pgs.points         AS points
+        FROM nhl_player_game_stats pgs
+        JOIN nhl_games  g  ON g.game_id = pgs.game_id
+        JOIN fantasy_players fp ON fp.nhl_id = pgs.player_id
+        JOIN fantasy_teams   ft ON ft.id    = fp.team_id
+        WHERE ft.league_id = $1::uuid
+          AND g.game_date  = $2::date
+        ORDER BY ft.id, pgs.points DESC, pgs.goals DESC
+        "#,
+    )
+    .bind(league_id)
+    .bind(date)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// Row shape matching the `nhl_skater_season_stats` columns the
+/// overall rankings handler actually reads. Thinner than the full
+/// mirror row — the handler only needs id + name + counting stats.
+#[derive(Debug, FromRow)]
+pub struct SkaterSeasonRow {
+    pub player_id: i64,
+    pub first_name: String,
+    pub last_name: String,
+    pub team_abbrev: String,
+    pub position: String,
+    pub goals: i32,
+    pub assists: i32,
+    pub points: i32,
+}
+
+/// All skaters on the season leaderboard for `(season, game_type)`,
+/// ordered by points desc then goals desc. Handlers that only need
+/// the subset rostered in a given league filter in memory.
+pub async fn list_skater_season_stats(
+    pool: &PgPool,
+    season: i32,
+    game_type: i16,
+) -> Result<Vec<SkaterSeasonRow>> {
+    let rows = sqlx::query_as::<_, SkaterSeasonRow>(
+        r#"
+        SELECT
+            player_id, first_name, last_name, team_abbrev, position,
+            goals, assists, points
+        FROM nhl_skater_season_stats
+        WHERE season = $1 AND game_type = $2
+        ORDER BY points DESC, goals DESC
+        "#,
+    )
+    .bind(season)
+    .bind(game_type)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
