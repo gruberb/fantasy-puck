@@ -172,15 +172,17 @@ pub mod scheduler {
     /// `daily_rankings` table. 09:00 UTC = 05:00 ET, which is after
     /// every West Coast game has finalized.
     ///
-    /// Format: 6-field cron (`sec min hour dom mon dow`). The current
-    /// value schedules the job relative to the legacy format used by
-    /// `tokio_cron_scheduler` at the time the scheduler was
-    /// introduced. Do not shorten to 5 fields.
-    pub const MORNING_RANKINGS_CRON: &str = "0 9 * * * *";
+    /// Format: 6-field cron (`sec min hour dom mon dow`) per
+    /// `tokio_cron_scheduler`. Earlier values of this file used
+    /// `"0 9 * * * *"` which *parses* as 6-field but means
+    /// "every hour at minute 9, seconds 0" — the job fired 24 times
+    /// a day rather than once. The corrected form pins
+    /// `hour = 9` explicitly.
+    pub const MORNING_RANKINGS_CRON: &str = "0 0 9 * * *";
 
     /// Afternoon safety net. Re-runs the morning job at 15:00 UTC to
     /// cover any boxscores that the NHL published late.
-    pub const AFTERNOON_RANKINGS_CRON: &str = "0 15 * * * *";
+    pub const AFTERNOON_RANKINGS_CRON: &str = "0 0 15 * * *";
 
     /// Daily prewarm. Ingests yesterday's playoff boxscores, refreshes
     /// the playoff roster cache, and generates the insights and
@@ -188,9 +190,8 @@ pub mod scheduler {
     /// rather than fan out to NHL. 10:00 UTC = 06:00 ET — before any
     /// game starts, which matters because the pre-game matchup block
     /// in `game-landing` is only present while the game is in FUT
-    /// state. See `insights_landing:*` cache in
-    /// `backend/src/db/cache.rs`.
-    pub const DAILY_PREWARM_CRON: &str = "0 10 * * * *";
+    /// state.
+    pub const DAILY_PREWARM_CRON: &str = "0 0 10 * * *";
 
     /// How long rows sit in the `response_cache` table before the
     /// morning rankings job prunes them.
