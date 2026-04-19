@@ -18,6 +18,7 @@ const RankingTable = ({
   viewAllLink,
   viewAllText = "View All",
   alwaysShowViewAll = false,
+  customHeader,
   dateBadge,
 
   // State flags
@@ -141,20 +142,26 @@ const RankingTable = ({
 
   return (
     <div className={`ranking-table-container ${className}`}>
-      {/* Header section */}
-      <div className="ranking-table-header">
-        <RankingTableHeader
-          title={title}
-          subtitle={subtitle}
-          viewAllLink={viewAllLink}
-          viewAllText={viewAllText}
-          showViewAll={alwaysShowViewAll || (!!limit && safeData.length > limit)}
-          dateBadge={showDatePicker ? undefined : dateBadge}
-          showDatePicker={showDatePicker}
-          selectedDate={selectedDate}
-          onDateChange={onDateChange}
-        />
-      </div>
+      {/* Header section: caller can pass `customHeader` to replace the
+          default bar — Live Rankings does this to slot in a red banner
+          + pulse dot inside the same outer border. */}
+      {customHeader ? (
+        customHeader
+      ) : (
+        <div className="ranking-table-header">
+          <RankingTableHeader
+            title={title}
+            subtitle={subtitle}
+            viewAllLink={viewAllLink}
+            viewAllText={viewAllText}
+            showViewAll={alwaysShowViewAll || (!!limit && safeData.length > limit)}
+            dateBadge={showDatePicker ? undefined : dateBadge}
+            showDatePicker={showDatePicker}
+            selectedDate={selectedDate}
+            onDateChange={onDateChange}
+          />
+        </div>
+      )}
       {isLoading && (
         <div className="p-6">
           <LoadingSpinner message="Loading data..." />

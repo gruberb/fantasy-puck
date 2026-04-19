@@ -4,6 +4,25 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.17.3 — 2026-04-19 (frontend)
+
+### Changed — Live Rankings body matches Overall Rankings
+
+Previous pass hand-rolled the table grid so row heights and the
+rank column didn't match Overall Rankings sitting right below it
+— team names truncated to "Boston ..." at the default column
+width, and the colored rank badge (yellow/silver/bronze) was
+missing. Now renders the body through the shared `RankingTable`
+component with its own column config
+(`useLiveRankingsColumns` — Rank · Team · Today · Players · Games).
+Rank badges, wrap-capable team-name cells, and row heights match
+Overall / Yesterday / Sleepers.
+
+The red banner + pulsing white dot + "→ Live Games" button stay —
+they're now slotted into the same outer border as the table body
+via a new `customHeader` prop on `RankingTable`. Default header
+behavior is unchanged for every other caller.
+
 ## v1.21.3 — 2026-04-19 (backend) / v1.17.2 (frontend)
 
 ### Changed — Live Rankings gets its own layout

@@ -29,6 +29,12 @@ export interface RankingTableProps {
    *  is truncated. Used by Live Rankings where the link is a
    *  navigational affordance, not an overflow indicator. */
   alwaysShowViewAll?: boolean;
+  /** Replaces the default `RankingTableHeader` entirely. Used by
+   *  Live Rankings to render a red banner + pulse dot inside the
+   *  same outer border as the table body, so the banner and body
+   *  read as one card. When set, `title` / `subtitle` / `dateBadge`
+   *  / `viewAllLink` are ignored. */
+  customHeader?: ReactNode;
   dateBadge?: string | Date;
 
   // State flags
