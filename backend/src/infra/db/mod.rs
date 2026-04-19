@@ -12,6 +12,30 @@ mod sleepers;
 pub mod teams;
 pub mod users;
 
+/// Inclusive date window for queries that aggregate across history.
+/// Either bound may be `None` to leave that side unbounded. Built by
+/// handlers from `crate::api::playoff_start()` / `season_end()` so
+/// aggregations in playoff mode don't see regular-season rows.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DateWindow<'a> {
+    pub min_date: Option<&'a str>,
+    pub max_date: Option<&'a str>,
+}
+
+impl<'a> DateWindow<'a> {
+    pub fn unbounded() -> Self {
+        Self { min_date: None, max_date: None }
+    }
+
+    pub fn since(min_date: &'a str) -> Self {
+        Self { min_date: Some(min_date), max_date: None }
+    }
+
+    pub fn between(min_date: &'a str, max_date: &'a str) -> Self {
+        Self { min_date: Some(min_date), max_date: Some(max_date) }
+    }
+}
+
 /// Database interaction for fantasy teams
 #[derive(Clone)]
 pub struct FantasyDb {
@@ -277,9 +301,10 @@ impl FantasyDb {
     pub async fn get_daily_ranking_stats(
         &self,
         league_id: &str,
+        window: DateWindow<'_>,
     ) -> Result<Vec<crate::domain::models::db::TeamDailyRankingStats>> {
         teams::TeamDbService::new(&self.pool)
-            .get_daily_ranking_stats(league_id)
+            .get_daily_ranking_stats(league_id, window)
             .await
     }
 

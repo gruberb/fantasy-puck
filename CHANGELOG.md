@@ -4,6 +4,57 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.20.6 — 2026-04-19 (backend) / v1.13.4 (frontend)
+
+### Fixed — Pre-playoff data leaking into playoff surfaces
+
+`daily_rankings` is append-only across game types and seasons, so
+`get_daily_ranking_stats` was counting regular-season daily wins and
+top-3 finishes in the Season Overview's playoff table. The same concern
+applied to `list_league_team_season_totals`: its `g.season = $2 AND
+g.game_type = $3` predicates lived on a LEFT JOIN's ON clause, so a
+non-matching row nulled `g` but still let `pgs.points` into the SUM.
+
+- New `DateWindow` value type in `infra::db`, wrapping optional
+  `min_date` / `max_date` bounds, threaded into the affected queries.
+- New `api::current_date_window()` — returns
+  `between(playoff_start, season_end)` in playoff mode, unbounded
+  otherwise. Every handler that aggregates across date-keyed history
+  passes it through (`team_stats`, `rankings`, `pulse`, `race_odds`).
+- `list_league_team_season_totals` moved the season / game_type
+  predicate and the new date window into CASE-gated SUMs so the LEFT
+  JOIN still returns every fantasy team (including ones with zero
+  rostered appearances) without letting off-mode stats into totals.
+
+### Changed — Playoff window as first-class config
+
+- Added `VITE_NHL_PLAYOFF_START` / `VITE_NHL_SEASON_END` mirroring the
+  existing backend env vars. Exposed as `APP_CONFIG.PLAYOFF_START` /
+  `APP_CONFIG.SEASON_END` in `frontend/src/config.ts`.
+- `DateHeader` accepts optional `minDate` / `maxDate` props; Prev/Next
+  buttons disable at the boundary, the inline DatePicker greys out
+  dates outside the window, and the "Today" button clamps to the
+  nearest bound when today is outside the window.
+- `GamesPage` and `DailyRankingsSection` wire the playoff window into
+  their date controls. `useGamesData` also clamps the initial
+  `selectedDate` so stale `/games/:date` URLs from before the cutover
+  redirect into the current window instead of fetching an empty slate.
+
+### Changed — Pulse
+
+Renamed the "Latest" column on the Tonight hero card and the League
+Live Board to "Today". The value has always been today's running total
+from `v_daily_fantasy_totals`; the old label suggested "last completed
+day" and read as 0 for most of each hockey day.
+
+### Changed — Stanley Cup Odds table
+
+Logos bumped from `w-5 h-5` to `w-10 h-10` (sm+: `w-12 h-12`), row
+padding from `py-2` to `py-3 sm:py-4`, and the team cell text from
+`text-xs` to `text-sm`. On small iOS widths the team column was
+cramped enough that the 20 px logo was the only way to identify a row;
+the larger logo scans faster and the added row height gives it room.
+
 ## v1.20.5 - 2026-04-19 (backend)
 
 ### Changed - Documentation rewrite

@@ -69,9 +69,9 @@ export function StanleyCupOdds({ projections }: StanleyCupOddsProps) {
             return (
               <li
                 key={team.abbrev}
-                className="grid grid-cols-[minmax(0,1fr)_4.5rem_3.5rem_3.5rem_3rem] md:grid-cols-[minmax(0,1fr)_6rem_4rem_4rem_4rem_4rem] items-center gap-2 px-3 py-2 border-b border-[var(--color-divider)] last:border-b-0"
+                className="grid grid-cols-[minmax(0,1fr)_4.5rem_3.5rem_3.5rem_3rem] md:grid-cols-[minmax(0,1fr)_6rem_4rem_4rem_4rem_4rem] items-center gap-2 px-3 py-3 sm:py-4 border-b border-[var(--color-divider)] last:border-b-0"
               >
-                <TeamCell abbrev={team.abbrev} series={series} />
+                <TeamCell abbrev={team.abbrev} />
                 <span className="text-right text-xs text-[var(--color-ink-muted)] tabular-nums">
                   {series
                     ? `${series.wins}-${series.opponentWins} vs ${series.opponentAbbrev}`
@@ -92,22 +92,16 @@ export function StanleyCupOdds({ projections }: StanleyCupOddsProps) {
   );
 }
 
-function TeamCell({
-  abbrev,
-  series,
-}: {
-  abbrev: string;
-  series: TeamSeriesProjection | undefined;
-}) {
+function TeamCell({ abbrev }: { abbrev: string }) {
   return (
-    <div className="flex items-center gap-2 min-w-0">
+    <div className="flex items-center gap-3 min-w-0">
       <img
         src={getNHLTeamLogoUrl(abbrev)}
         alt={abbrev}
-        className="w-5 h-5 flex-shrink-0"
+        className="w-10 h-10 sm:w-12 sm:h-12 flex-shrink-0"
       />
       <div className="min-w-0 flex-1">
-        <p className="text-xs font-bold uppercase tracking-wider truncate text-[#1A1A1A]">
+        <p className="text-sm font-bold uppercase tracking-wider truncate text-[#1A1A1A]">
           <span className="md:hidden">{abbrev}</span>
           <span className="hidden md:inline">{getNHLTeamShortName(abbrev)}</span>
         </p>

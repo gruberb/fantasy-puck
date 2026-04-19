@@ -4,15 +4,26 @@ import RankingTable from "@/components/common/RankingTable";
 import { dailyRankingsColumns } from "@/components/rankingsPageTableColumns/dailysColumns";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
+import { APP_CONFIG } from "@/config";
 import { toLocalDateString, dateStringToLocalDate } from "@/utils/timezone";
 
+function clampToWindow(date: string): string {
+  if (date < APP_CONFIG.PLAYOFF_START) return APP_CONFIG.PLAYOFF_START;
+  if (date > APP_CONFIG.SEASON_END) return APP_CONFIG.SEASON_END;
+  return date;
+}
+
 const DailyRankingsSection = () => {
-  // Local state for the date
+  // Default to yesterday, clamped into the playoff window so the flip
+  // to a new mode doesn't land us on a pre-window date with no data.
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    return toLocalDateString(yesterday);
+    return clampToWindow(toLocalDateString(yesterday));
   });
+
+  const atMinDate = selectedDate <= APP_CONFIG.PLAYOFF_START;
+  const atMaxDate = selectedDate >= APP_CONFIG.SEASON_END;
 
   // Get daily rankings for the selected date
   const {
@@ -58,11 +69,13 @@ const DailyRankingsSection = () => {
           {/* Simple date navigation controls */}
           <button
             onClick={() => {
+              if (atMinDate) return;
               const date = dateStringToLocalDate(selectedDate);
               date.setDate(date.getDate() - 1);
-              setSelectedDate(toLocalDateString(date));
+              setSelectedDate(clampToWindow(toLocalDateString(date)));
             }}
-            className="p-2 bg-gray-100 hover:bg-gray-200 rounded-none"
+            disabled={atMinDate}
+            className="p-2 bg-gray-100 hover:bg-gray-200 rounded-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
           >
             <svg
               className="w-5 h-5"
@@ -90,11 +103,13 @@ const DailyRankingsSection = () => {
 
           <button
             onClick={() => {
+              if (atMaxDate) return;
               const date = dateStringToLocalDate(selectedDate);
               date.setDate(date.getDate() + 1);
-              setSelectedDate(toLocalDateString(date));
+              setSelectedDate(clampToWindow(toLocalDateString(date)));
             }}
-            className="p-2 bg-gray-100 hover:bg-gray-200 rounded-none"
+            disabled={atMaxDate}
+            className="p-2 bg-gray-100 hover:bg-gray-200 rounded-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
           >
             <svg
               className="w-5 h-5"
@@ -115,7 +130,7 @@ const DailyRankingsSection = () => {
             onClick={() => {
               const yesterday = new Date();
               yesterday.setDate(yesterday.getDate() - 1);
-              setSelectedDate(toLocalDateString(yesterday));
+              setSelectedDate(clampToWindow(toLocalDateString(yesterday)));
             }}
             className="text-sm px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-none"
           >

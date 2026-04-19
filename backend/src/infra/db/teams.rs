@@ -332,27 +332,22 @@ impl<'a> TeamDbService<'a> {
     pub async fn get_daily_ranking_stats(
         &self,
         league_id: &str,
+        window: crate::infra::db::DateWindow<'_>,
     ) -> Result<Vec<crate::domain::models::db::TeamDailyRankingStats>> {
-        // Check if the table has any rows for this league
-        let count: Option<i64> =
-            sqlx::query_scalar("SELECT COUNT(*) FROM daily_rankings WHERE league_id = $1::uuid")
-                .bind(league_id)
-                .fetch_optional(self.pool)
-                .await?;
+        // Build a map of team stats keyed by team_id. Teams with zero
+        // in-window rows still render as a row with 0/0 on the Season
+        // Overview, so pre-seed from the authoritative roster list
+        // rather than deriving from the filtered query (which would
+        // drop teams that haven't won or placed top-3 yet).
+        let mut team_stats: HashMap<i64, crate::domain::models::db::TeamDailyRankingStats> =
+            HashMap::new();
 
-        if count.unwrap_or(0) == 0 {
-            return Ok(Vec::new());
-        }
-
-        // Build a map of team stats
-        let mut team_stats: HashMap<i64, crate::domain::models::db::TeamDailyRankingStats> = HashMap::new();
-
-        // First, initialize team stats with team IDs for this league
-        let team_ids: Vec<i64> =
-            sqlx::query_scalar("SELECT DISTINCT team_id FROM daily_rankings WHERE league_id = $1::uuid")
-                .bind(league_id)
-                .fetch_all(self.pool)
-                .await?;
+        let team_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT DISTINCT team_id FROM daily_rankings WHERE league_id = $1::uuid",
+        )
+        .bind(league_id)
+        .fetch_all(self.pool)
+        .await?;
 
         for team_id in team_ids {
             team_stats.insert(
@@ -367,19 +362,15 @@ impl<'a> TeamDbService<'a> {
             );
         }
 
-        // Query to get all daily rankings for this league with a
-        // tie-aware rank. `daily_rankings.rank` is assigned from
-        // enumerate() at write time and breaks ties arbitrarily by
-        // team_id, so two teams tied for first get ranks 1 and 2;
-        // this subquery counts how many teams outscored each row
-        // and adds 1, producing shared ranks for true ties.
+        // Tie-aware rank. `daily_rankings.rank` is written from enumerate()
+        // so two teams tied for first get ranks 1 and 2; this subquery
+        // counts how many teams outscored each row and adds 1, producing
+        // shared ranks on true ties.
         //
-        // The previous version referenced `daily_points`, which does
-        // not exist on this table (the column is `points`). The SQL
-        // errored on every call, silently swallowed by the handler's
-        // `unwrap_or_else(|_| Vec::new())`, so every team rendered
-        // as 0 daily wins + 0 daily top-3 even after the morning
-        // rankings cron had written the rows.
+        // The `min_date` / `max_date` clamps exist because this table is
+        // append-only across seasons and game types — without them the
+        // playoff Season Overview counts regular-season daily wins as
+        // playoff wins. Callers in playoff mode pass `playoff_start()`.
         let daily_rankings = sqlx::query(
             r#"
             SELECT
@@ -395,10 +386,14 @@ impl<'a> TeamDbService<'a> {
                 ) AS true_rank
             FROM daily_rankings r1
             WHERE r1.league_id = $1::uuid
+              AND ($2::text IS NULL OR r1.date >= $2)
+              AND ($3::text IS NULL OR r1.date <= $3)
             ORDER BY r1.date, true_rank
             "#,
         )
         .bind(league_id)
+        .bind(window.min_date)
+        .bind(window.max_date)
         .map(|row: sqlx::postgres::PgRow| {
             (
                 row.get::<String, _>("date"),

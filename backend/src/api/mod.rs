@@ -40,6 +40,21 @@ pub fn game_type() -> u8 { *GAME_TYPE_CELL.get().expect("game_type config not in
 pub fn playoff_start() -> &'static str { PLAYOFF_START_CELL.get().expect("playoff_start config not initialized") }
 pub fn season_end() -> &'static str { SEASON_END_CELL.get().expect("season_end config not initialized") }
 
+/// The date window DB aggregations should clamp to given the current
+/// game-type config. Playoff mode bounds both ends so pre-playoff and
+/// future-dated rows are excluded; other modes return unbounded.
+///
+/// Use this anywhere you aggregate across date-keyed history
+/// (`daily_rankings`, `nhl_player_game_stats`) so a mode flip doesn't
+/// leave old rows visible in the new surface.
+pub fn current_date_window() -> crate::infra::db::DateWindow<'static> {
+    if game_type() == 3 {
+        crate::infra::db::DateWindow::between(playoff_start(), season_end())
+    } else {
+        crate::infra::db::DateWindow::unbounded()
+    }
+}
+
 pub async fn run_server(
     db: FantasyDb,
     nhl_client: NhlClient,

@@ -11,12 +11,18 @@ interface DateHeaderProps {
   selectedDate: string;
   onDateChange: (date: string) => void;
   isFloating?: boolean;
+  /** Inclusive lower bound (YYYY-MM-DD). Disables prev nav + calendar dates before this. */
+  minDate?: string;
+  /** Inclusive upper bound (YYYY-MM-DD). Disables next nav + calendar dates after this. */
+  maxDate?: string;
 }
 
 const DateHeader = ({
   selectedDate,
   onDateChange,
   isFloating = true,
+  minDate,
+  maxDate,
 }: DateHeaderProps) => {
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
@@ -24,6 +30,14 @@ const DateHeader = ({
   const datePickerRef = useRef<HTMLDivElement>(null);
 
   const date = dateStringToLocalDate(selectedDate);
+  const minBound = minDate ? dateStringToLocalDate(minDate) : null;
+  const maxBound = maxDate ? dateStringToLocalDate(maxDate) : null;
+  const atOrBeforeMin = minBound
+    ? date.getTime() <= minBound.getTime()
+    : false;
+  const atOrAfterMax = maxBound
+    ? date.getTime() >= maxBound.getTime()
+    : false;
   const formattedDisplayDate = formatDisplayDate(date, {
     month: "short",
     day: "numeric",
@@ -38,19 +52,29 @@ const DateHeader = ({
   };
 
   const handlePrevDay = () => {
+    if (atOrBeforeMin) return;
     const prevDate = new Date(date);
     prevDate.setDate(date.getDate() - 1);
     onDateChange(toLocalDateString(prevDate));
   };
 
   const handleNextDay = () => {
+    if (atOrAfterMax) return;
     const nextDate = new Date(date);
     nextDate.setDate(date.getDate() + 1);
     onDateChange(toLocalDateString(nextDate));
   };
 
+  // "Today" within the allowed window: clamp to the nearest bound when
+  // the real today is outside (e.g. before playoffs start, or after the
+  // season ends). Without the clamp the button would navigate to an
+  // out-of-window date that then fails the picker's minDate/maxDate.
   const handleToday = () => {
-    onDateChange(toLocalDateString(new Date()));
+    const today = new Date();
+    let target = today;
+    if (minBound && today.getTime() < minBound.getTime()) target = minBound;
+    if (maxBound && today.getTime() > maxBound.getTime()) target = maxBound;
+    onDateChange(toLocalDateString(target));
   };
 
   useEffect(() => {
@@ -89,7 +113,8 @@ const DateHeader = ({
         <div className="flex items-center gap-2" ref={datePickerRef}>
           <button
             onClick={handlePrevDay}
-            className="w-8 h-8 flex items-center justify-center bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] font-bold hover:bg-[#1A1A1A] hover:text-white transition-colors duration-100"
+            disabled={atOrBeforeMin}
+            className="w-8 h-8 flex items-center justify-center bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] font-bold hover:bg-[#1A1A1A] hover:text-white transition-colors duration-100 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-[#1A1A1A]"
             aria-label="Previous day"
           >
             &lt;
@@ -111,6 +136,8 @@ const DateHeader = ({
                 <DatePicker
                   selected={date}
                   onChange={handleDateChange}
+                  minDate={minBound ?? undefined}
+                  maxDate={maxBound ?? undefined}
                   inline
                   showMonthDropdown
                   showYearDropdown
@@ -122,7 +149,8 @@ const DateHeader = ({
 
           <button
             onClick={handleNextDay}
-            className="w-8 h-8 flex items-center justify-center bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] font-bold hover:bg-[#1A1A1A] hover:text-white transition-colors duration-100"
+            disabled={atOrAfterMax}
+            className="w-8 h-8 flex items-center justify-center bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] font-bold hover:bg-[#1A1A1A] hover:text-white transition-colors duration-100 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-[#1A1A1A]"
             aria-label="Next day"
           >
             &gt;

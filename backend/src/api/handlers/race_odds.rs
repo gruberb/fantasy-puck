@@ -27,7 +27,7 @@ use crate::api::dtos::race_odds::{
 use crate::api::handlers::insights::hockey_today;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{game_type, season};
+use crate::api::{current_date_window, game_type, season};
 use crate::error::Result;
 use crate::domain::models::fantasy::FantasyTeamInGame;
 use crate::domain::models::nhl::{PlayoffCarousel, StatsLeaders};
@@ -1153,7 +1153,7 @@ async fn overlay_current_from_mirror(
 
     if !league_id.is_empty() && !response.team_odds.is_empty() {
         let totals = match nhl_mirror::list_league_team_season_totals(
-            pool, league_id, season_val, gt_val,
+            pool, league_id, season_val, gt_val, current_date_window(),
         )
         .await
         {

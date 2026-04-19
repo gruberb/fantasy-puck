@@ -53,7 +53,7 @@ const PulsePage = () => {
               <StatCol label="Rank" value={`#${myTeam.rank}`} />
               <StatCol label="Total" value={myTeam.totalPoints.toString()} />
               <StatCol
-                label="Latest"
+                label="Today"
                 value={myTeam.pointsToday.toString()}
                 accent
               />
@@ -135,10 +135,7 @@ const PulsePage = () => {
               <span>Team</span>
               <span className="text-right">Total</span>
               <span className="text-right">Active</span>
-              <span className="text-right">
-                <span className="sm:hidden">Latest</span>
-                <span className="hidden sm:inline">Latest</span>
-              </span>
+              <span className="text-right">Today</span>
               <span className="text-right hidden sm:block">5-day</span>
             </div>
             {leagueBoard.map((team) => (

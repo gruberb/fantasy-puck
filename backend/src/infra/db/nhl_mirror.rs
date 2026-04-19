@@ -1317,24 +1317,40 @@ pub async fn list_league_team_season_totals(
     league_id: &str,
     season: i32,
     game_type: i16,
+    window: crate::infra::db::DateWindow<'_>,
 ) -> Result<Vec<LeagueTeamSeasonTotalsRow>> {
+    // CASE-gated SUMs: the season/game_type predicates cannot live on
+    // the LEFT JOIN's ON clause alone. A non-matching nhl_games row
+    // would null out `g` but still leave `pgs.points` in scope, so a
+    // plain SUM(pgs.points) would include stats from other game types
+    // or seasons. Same reasoning for the optional date window.
     let rows = sqlx::query_as::<_, LeagueTeamSeasonTotalsRow>(
         r#"
         SELECT
-            ft.id                          AS team_id,
-            ft.name                        AS team_name,
-            COALESCE(SUM(pgs.goals),   0)::bigint AS goals,
-            COALESCE(SUM(pgs.assists), 0)::bigint AS assists,
-            COALESCE(SUM(pgs.points),  0)::bigint AS points
+            ft.id   AS team_id,
+            ft.name AS team_name,
+            COALESCE(SUM(CASE WHEN g.season = $2
+                              AND g.game_type = $3
+                              AND ($4::text IS NULL OR g.game_date::text >= $4)
+                              AND ($5::text IS NULL OR g.game_date::text <= $5)
+                              THEN pgs.goals   ELSE 0 END), 0)::bigint AS goals,
+            COALESCE(SUM(CASE WHEN g.season = $2
+                              AND g.game_type = $3
+                              AND ($4::text IS NULL OR g.game_date::text >= $4)
+                              AND ($5::text IS NULL OR g.game_date::text <= $5)
+                              THEN pgs.assists ELSE 0 END), 0)::bigint AS assists,
+            COALESCE(SUM(CASE WHEN g.season = $2
+                              AND g.game_type = $3
+                              AND ($4::text IS NULL OR g.game_date::text >= $4)
+                              AND ($5::text IS NULL OR g.game_date::text <= $5)
+                              THEN pgs.points  ELSE 0 END), 0)::bigint AS points
         FROM fantasy_teams ft
         LEFT JOIN fantasy_players fp
                ON fp.team_id = ft.id
         LEFT JOIN nhl_player_game_stats pgs
                ON pgs.player_id = fp.nhl_id
         LEFT JOIN nhl_games g
-               ON g.game_id   = pgs.game_id
-              AND g.season    = $2
-              AND g.game_type = $3
+               ON g.game_id = pgs.game_id
         WHERE ft.league_id = $1::uuid
         GROUP BY ft.id, ft.name
         ORDER BY points DESC, ft.name
@@ -1343,6 +1359,8 @@ pub async fn list_league_team_season_totals(
     .bind(league_id)
     .bind(season)
     .bind(game_type)
+    .bind(window.min_date)
+    .bind(window.max_date)
     .fetch_all(pool)
     .await
     .map_err(Error::Database)?;

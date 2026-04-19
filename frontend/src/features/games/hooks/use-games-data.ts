@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api/client";
-import { QUERY_INTERVALS } from "@/config";
+import { APP_CONFIG, QUERY_INTERVALS } from "@/config";
 import { useLeague } from "@/contexts/LeagueContext";
 import {
   getFixedAnalysisDateString,
@@ -10,6 +10,15 @@ import {
   isSameLocalDay,
 } from "@/utils/timezone";
 import { getTeamPrimaryColor } from "@/utils/teamStyles";
+
+// Clamp a YYYY-MM-DD string into the configured playoff window. Bookmarks
+// and back-button history can otherwise reopen the page on a date outside
+// the current mode's bounds, which then fetches an empty slate.
+function clampToWindow(date: string): string {
+  if (date < APP_CONFIG.PLAYOFF_START) return APP_CONFIG.PLAYOFF_START;
+  if (date > APP_CONFIG.SEASON_END) return APP_CONFIG.SEASON_END;
+  return date;
+}
 
 export function useGamesData(dateParam?: string) {
   const navigate = useNavigate();
@@ -22,8 +31,8 @@ export function useGamesData(dateParam?: string) {
   };
 
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    if (dateParam && isValidDate(dateParam)) return dateParam;
-    return getFixedAnalysisDateString();
+    if (dateParam && isValidDate(dateParam)) return clampToWindow(dateParam);
+    return clampToWindow(getFixedAnalysisDateString());
   });
 
   const [expandedGames, setExpandedGames] = useState<Set<number>>(new Set());

@@ -3,6 +3,7 @@ import DateHeader from "@/components/common/DateHeader";
 import GameCard from "@/components/games/GameCard";
 import LoadingSpinner from "@/components/common/LoadingSpinner";
 import ErrorMessage from "@/components/common/ErrorMessage";
+import { APP_CONFIG } from "@/config";
 import { useGamesData } from "@/features/games";
 
 const GamesPage = () => {
@@ -35,6 +36,8 @@ const GamesPage = () => {
         selectedDate={selectedDate}
         onDateChange={updateSelectedDate}
         isFloating={true}
+        minDate={APP_CONFIG.PLAYOFF_START}
+        maxDate={APP_CONFIG.SEASON_END}
       />
 
       {gamesLoading ? (

@@ -9,9 +9,10 @@ use axum::{
 use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{game_type, season};
+use crate::api::{game_type, playoff_start, season};
 use crate::error::Result;
 use crate::domain::models::db::FantasyTeamWithPlayers;
+use crate::infra::db::DateWindow;
 
 pub async fn get_team_stats(
     State(state): State<Arc<AppState>>,
@@ -43,13 +44,18 @@ pub async fn get_team_stats(
         stats.clone(),
     );
 
-    // 4. Get daily rankings history (if available). Log before
-    // falling back to empty — the previous silent swallow hid a
-    // long-standing SQL typo (`daily_points` vs `points`) that
-    // zeroed out this column on every render.
+    // `daily_rankings` is append-only across seasons and game types, so
+    // playoff Season Overview must clamp to `playoff_start()` or it
+    // counts regular-season daily wins as playoff wins.
+    let window = if game_type() == 3 {
+        DateWindow::since(playoff_start())
+    } else {
+        DateWindow::unbounded()
+    };
+
     let daily_rankings = state
         .db
-        .get_daily_ranking_stats(league_id)
+        .get_daily_ranking_stats(league_id, window)
         .await
         .unwrap_or_else(|e| {
             tracing::warn!(

@@ -26,7 +26,7 @@ use tracing::warn;
 use crate::api::dtos::pulse::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{game_type, season};
+use crate::api::{current_date_window, game_type, season};
 use crate::auth::middleware::AuthUser;
 use crate::domain::models::fantasy::{FantasyTeamInGame, PlayerInGame};
 use crate::domain::models::nhl::{GameState, SeriesStatus};
@@ -287,6 +287,7 @@ async fn build_league_board(
         league_id,
         season() as i32,
         game_type() as i16,
+        current_date_window(),
     )
     .await?;
     let totals_by_team: HashMap<i64, i32> =

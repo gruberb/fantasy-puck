@@ -17,7 +17,7 @@ use crate::api::dtos::*;
 use crate::api::dtos::conversion::IntoResponse;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{game_type, season};
+use crate::api::{current_date_window, game_type, season};
 use crate::domain::models::db::FantasyTeamWithPlayers;
 use crate::domain::models::fantasy::TeamRanking;
 use crate::domain::models::nhl::PlayoffCarousel;
@@ -49,6 +49,7 @@ pub async fn get_rankings(
         league_id,
         season() as i32,
         game_type() as i16,
+        current_date_window(),
     )
     .await?;
 
@@ -124,6 +125,7 @@ pub async fn get_playoff_rankings(
         league_id,
         season() as i32,
         game_type() as i16,
+        current_date_window(),
     )
     .await?;
     let base_by_team: HashMap<i64, i32> = base_totals

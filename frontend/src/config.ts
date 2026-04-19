@@ -30,6 +30,12 @@ const GAME_TYPE_LABELS: Record<number, string> = {
 const DEFAULT_SEASON = import.meta.env.VITE_NHL_SEASON || "20252026";
 const DEFAULT_GAME_TYPE = Number(import.meta.env.VITE_NHL_GAME_TYPE) || 3;
 const GAME_TYPE_LABEL = GAME_TYPE_LABELS[DEFAULT_GAME_TYPE] ?? "Playoffs";
+// Mirror the backend `NHL_PLAYOFF_START` / `NHL_SEASON_END` env vars.
+// Any page that lets the user pick a date (Games, Daily Rankings) clamps
+// to this window so the flip to playoffs doesn't expose regular-season
+// dates in the picker.
+const PLAYOFF_START = import.meta.env.VITE_NHL_PLAYOFF_START || "2026-04-18";
+const SEASON_END = import.meta.env.VITE_NHL_SEASON_END || "2026-06-15";
 
 function formatSeason(s: string): string {
   return s.length === 8 ? `${s.slice(0, 4)}/${s.slice(4)}` : s;
@@ -48,6 +54,8 @@ export const APP_CONFIG = {
   FORM_GAMES: 5,
   SKATERS_LIMIT: 1000,
   HOME_SKATERS_LIMIT: 10,
+  PLAYOFF_START,
+  SEASON_END,
 };
 
 // React Query staleTime / refetch intervals, in milliseconds.
