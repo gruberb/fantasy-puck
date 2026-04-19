@@ -1311,3 +1311,39 @@ pub fn is_stale(
         }
     }
 }
+
+/// Sum points per player from `nhl_player_game_stats` for the given
+/// (season, game_type). Returns a map keyed by nhl_id — zero-point
+/// players are omitted, so callers treat a missing key as "0
+/// points in this phase". Unlike the NHL stats-leaders endpoint
+/// this counts every scorer, not just the top 25 per category —
+/// fixes the same depth-scorer undercount that was biting
+/// get_rankings before the earlier switch.
+pub async fn sum_player_points(
+    pool: &PgPool,
+    player_ids: &[i64],
+    season: i32,
+    game_type: i16,
+) -> Result<std::collections::HashMap<i64, i32>> {
+    if player_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows: Vec<(i64, i64)> = sqlx::query_as(
+        r#"
+        SELECT pgs.player_id, COALESCE(SUM(pgs.points), 0)::bigint AS points
+          FROM nhl_player_game_stats pgs
+          JOIN nhl_games g ON g.game_id = pgs.game_id
+         WHERE pgs.player_id = ANY($1)
+           AND g.season      = $2
+           AND g.game_type   = $3
+         GROUP BY pgs.player_id
+        "#,
+    )
+    .bind(player_ids)
+    .bind(season)
+    .bind(game_type)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows.into_iter().map(|(id, p)| (id, p as i32)).collect())
+}

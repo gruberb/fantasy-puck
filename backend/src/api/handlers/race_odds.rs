@@ -37,6 +37,7 @@ use crate::domain::prediction::race_sim::{
     SimPlayer, TeamOdds, TeamRating, DEFAULT_K_FACTOR, DEFAULT_PPG, DEFAULT_TRIALS,
 };
 use crate::domain::prediction::team_ratings;
+use crate::infra::db::nhl_mirror;
 use crate::infra::prediction::{compute_current_elo, project_players};
 
 /// Logistic scale applied when the input ratings are on the Elo scale
@@ -83,14 +84,15 @@ pub async fn generate_and_cache_race_odds(
     my_team_id: Option<i64>,
 ) -> Result<RaceOddsResponse> {
     let today = hockey_today();
-    // Model version in the cache key: v3 reflects v1.14 + v1.15 + v1.16
-    // (shot-stabilised rate projection, TOI usage multiplier, goalie
-    // strength component, round-depth mean reversion, and the
-    // 0.7 production shrinkage on Elo seeding). Bump when the
-    // projection model changes so a deploy doesn't serve stale
-    // same-day odds under the old model.
+    // Model version in the cache key: v4 replaces the skater-stats
+    // leaderboard source for `playoff_points_so_far` (which only
+    // returned the top 25 per category and undercounted every
+    // depth scorer) with `nhl_mirror::sum_player_points`, which
+    // sums over the full per-game mirror. Bump when the projection
+    // model changes so a deploy doesn't serve stale same-day odds
+    // under the old model.
     let cache_key = format!(
-        "race_odds:v3:{}:{}:{}:{}",
+        "race_odds:v4:{}:{}:{}:{}",
         if league_id.is_empty() { "global" } else { league_id },
         season(),
         game_type(),
@@ -255,6 +257,25 @@ async fn build_league_input(
     )
     .await;
 
+    // Points-so-far comes from the per-game mirror, not the NHL
+    // stats-leaders leaderboard. See `playoff_points_for` for the
+    // full rationale; TL;DR the leaderboard drops every scorer
+    // outside the top 25 of each category, which made the
+    // "Current" column on Race Odds read 0 for teams whose
+    // depth skaters were actually on the board.
+    let all_player_ids: Vec<i64> = teams
+        .iter()
+        .flat_map(|t| t.players.iter().map(|p| p.nhl_id))
+        .collect();
+    let points_by_player = nhl_mirror::sum_player_points(
+        state.db.pool(),
+        &all_player_ids,
+        season_val as i32,
+        game_type_val as i16,
+    )
+    .await
+    .unwrap_or_default();
+
     let fantasy_teams = if is_playoffs {
         build_fantasy_teams_playoff(
             &state.db,
@@ -263,6 +284,7 @@ async fn build_league_input(
             playoff_stats.as_ref(),
             regular_stats.as_ref(),
             &games_played_so_far,
+            &points_by_player,
         )
         .await?
     } else {
@@ -274,6 +296,7 @@ async fn build_league_input(
                     playoff_stats.as_ref(),
                     regular_stats.as_ref(),
                     &games_played_so_far,
+                    &points_by_player,
                 )
             })
             .collect()
@@ -400,6 +423,7 @@ async fn build_fantasy_teams_playoff(
     playoff_stats: Option<&StatsLeaders>,
     regular_stats: Option<&StatsLeaders>,
     games_played_so_far: &HashMap<String, u32>,
+    points_by_player: &HashMap<i64, i32>,
 ) -> Result<Vec<SimFantasyTeam>> {
     // Flatten rostered players across all fantasy teams into one input
     // list, deduped by nhl_id. Goalies are skipped here to match the
@@ -449,7 +473,11 @@ async fn build_fantasy_teams_playoff(
                         name: p.player_name.clone(),
                         nhl_team: p.nhl_team.clone(),
                         position: p.position.clone(),
-                        playoff_points_so_far: playoff_points_for(playoff_stats, p.nhl_id),
+                        playoff_points_so_far: playoff_points_for(
+                            points_by_player,
+                            playoff_stats,
+                            p.nhl_id,
+                        ),
                         ppg,
                         image_url: None,
                     }
@@ -514,6 +542,19 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
     leaders.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
     leaders.truncate(40);
 
+    // Mirror-backed points map for the top-40, same rationale as
+    // the league path: the stats-leaders leaderboard tops out at
+    // 25 per category.
+    let leader_ids: Vec<i64> = leaders.iter().map(|p| p.id as i64).collect();
+    let points_by_player = nhl_mirror::sum_player_points(
+        state.db.pool(),
+        &leader_ids,
+        season_val as i32,
+        game_type_val as i16,
+    )
+    .await
+    .unwrap_or_default();
+
     // Playoff path: batch-project all 40 leaders through the Bayesian
     // blend. Off-playoff path retains the legacy `player_ppg` fallback.
     let projections: HashMap<i64, Projection> = if is_playoffs {
@@ -544,7 +585,8 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
                 p.first_name.get("default").cloned().unwrap_or_default(),
                 p.last_name.get("default").cloned().unwrap_or_default(),
             );
-            let playoff_points_so_far = playoff_points_for(playoff_stats.as_ref(), nhl_id);
+            let playoff_points_so_far =
+                playoff_points_for(&points_by_player, playoff_stats.as_ref(), nhl_id);
             let ppg = if is_playoffs {
                 projections
                     .get(&nhl_id)
@@ -687,6 +729,7 @@ fn fantasy_team_to_sim(
     playoff_stats: Option<&StatsLeaders>,
     regular_stats: Option<&StatsLeaders>,
     games_played_so_far: &HashMap<String, u32>,
+    points_by_player: &HashMap<i64, i32>,
 ) -> SimFantasyTeam {
     // Dedupe by nhl_id in case a team lists the same player twice.
     let mut seen: HashSet<i64> = HashSet::new();
@@ -700,7 +743,11 @@ fn fantasy_team_to_sim(
             name: p.player_name.clone(),
             nhl_team: p.nhl_team.clone(),
             position: p.position.clone(),
-            playoff_points_so_far: playoff_points_for(playoff_stats, p.nhl_id),
+            playoff_points_so_far: playoff_points_for(
+                points_by_player,
+                playoff_stats,
+                p.nhl_id,
+            ),
             ppg: player_ppg(
                 p.nhl_id,
                 &p.nhl_team,
@@ -719,8 +766,21 @@ fn fantasy_team_to_sim(
     }
 }
 
-fn playoff_points_for(stats: Option<&StatsLeaders>, nhl_id: i64) -> i32 {
-    let Some(s) = stats else { return 0 };
+/// Look up a player's playoff points so far from the mirror-derived
+/// map (sum over `nhl_player_game_stats`). Falls back to the NHL
+/// skater leaderboard for any player not present in the mirror —
+/// which happens early in the playoffs when a rostered depth
+/// player hasn't taken an ice shift yet and
+/// `nhl_player_game_stats` has no row for them.
+fn playoff_points_for(
+    map: &HashMap<i64, i32>,
+    leaderboard: Option<&StatsLeaders>,
+    nhl_id: i64,
+) -> i32 {
+    if let Some(&p) = map.get(&nhl_id) {
+        return p;
+    }
+    let Some(s) = leaderboard else { return 0 };
     s.points
         .iter()
         .find(|p| p.id as i64 == nhl_id)
