@@ -933,7 +933,7 @@ pub async fn list_games_for_date(pool: &PgPool, date: &str) -> Result<Vec<NhlGam
 }
 
 /// Row shape for per-player per-game stats that handlers render.
-#[derive(Debug, FromRow)]
+#[derive(Debug, Clone, FromRow)]
 pub struct PlayerGameStatRow {
     pub game_id: i64,
     pub player_id: i64,
