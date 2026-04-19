@@ -4,6 +4,12 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.20.4 — 2026-04-19 (backend)
+
+### Fixed
+
+- `/api/insights` returned a 500 for every request after the v1.20.3 deploy. `RosteredPlayerTag` gained a required `fantasy_team_id` field, but cached payloads written before the deploy lacked it and `serde_json::from_str` failed on every read. `CacheService::get_cached_response` now treats deserialize failures as a cache miss (warn log, return `None`) so the caller regenerates and overwrites the stale row. Self-heals any future DTO schema drift the same way.
+
 ## v1.20.3 — 2026-04-19 (backend) / v1.13.3 (frontend)
 
 ### Changed — Insights "What to Watch" deep-linking

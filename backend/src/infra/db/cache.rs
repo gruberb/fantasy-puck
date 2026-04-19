@@ -3,6 +3,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sqlx::postgres::PgPool;
 use sqlx::Row;
+use tracing::warn;
 
 use crate::error::{Error, Result};
 
@@ -35,11 +36,22 @@ impl CacheService {
                 .try_get(0)
                 .map_err(|e| Error::Internal(format!("Failed to read data from cache: {}", e)))?;
 
-            let response: T = serde_json::from_str(&data).map_err(|e| {
-                Error::Internal(format!("Failed to deserialize cached data: {}", e))
-            })?;
-
-            Ok(Some(response))
+            // Treat deserialize failures as a cache miss. This self-heals
+            // schema drift: when a DTO gains a new field (or changes shape),
+            // stale rows from before the deploy can't match the new type —
+            // returning None lets the caller regenerate and overwrite the
+            // row with a fresh payload instead of 500ing every request.
+            match serde_json::from_str::<T>(&data) {
+                Ok(response) => Ok(Some(response)),
+                Err(e) => {
+                    warn!(
+                        cache_key = %cache_key,
+                        error = %e,
+                        "Cached payload failed to deserialize; treating as miss"
+                    );
+                    Ok(None)
+                }
+            }
         } else {
             Ok(None)
         }
