@@ -90,7 +90,10 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("database migration failed: {}", e))?;
     info!("Database migrations up to date");
 
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Utc::now()
+        .with_timezone(&chrono_tz::America::New_York)
+        .format("%Y-%m-%d")
+        .to_string();
 
     // Initialize the rankings scheduler
     init_rankings_scheduler(Arc::new(db.clone()), Arc::new(nhl_client.clone())).await?;

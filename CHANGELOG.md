@@ -4,6 +4,33 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.21.11 — 2026-04-19 (backend)
+
+### Fixed — Live Rankings "TODAY" column zeroed after midnight UTC
+
+The pulse handler reads `points_today` from the last entry of each
+team's live sparkline. That sparkline is built by
+`get_team_sparklines_with_live`, which was computing its "today"
+edge via `Utc::now().date_naive()` — so at 00:12 UTC on Apr 20 it
+asked the live view for Apr 20 rows and got nothing, zero-padded
+the rightmost slot, and reported `points_today = 0` for every team
+even though the Apr 19 ET slate had finals and live games on the
+board. The companion frontend fix in v1.17.5 got the *right day's*
+schedule showing; this gets its scoring totals back.
+
+`v_daily_fantasy_totals.date` is keyed on `nhl_games.game_date`,
+which is already ET-anchored by the schedule ingest, so the
+correction is a one-line switch to
+`Utc::now().with_timezone(&America::New_York).date_naive()` — the
+pattern `hockey_today()` and the meta-poller already use.
+
+Two adjacent consistency fixes while in the area:
+`insights::build_todays_signals` used UTC in its date-parse fallback
+path; `main.rs` startup uses UTC to gate the initial backfill
+against the playoff window. Neither caused a user-visible bug at
+the current schedule (both sit well inside the UTC/ET-agree window
+or never fire) but both now match the ET rule.
+
 ## v1.17.5 — 2026-04-19 (frontend)
 
 ### Fixed — Dashboard and Games page now anchor "today" to Eastern Time

@@ -451,7 +451,15 @@ impl<'a> TeamDbService<'a> {
         // box. `min_date` still clamps the SQL read (we don't want to
         // scan pre-playoff daily_rankings) but the returned vector is
         // always zero-padded to `days` entries at the older edge.
-        let today = chrono::Utc::now().date_naive();
+        //
+        // "Today" is the Eastern-Time calendar date: `nhl_games.game_date`
+        // (the `date` column in `v_daily_fantasy_totals`) is ET-anchored
+        // by the schedule ingest, so asking for the UTC date at 00:12 UTC
+        // would return an empty window for the current ET game night and
+        // zero-pad `points_today` to 0 for every team.
+        let today = chrono::Utc::now()
+            .with_timezone(&chrono_tz::America::New_York)
+            .date_naive();
         let window_start = today - chrono::Duration::days((days - 1).max(0) as i64);
         let min_date_parsed = chrono::NaiveDate::parse_from_str(min_date, "%Y-%m-%d").ok();
         let sql_since = match min_date_parsed {

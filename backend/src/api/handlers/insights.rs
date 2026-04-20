@@ -474,7 +474,11 @@ async fn compute_todays_games(
 
     let yesterday = {
         let date = chrono::NaiveDate::parse_from_str(hockey_today, "%Y-%m-%d")
-            .unwrap_or_else(|_| Utc::now().date_naive());
+            .unwrap_or_else(|_| {
+                Utc::now()
+                    .with_timezone(&chrono_tz::America::New_York)
+                    .date_naive()
+            });
         (date - chrono::Duration::days(1)).format("%Y-%m-%d").to_string()
     };
 
