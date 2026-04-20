@@ -83,6 +83,14 @@ When the server reports no live games, `false` tells React Query to stop polling
 
 `useRankingsData` does the same thing but keys off "am I viewing today's date": if yes, poll at 30 s; if no, historical dates are frozen snapshots and a poll is wasted ([`use-rankings-data.ts:25-42`](../frontend/src/features/rankings/hooks/use-rankings-data.ts)).
 
+## Hockey date convention
+
+The NHL keys its schedule in Eastern Time, and so do we. Backend `hockey_today()` returns the ET calendar date (see [04-nhl-integration.md §Today's schedule](./04-nhl-integration.md)), and every date-scoped endpoint - games, pulse, rankings, race-odds, insights - is keyed against it. The frontend MUST match: if the client and server disagree about what "today" is, a London viewer at 03:00 BST (= 22:00 ET previous day) sees tomorrow's empty slate while the current ET game night is still live.
+
+Use [`getHockeyDateToday()` / `getHockeyDateYesterday()`](../frontend/src/utils/timezone.ts) for any "today" or "yesterday" derivation. Both format `new Date()` through `Intl.DateTimeFormat` pinned to `America/New_York` and return `YYYY-MM-DD`. Never reach for `new Date().toISOString().slice(0, 10)` (that's UTC) or `toLocaleDateString("en-CA")` (that's the browser's timezone).
+
+The sibling helper `toLocalDateString(date)` is kept for date-picker round-tripping only: a `<DateHeader>` / calendar widget hands back a `Date` pinned to local midnight of the user-chosen day, and `toLocalDateString` turns it back into `YYYY-MM-DD`. Do not use it to derive "today."
+
 ## Draft WebSocket
 
 File: [`frontend/src/features/draft/hooks/use-draft-session.ts`](../frontend/src/features/draft/hooks/use-draft-session.ts).

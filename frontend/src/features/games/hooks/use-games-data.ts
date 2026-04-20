@@ -4,11 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/api/client";
 import { APP_CONFIG, QUERY_INTERVALS } from "@/config";
 import { useLeague } from "@/contexts/LeagueContext";
-import {
-  getFixedAnalysisDateString,
-  dateStringToLocalDate,
-  isSameLocalDay,
-} from "@/utils/timezone";
+import { getHockeyDateToday } from "@/utils/timezone";
 import { getTeamPrimaryColor } from "@/utils/teamStyles";
 
 // Clamp a YYYY-MM-DD string into the configured playoff window. Bookmarks
@@ -32,7 +28,7 @@ export function useGamesData(dateParam?: string) {
 
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     if (dateParam && isValidDate(dateParam)) return clampToWindow(dateParam);
-    return clampToWindow(getFixedAnalysisDateString());
+    return clampToWindow(getHockeyDateToday());
   });
 
   const [expandedGames, setExpandedGames] = useState<Set<number>>(new Set());
@@ -83,10 +79,7 @@ export function useGamesData(dateParam?: string) {
       return state === "LIVE" || state === "CRIT";
     }) ?? false;
 
-  const isTodaySelected = isSameLocalDay(
-    dateStringToLocalDate(selectedDate),
-    new Date(),
-  );
+  const isTodaySelected = selectedDate === getHockeyDateToday();
 
   return {
     selectedDate,

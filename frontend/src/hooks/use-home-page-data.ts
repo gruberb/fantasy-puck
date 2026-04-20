@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { APP_CONFIG } from "@/config";
-import { getMostRecentRankingsDate, dateStringToLocalDate } from "@/utils/timezone";
+import { getHockeyDateYesterday, dateStringToLocalDate } from "@/utils/timezone";
 
 export function useHomePageData(leagueId: string | null) {
   // Yesterday's date for rankings — rankings table is populated
   // post-completion, so today returns empty during live slates.
-  const analysisDateString = getMostRecentRankingsDate();
+  const analysisDateString = getHockeyDateYesterday();
   const analysisDate = dateStringToLocalDate(analysisDateString);
 
   const enabled = !!leagueId;

@@ -7,6 +7,7 @@ import {
   formatDisplayDate,
   toLocalDateString,
   dateStringToLocalDate,
+  getHockeyDateYesterday,
 } from "@/utils/timezone";
 
 interface RankingTableHeaderProps {
@@ -87,9 +88,7 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
   // Handle going to yesterday
   const handleYesterday = () => {
     if (onDateChange) {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      onDateChange(toLocalDateString(yesterday));
+      onDateChange(getHockeyDateYesterday());
     }
   };
 

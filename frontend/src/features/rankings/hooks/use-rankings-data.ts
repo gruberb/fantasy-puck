@@ -3,16 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { QUERY_INTERVALS } from "@/config";
 import {
-  getMostRecentRankingsDate,
+  getHockeyDateToday,
+  getHockeyDateYesterday,
   dateStringToLocalDate,
-  isSameLocalDay,
 } from "@/utils/timezone";
 import { PlayoffFantasyTeamRanking } from "@/types/rankings";
 import { TeamStats } from "@/types/teamStats";
 
 export function useRankingsData(leagueId: string | null) {
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    return getMostRecentRankingsDate();
+    return getHockeyDateYesterday();
   });
 
   const enabled = !!leagueId;
@@ -22,10 +22,7 @@ export function useRankingsData(leagueId: string | null) {
   // writes hit `v_daily_fantasy_totals` within 60 s, so matching the
   // cadence here picks up live in-game points without a manual
   // refresh. Historical dates are pure DB snapshots; no need to poll.
-  const isViewingToday = isSameLocalDay(
-    dateStringToLocalDate(selectedDate),
-    new Date(),
-  );
+  const isViewingToday = selectedDate === getHockeyDateToday();
 
   const {
     data: dailyRankings,

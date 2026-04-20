@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { getFixedAnalysisDateString } from "@/utils/timezone";
+import { getHockeyDateToday } from "@/utils/timezone";
 import { useLeague } from "@/contexts/LeagueContext";
 
 /**
@@ -27,7 +27,7 @@ export default function ActionButtons() {
     },
     {
       label: "Today's Games",
-      to: `/games/${getFixedAnalysisDateString()}`,
+      to: `/games/${getHockeyDateToday()}`,
       color: "#16A34A",
     },
     {

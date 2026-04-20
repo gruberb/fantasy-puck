@@ -4,6 +4,7 @@ import DateHeader from "@/components/common/DateHeader";
 import GameCard from "@/components/games/GameCard";
 import { APP_CONFIG } from "@/config";
 import { useGamesData } from "@/features/games";
+import { dateStringToLocalDate, formatDisplayDate } from "@/utils/timezone";
 
 const GamesPage = () => {
   const { date: dateParam } = useParams<{ date?: string }>();
@@ -21,12 +22,11 @@ const GamesPage = () => {
     getTeamPrimaryColor,
   } = useGamesData(dateParam);
 
-  const formattedDate = new Date(selectedDate).toLocaleDateString("en-US", {
+  const formattedDate = formatDisplayDate(dateStringToLocalDate(selectedDate), {
     weekday: "long",
     month: "short",
     day: "numeric",
     year: "numeric",
-    timeZone: "UTC",
   });
 
   return (

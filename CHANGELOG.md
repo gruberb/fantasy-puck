@@ -4,6 +4,29 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.17.5 — 2026-04-19 (frontend)
+
+### Fixed — Dashboard and Games page now anchor "today" to Eastern Time
+
+The dashboard's Live Rankings banner and the Games page both rolled
+forward to the next day's slate the moment UTC (or the viewer's local
+clock) crossed midnight, even while that night's NHL games were still
+in flight. The backend already keys its schedule on the ET calendar
+date via `hockey_today()`, matching how NHL.com and the league itself
+define a "game day"; the frontend was deriving "today" from UTC
+(`Live Rankings` link) or from the browser's local timezone (Games
+page default, "Today's Games" nav link, "Today"/"Yesterday" buttons),
+so the two drifted apart as soon as ET and UTC/browser-local fell on
+different calendar days.
+
+`getHockeyDateToday()` and `getHockeyDateYesterday()` now format
+through `Intl.DateTimeFormat` pinned to `America/New_York`. Every
+"today" / "yesterday" derivation across the dashboard, nav bar,
+Games page, Daily Rankings, Admin panels, and the rankings hooks
+routes through them. A viewer in Halifax at 21:12 ADT or in London
+at 03:00 BST now sees the same Apr 19 slate — and the same Live
+Rankings leaderboard — as a viewer in Toronto.
+
 ## v1.17.4 — 2026-04-19 (frontend)
 
 ### Fixed — Live Rankings rendered upside-down

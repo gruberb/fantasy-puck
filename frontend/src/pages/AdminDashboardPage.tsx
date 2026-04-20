@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
 import { APP_CONFIG } from "@/config";
 import { formatSeason } from "@/utils/format";
+import { getHockeyDateToday } from "@/utils/timezone";
 import { useLeagues } from "@/features/draft";
 import {
   AdminActionCard,
@@ -33,7 +34,7 @@ const AdminDashboardPage = () => {
 
 function AdminDashboardInner({ userId }: { userId: string }) {
   const { leagues, loading: leaguesLoading } = useLeagues(userId, true);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getHockeyDateToday();
 
   return (
     <div className="space-y-8">

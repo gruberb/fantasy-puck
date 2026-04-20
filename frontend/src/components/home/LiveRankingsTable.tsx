@@ -6,6 +6,7 @@ import {
   type LiveRankingRow,
 } from "@/components/rankingsPageTableColumns/liveColumns";
 import type { PulseResponse } from "@/features/pulse/types";
+import { getHockeyDateToday } from "@/utils/timezone";
 
 /**
  * Appears at the top of the dashboard only while games are in flight
@@ -29,7 +30,7 @@ export function LiveRankingsTable() {
   // surface; we'd rather omit it than flash an empty frame.
   if (isLoading || !pulse || !pulse.hasLiveGames) return null;
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getHockeyDateToday();
   const rosterByTeam = buildRosterIndex(pulse);
   const rows = buildRows(pulse, rosterByTeam);
 

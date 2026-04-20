@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { getFixedAnalysisDateString } from "@/utils/timezone";
+import { getHockeyDateToday } from "@/utils/timezone";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLeague } from "@/contexts/LeagueContext";
 import { APP_CONFIG } from "@/config";
@@ -150,7 +150,7 @@ const NavBar = () => {
               </NavLink>
             )}
             <NavLink
-              to={`/games/${getFixedAnalysisDateString()}`}
+              to={`/games/${getHockeyDateToday()}`}
               className={({ isActive }) =>
                 isActive || isGamesRouteActive()
                   ? activeLinkClass
@@ -421,7 +421,7 @@ const NavBar = () => {
             )}
 
             <NavLink
-              to={`/games/${getFixedAnalysisDateString()}`}
+              to={`/games/${getHockeyDateToday()}`}
               onClick={() => setMobileOpen(false)}
               className={({ isActive }) =>
                 isActive || isGamesRouteActive()

@@ -5,6 +5,7 @@ import {
   toLocalDateString,
   dateStringToLocalDate,
   formatDisplayDate,
+  getHockeyDateToday,
 } from "@/utils/timezone";
 
 interface DateHeaderProps {
@@ -69,12 +70,13 @@ const DateHeader = ({
   // the real today is outside (e.g. before playoffs start, or after the
   // season ends). Without the clamp the button would navigate to an
   // out-of-window date that then fails the picker's minDate/maxDate.
+  // "Today" is the Eastern-Time calendar date (the NHL's schedule key);
+  // YYYY-MM-DD strings compare lexicographically, so string-clamp is safe.
   const handleToday = () => {
-    const today = new Date();
-    let target = today;
-    if (minBound && today.getTime() < minBound.getTime()) target = minBound;
-    if (maxBound && today.getTime() > maxBound.getTime()) target = maxBound;
-    onDateChange(toLocalDateString(target));
+    let target = getHockeyDateToday();
+    if (minDate && target < minDate) target = minDate;
+    if (maxDate && target > maxDate) target = maxDate;
+    onDateChange(target);
   };
 
   useEffect(() => {

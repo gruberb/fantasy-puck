@@ -5,7 +5,11 @@ import { dailyRankingsColumns } from "@/components/rankingsPageTableColumns/dail
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { APP_CONFIG } from "@/config";
-import { toLocalDateString, dateStringToLocalDate } from "@/utils/timezone";
+import {
+  toLocalDateString,
+  dateStringToLocalDate,
+  getHockeyDateYesterday,
+} from "@/utils/timezone";
 
 function clampToWindow(date: string): string {
   if (date < APP_CONFIG.PLAYOFF_START) return APP_CONFIG.PLAYOFF_START;
@@ -17,9 +21,7 @@ const DailyRankingsSection = () => {
   // Default to yesterday, clamped into the playoff window so the flip
   // to a new mode doesn't land us on a pre-window date with no data.
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    return clampToWindow(toLocalDateString(yesterday));
+    return clampToWindow(getHockeyDateYesterday());
   });
 
   const atMinDate = selectedDate <= APP_CONFIG.PLAYOFF_START;
@@ -128,9 +130,7 @@ const DailyRankingsSection = () => {
 
           <button
             onClick={() => {
-              const yesterday = new Date();
-              yesterday.setDate(yesterday.getDate() - 1);
-              setSelectedDate(clampToWindow(toLocalDateString(yesterday)));
+              setSelectedDate(clampToWindow(getHockeyDateYesterday()));
             }}
             className="text-sm px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-none"
           >
