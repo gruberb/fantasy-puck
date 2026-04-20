@@ -49,8 +49,14 @@ export const APP_CONFIG = {
   GAME_TYPE_LABEL,
   // e.g. "2025/2026 Playoffs"
   SEASON_LABEL: `${formatSeason(DEFAULT_SEASON)} ${GAME_TYPE_LABEL}`,
-  // e.g. "NHL 2026" (last four digits of the season)
-  BRAND_LABEL: `NHL ${DEFAULT_SEASON.slice(4)}`,
+  // e.g. "NHL Playoffs 2026" in game_type=3, "NHL 2026" otherwise. The
+  // game-type affix is what `/stats` used to carry as a yellow date
+  // badge on every table; moving it into the brand header removes the
+  // redundant badge without losing the context.
+  BRAND_LABEL:
+    DEFAULT_GAME_TYPE === 3
+      ? `NHL ${GAME_TYPE_LABEL} ${DEFAULT_SEASON.slice(4)}`
+      : `NHL ${DEFAULT_SEASON.slice(4)}`,
   FORM_GAMES: 5,
   SKATERS_LIMIT: 1000,
   HOME_SKATERS_LIMIT: 10,

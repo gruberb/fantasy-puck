@@ -52,4 +52,10 @@ export interface RankingTableProps {
   showDatePicker?: boolean;
   selectedDate?: string;
   onDateChange?: (date: string) => void;
+  /** Inclusive lower bound for the date picker (YYYY-MM-DD). Disables
+   *  prev-day nav + calendar days before this. */
+  minDate?: string;
+  /** Inclusive upper bound for the date picker (YYYY-MM-DD). Disables
+   *  next-day nav + calendar days after this. */
+  maxDate?: string;
 }

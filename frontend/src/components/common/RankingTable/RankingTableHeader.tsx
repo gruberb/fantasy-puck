@@ -22,6 +22,12 @@ interface RankingTableHeaderProps {
   showDatePicker?: boolean;
   selectedDate?: string;
   onDateChange?: (date: string) => void;
+  /** Inclusive YYYY-MM-DD lower bound. Disables prev nav + calendar
+   *  dates before this so the picker never exposes pre-playoff dates. */
+  minDate?: string;
+  /** Inclusive YYYY-MM-DD upper bound. Same contract as minDate for
+   *  the end of the playoff window. */
+  maxDate?: string;
 }
 
 const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
@@ -36,6 +42,8 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
   showDatePicker = false,
   selectedDate,
   onDateChange,
+  minDate,
+  maxDate,
 }) => {
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
@@ -68,8 +76,16 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
     }
   };
 
+  // YYYY-MM-DD strings compare lexicographically, so string bounds
+  // save us a round-trip through Date objects.
+  const atOrBeforeMin =
+    !!(minDate && selectedDate && selectedDate <= minDate);
+  const atOrAfterMax =
+    !!(maxDate && selectedDate && selectedDate >= maxDate);
+
   // Handle previous and next day
   const handlePrevDay = () => {
+    if (atOrBeforeMin) return;
     if (selectedDate && onDateChange) {
       const date = dateStringToLocalDate(selectedDate);
       date.setDate(date.getDate() - 1);
@@ -78,6 +94,7 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
   };
 
   const handleNextDay = () => {
+    if (atOrAfterMax) return;
     if (selectedDate && onDateChange) {
       const date = dateStringToLocalDate(selectedDate);
       date.setDate(date.getDate() + 1);
@@ -85,11 +102,14 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
     }
   };
 
-  // Handle going to yesterday
+  // Handle going to yesterday. Clamp to bounds so the button doesn't
+  // kick the picker to an out-of-window date on day 1 of the playoffs.
   const handleYesterday = () => {
-    if (onDateChange) {
-      onDateChange(getHockeyDateYesterday());
-    }
+    if (!onDateChange) return;
+    let target = getHockeyDateYesterday();
+    if (minDate && target < minDate) target = minDate;
+    if (maxDate && target > maxDate) target = maxDate;
+    onDateChange(target);
   };
 
   // Custom datepicker portal to avoid z-index issues
@@ -141,18 +161,19 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
         {showDatePicker && (
           <div
             ref={datePickerRef}
-            className="relative flex flex-wrap items-center gap-2 bg-white/10 rounded-none p-2"
+            className="relative flex flex-wrap items-center gap-2"
           >
             {/* Date navigation */}
-            <div className="flex items-center">
+            <div className="flex items-center gap-2">
               <button
                 onClick={handlePrevDay}
-                className="p-1 rounded-none bg-white/10 text-white hover:bg-white/20 transition-colors"
+                disabled={atOrBeforeMin}
+                className="w-8 h-8 flex items-center justify-center bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] font-bold hover:bg-[#1A1A1A] hover:text-white transition-colors duration-100 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-[#1A1A1A]"
                 aria-label="Previous day"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5"
+                  className="h-4 w-4"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -168,7 +189,7 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
 
               {/* Date display button */}
               <button
-                className="mx-2 bg-white/10 px-3 py-1 rounded-none text-white focus:outline-none flex items-center"
+                className="px-3 py-1.5 bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] font-bold uppercase tracking-wider text-xs hover:bg-[#1A1A1A] hover:text-white transition-colors duration-100 focus:outline-none flex items-center"
                 onClick={() => setIsCalendarOpen(!isCalendarOpen)}
               >
                 <span className="mr-1">
@@ -183,19 +204,11 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
                       )
                     : "Select date"}
                 </span>
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+                <span
+                  className={`inline-block transition-transform ${isCalendarOpen ? "rotate-180" : ""}`}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 9l-7 7-7-7"
-                  />
-                </svg>
+                  ▼
+                </span>
               </button>
 
               {/* Custom date picker that renders in a portal */}
@@ -209,7 +222,12 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
                           : null
                       }
                       onChange={handleDateChange}
+                      minDate={minDate ? dateStringToLocalDate(minDate) : undefined}
+                      maxDate={maxDate ? dateStringToLocalDate(maxDate) : undefined}
                       inline
+                      showMonthDropdown
+                      showYearDropdown
+                      dropdownMode="select"
                       onClickOutside={() => setIsCalendarOpen(false)}
                     />
                   </CustomDatePickerContainer>
@@ -218,12 +236,13 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
 
               <button
                 onClick={handleNextDay}
-                className="p-1 rounded-none bg-white/10 text-white hover:bg-white/20 transition-colors"
+                disabled={atOrAfterMax}
+                className="w-8 h-8 flex items-center justify-center bg-white border-2 border-[#1A1A1A] text-[#1A1A1A] font-bold hover:bg-[#1A1A1A] hover:text-white transition-colors duration-100 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-[#1A1A1A]"
                 aria-label="Next day"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5"
+                  className="h-4 w-4"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -239,14 +258,12 @@ const RankingTableHeader: React.FC<RankingTableHeaderProps> = ({
             </div>
 
             {/* Quick navigation buttons */}
-            <div className="flex items-center gap-1">
-              <button
-                onClick={handleYesterday}
-                className="px-2 py-1 text-xs rounded bg-white/10 text-white hover:bg-white/20 transition-colors"
-              >
-                Yesterday
-              </button>
-            </div>
+            <button
+              onClick={handleYesterday}
+              className="px-3 py-1.5 bg-[#FACC15] border-2 border-[#1A1A1A] text-[#1A1A1A] font-bold uppercase tracking-wider text-xs hover:bg-[#1A1A1A] hover:text-white transition-colors duration-100"
+            >
+              Yesterday
+            </button>
           </div>
         )}
 

@@ -2,7 +2,6 @@ import { NHLTeamBet } from "@/types/fantasyTeams";
 import { getNHLTeamUrlSlug } from "@/utils/nhlTeams";
 import { usePlayoffsData } from "@/features/rankings";
 import RankingTable from "@/components/common/RankingTable";
-import { APP_CONFIG } from "@/config";
 
 interface TeamBetsTableProps {
   teamBets: NHLTeamBet[];
@@ -85,7 +84,6 @@ export default function TeamBetsTable({ teamBets }: TeamBetsTableProps) {
           showRankColors={false} // Don't show rank colors
           className="bg-transparent shadow-none border-0"
           title="Skaters from NHL Teams"
-          dateBadge={APP_CONFIG.SEASON_LABEL}
         />
       </div>
     </section>

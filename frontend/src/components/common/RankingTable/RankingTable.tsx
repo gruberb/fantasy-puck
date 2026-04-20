@@ -37,6 +37,8 @@ const RankingTable = ({
   showDatePicker = false,
   selectedDate,
   onDateChange,
+  minDate,
+  maxDate,
 }: RankingTableProps) => {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
@@ -159,6 +161,8 @@ const RankingTable = ({
             showDatePicker={showDatePicker}
             selectedDate={selectedDate}
             onDateChange={onDateChange}
+            minDate={minDate}
+            maxDate={maxDate}
           />
         </div>
       )}

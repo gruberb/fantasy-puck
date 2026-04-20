@@ -40,6 +40,14 @@ Keep `/docs` in sync: after every change that affects behaviour described in tho
 - NHL API client in `backend/src/nhl_api/nhl.rs` — undocumented API at `api-web.nhle.com`, has built-in rate limiting and caching
 - Comments: write in the voice of a Staff Software Engineer addressing teammates and future maintainers, never in the voice of an LLM. That means: no restating what well-named code already says, no mentioning the current task / PR / fix ("added for X", "handles case from issue Y"), no hedging or marketing tone. A comment earns its place only when the *why* is non-obvious — a hidden constraint, a subtle invariant, a workaround for a specific bug, or behaviour that would surprise a reader. If removing the comment would not confuse a future reader, do not write it.
 
+### Always use standardised elements
+
+Before hand-rolling a table, card, header, button, modal, or any other UI primitive, check whether one already exists — and use it. The codebase's visual consistency is load-bearing: every table on `/stats` is the same `RankingTable`, every insight card is the same `InsightCard`, every "section with blue header" is the same `RaceOddsSection` chrome. A bespoke component next to three standard ones reads as broken before the reader even parses the content.
+
+Rule of thumb: if two surfaces show tabular data, they use `RankingTable`. If you need something the standard component can't do, the answer is almost always "extend the standard" (new prop, new `columns` definition in `components/rankingsPageTableColumns/`), not "write a new one." The column definitions in `components/rankingsPageTableColumns/` are the canonical per-table config — follow that pattern for any new stats table.
+
+The same rule applies to backend helpers: reuse existing `nhl_mirror::*` readers, `cache::get_cached_response`, and the shared DTO patterns rather than introducing a parallel path. If you catch yourself writing "like X but slightly different," stop and extend X.
+
 ## Versioning
 
 - IMPORTANT: Only bump the version of the package that actually changed. Frontend-only change → bump `frontend/package.json` only. Backend-only → `backend/Cargo.toml` only. Don't bump both unless both changed.

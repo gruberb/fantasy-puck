@@ -4,6 +4,57 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.18.1 — 2026-04-20 (frontend)
+
+### Changed — /stats is one standard table primitive end to end
+
+The NHL Teams and Top 10 Rostered Skaters sections shipped as
+bespoke tables with their own chrome, which broke the page's
+visual rhythm the moment you scrolled past Season Overview.
+Rebuilt both on `RankingTable` with column definitions in
+`components/rankingsPageTableColumns/`, same contract as the
+other three tables. Blue "League Stats" header block retired.
+
+Final /stats order is Season Overview → Daily Fantasy Scores
+→ Playoff Stats → NHL Teams We Roster → Top 10 Rostered Skaters.
+NHL Teams sorts by Playoff Pts DESC by default; columns are
+NHL team, Playoff Pts, Rostered, Top Skater. Top 10 Rostered
+Skaters sorts the same way, columns headshot + name, NHL team,
+Playoff Pts, Rostered By.
+
+### Fixed — Daily Fantasy Scores date picker was invisible
+
+The prev-day / date-trigger / next-day / Yesterday buttons all
+rendered `text-white` on `bg-white/10`, so the whole control strip
+was effectively invisible against the white table header. Restyled
+to the brutalist black-on-white pattern used by the Games page's
+`DateHeader`: `border-2 border-[#1A1A1A]` with a black-on-hover
+invert, Yellow `#FACC15` fill on the Yesterday button.
+
+### Added — Daily Fantasy Scores picker respects the playoff window
+
+`RankingTable` / `RankingTableHeader` now accept `minDate` /
+`maxDate` (YYYY-MM-DD). Prev/Next disable at the bounds, the
+calendar constrains its selectable days, and the Yesterday button
+clamps so day 1 of the playoffs doesn't kick the picker to a
+pre-playoff date. `RankingsPage` passes `APP_CONFIG.PLAYOFF_START`
+and `APP_CONFIG.SEASON_END`, matching how `GamesPage` already
+clamped its own picker.
+
+### Changed — Yellow "2025/2026 Playoffs" badge retired
+
+That context belongs in the nav bar, not on every table. Brand
+label updated from `NHL 2026` to `NHL Playoffs 2026` when the app
+is in game_type=3 so the header reads "FANTASY NHL PLAYOFFS 2026".
+`dateBadge={APP_CONFIG.SEASON_LABEL}` removed from Season Overview,
+Playoff Stats, Fantasy Team Roster, and Skaters from NHL Teams.
+
+### Changed — CLAUDE.md and AGENTS.md codify the standardisation rule
+
+New section: before hand-rolling a table, card, or header, use the
+existing primitive. Visual consistency across the app is load-bearing;
+bespoke components next to standard ones read as broken.
+
 ## v1.22.0 / FE v1.18.0 — 2026-04-20 (backend + frontend)
 
 ### Added — League Stats section on /stats
