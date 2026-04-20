@@ -1,6 +1,7 @@
 import RankingTable from "@/components/common/RankingTable";
 import { useRankingsData } from "@/features/rankings";
 import { useLeague } from "@/contexts/LeagueContext";
+import { LeagueStatsSection } from "@/features/league-stats/components/LeagueStatsSection";
 import { APP_CONFIG } from "@/config";
 
 import { useDailyRankingsColumns } from "@/components/rankingsPageTableColumns/dailysColumns";
@@ -8,7 +9,11 @@ import { usePlayoffRankingsColumns } from "@/components/rankingsPageTableColumns
 import { TeamStatsColumns } from "@/components/rankingsPageTableColumns/teamStatsColumns";
 
 const RankingsPage = () => {
-  const { activeLeagueId } = useLeague();
+  const { activeLeagueId, myMemberships } = useLeague();
+  const myFantasyTeamId = activeLeagueId
+    ? (myMemberships.find((m) => m.league_id === activeLeagueId)?.fantasy_team_id ??
+      null)
+    : null;
   const {
     selectedDate,
     setSelectedDate,
@@ -80,6 +85,13 @@ const RankingsPage = () => {
           onDateChange={setSelectedDate}
           initialSortKey="dailyPoints"
           initialSortDirection="desc"
+        />
+      </div>
+
+      <div className="mt-8">
+        <LeagueStatsSection
+          leagueId={activeLeagueId}
+          myFantasyTeamId={myFantasyTeamId || null}
         />
       </div>
     </div>

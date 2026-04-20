@@ -119,6 +119,7 @@ Handlers in [`handlers/teams.rs`](../backend/src/api/handlers/teams.rs) and [`ha
 | GET | `/api/fantasy/players` | `get_players_per_team` | Required | Groups `fantasy_players` by `nhl_team` |
 | GET | `/api/fantasy/team-bets` | `get_team_bets` | Required | Count of rostered players per NHL team, per fantasy team |
 | GET | `/api/fantasy/team-stats` | `get_team_stats` | Required | Aggregated team statistics |
+| GET | `/api/fantasy/league-stats` | `get_league_stats` | Required | League-wide roster concentration + top-10 rostered skaters by playoff points (drives the /stats League Stats section) |
 
 ### Rankings
 

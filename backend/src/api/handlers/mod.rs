@@ -3,6 +3,7 @@ pub mod auth;
 pub mod draft;
 pub mod games;
 pub mod insights;
+pub mod league_stats;
 pub mod leagues;
 pub mod nhl_rosters;
 pub mod players;

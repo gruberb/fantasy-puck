@@ -10,6 +10,7 @@ import { Ranking, RankingItem, PlayoffFantasyTeamRanking } from '@/types/ranking
 import { TopSkater, Skater } from '@/types/skaters';
 import { PlayoffsResponse } from '@/types/playoffs';
 import { TeamStats } from '@/types/teamStats';
+import { LeagueStatsResponse } from '@/types/leagueStats';
 import { League } from '@/types/league';
 import { APP_CONFIG } from '@/config';
 
@@ -185,6 +186,15 @@ export const api = {
     return fetchApi<TeamStats[]>(
       withLeague("fantasy/team-stats", leagueId),
       { fallback: [] },
+    );
+  },
+
+  async getLeagueStats(leagueId: string): Promise<LeagueStatsResponse> {
+    return fetchApi<LeagueStatsResponse>(
+      withLeague("fantasy/league-stats", leagueId),
+      {
+        fallback: { nhlTeamsRostered: [], topRosteredSkaters: [] },
+      },
     );
   },
 

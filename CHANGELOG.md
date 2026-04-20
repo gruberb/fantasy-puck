@@ -4,6 +4,30 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.22.0 / FE v1.18.0 — 2026-04-20 (backend + frontend)
+
+### Added — League Stats section on /stats
+
+Two league-wide tables at the bottom of the Stats page.
+
+**NHL teams we roster.** One row per NHL team with at least one
+rostered fantasy player, sorted by count of rostered players.
+Columns: NHL team (logo + name + abbrev), rostered count, that NHL
+team's total playoff fantasy points so far, and that team's top
+playoff scorer (photo + name + pts). Useful for spotting roster
+concentration ("we're heavy on BUF and COL") and seeing how those
+NHL teams are actually scoring.
+
+**Top 10 rostered skaters.** The league's own leaderboard —
+skaters rostered by any fantasy team, sorted by playoff fantasy
+points DESC. Columns: headshot, name, NHL team, the fantasy team
+that rosters them. Your own team is highlighted.
+
+Backend: new `GET /api/fantasy/league-stats?league_id=...` handler
+in `league_stats.rs`, four concurrent reads against
+`nhl_player_game_stats` joined to `nhl_games` (completed playoff
+games only). SQL lives in `infra/db/league_stats.rs`.
+
 ## v1.17.7 — 2026-04-20 (frontend)
 
 ### Changed — Race Odds drops the normalized-bar panel; table is the sole view

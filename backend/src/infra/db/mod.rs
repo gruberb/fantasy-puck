@@ -5,6 +5,7 @@ use crate::error::{Error, Result};
 
 pub mod cache;
 pub mod draft;
+pub mod league_stats;
 pub mod leagues;
 pub mod nhl_mirror;
 pub mod players;

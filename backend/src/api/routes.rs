@@ -186,6 +186,10 @@ pub fn create_router(
             "/api/fantasy/team-stats",
             get(handlers::team_stats::get_team_stats),
         )
+        .route(
+            "/api/fantasy/league-stats",
+            get(handlers::league_stats::get_league_stats),
+        )
         // ---------------------------------------------------------------
         // NHL Data
         // ---------------------------------------------------------------
