@@ -14,10 +14,10 @@ interface LeagueRaceTableProps {
 
 /**
  * Columnar league-race view: rank · team · current pts · projected final ·
- * likely range · win probability · pairwise probability vs caller.
- *
- * Sits below the bar visualization to give precise numbers when the user
- * wants to scan the actual values instead of the visual ratio.
+ * likely range · win probability · top-3 probability · pairwise probability
+ * vs caller. The dominant (and only) visual for the league race — precise
+ * numbers across every metric, no secondary chart tracks competing for the
+ * eye.
  */
 export function LeagueRaceTable({ teams, myTeamId, generatedAt }: LeagueRaceTableProps) {
   if (teams.length === 0) return null;

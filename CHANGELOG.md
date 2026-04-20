@@ -4,6 +4,21 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.17.7 — 2026-04-20 (frontend)
+
+### Changed — Race Odds drops the normalized-bar panel; table is the sole view
+
+Two visuals were competing to tell one story. The bar panel encoded
+each team's win probability scaled against the league leader while
+the table beneath it carried the same win %, plus current points,
+projected mean, p10–p90 range, top-3 %, and head-to-head "You beat".
+Because the bar was normalized to the leader, a team with 21% win
+probability looked ~78% full — bigger-bar-is-better intuition broke
+against the numbers right next to it.
+
+Deletes `LeagueRaceBoard` and renders only `LeagueRaceTable`. Same
+data, one encoding, nothing to reconcile between two tracks.
+
 ## v1.17.6 — 2026-04-20 (frontend)
 
 ### Fixed — Dashboard "Yesterday's Rankings" truncated at 7

@@ -1,7 +1,6 @@
 import { useRaceOdds } from "../hooks/use-race-odds";
 
 import { FantasyChampionBoard } from "./FantasyChampionBoard";
-import { LeagueRaceBoard } from "./LeagueRaceBoard";
 import { LeagueRaceTable } from "./LeagueRaceTable";
 import { RivalryCard } from "./RivalryCard";
 
@@ -15,7 +14,7 @@ interface RaceOddsSectionProps {
 
 /**
  * Insights-page section wrapping the full race-odds experience:
- * - League mode: per-team win bars + rivalry card.
+ * - League mode: league-race table + rivalry card.
  * - Champion mode: top-20 Fantasy Champion leaderboard.
  *
  * Renders its own header so pages can drop it in as a peer of other
@@ -27,7 +26,7 @@ export function RaceOddsSection({ myTeamId }: RaceOddsSectionProps) {
   const isLeague = data?.mode === "league";
   const title = isLeague ? "Race Odds" : "Fantasy Champion";
   const blurb = isLeague
-    ? `Monte Carlo, ${data?.trials.toLocaleString() ?? ""} bracket trials. Bar = probability each team finishes first; text = projected final points with likely p10–p90 range.`
+    ? `Monte Carlo, ${data?.trials.toLocaleString() ?? ""} bracket trials. Projected is each team's mean final total with the p10–p90 likely range; Win % and Top-3 are the share of trials finishing first or in the top three.`
     : `Top NHL skaters by projected playoff fantasy points across ${data?.trials.toLocaleString() ?? ""} bracket simulations.`;
 
   return (
@@ -71,14 +70,11 @@ export function RaceOddsSection({ myTeamId }: RaceOddsSectionProps) {
               <RivalryCard rivalry={data.rivalry} />
             )}
             {isLeague ? (
-              <div className="space-y-4">
-                <LeagueRaceBoard teams={data.teamOdds} myTeamId={myTeamId} />
-                <LeagueRaceTable
-                  teams={data.teamOdds}
-                  myTeamId={myTeamId}
-                  generatedAt={data.generatedAt}
-                />
-              </div>
+              <LeagueRaceTable
+                teams={data.teamOdds}
+                myTeamId={myTeamId}
+                generatedAt={data.generatedAt}
+              />
             ) : (
               <FantasyChampionBoard players={data.championLeaderboard} />
             )}
