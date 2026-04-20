@@ -4,6 +4,26 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.18.2 — 2026-04-20 (frontend)
+
+### Fixed — Bracket "Strength" tooltip described the wrong formula
+
+The (i) tooltip next to each team's Strength value on /insights claimed
+the number was a 70/30 blend of regular-season standings points and
+last-10-games pace. During the playoffs that's not what the bracket
+reads — `enrich_projections` swaps to the dynamic playoff Elo (seeded
+from RS points, then updated after every completed playoff game),
+which is why the displayed values are centered on 1500 rather than in
+the NHL-points range. Rewrote the copy to describe the Elo rating
+accurately.
+
+### Changed — Strength tooltip is now a clickable popover
+
+Replaced the native `title` attribute with the same brutalist popover
+pattern used by Daily Wins / Daily Top 3 on /stats: click the (i),
+popover opens with a close button, click again or hit the X to
+dismiss. Only one popover open at a time across the whole bracket.
+
 ## v1.18.1 — 2026-04-20 (frontend)
 
 ### Changed — /stats is one standard table primitive end to end

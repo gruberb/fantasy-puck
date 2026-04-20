@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { getNHLTeamLogoUrl, getNHLTeamShortName } from "@/utils/nhlTeams";
 
 import type {
@@ -9,6 +11,10 @@ import { RosteredChips } from "./RosteredChips";
 interface PlayoffBracketTreeProps {
   projections: TeamSeriesProjection[];
 }
+
+const STRENGTH_TOOLTIP_TITLE = "Team Strength (Playoff Elo)";
+const STRENGTH_TOOLTIP_BODY =
+  "Dynamic playoff Elo rating centered on 1500 (league average). Seeded from regular-season standings points, then updated after every completed playoff game — upsets and blowouts move ratings more than close wins. Used as the per-game win-probability prior in the Monte Carlo bracket simulation.";
 
 const STATE_STYLES: Record<SeriesStateCode, string> = {
   eliminated: "bg-[#7F1D1D] text-white",
@@ -28,6 +34,9 @@ const STATE_STYLES: Record<SeriesStateCode, string> = {
  */
 export function PlayoffBracketTree({ projections }: PlayoffBracketTreeProps) {
   const matchups = pairMatchups(projections);
+  const [openStrengthAbbrev, setOpenStrengthAbbrev] = useState<string | null>(
+    null,
+  );
   if (matchups.length === 0) {
     return (
       <p className="text-xs text-[var(--color-ink-muted)]">
@@ -35,7 +44,16 @@ export function PlayoffBracketTree({ projections }: PlayoffBracketTreeProps) {
       </p>
     );
   }
-  return <BracketList matchups={matchups} />;
+  return (
+    <BracketList
+      matchups={matchups}
+      openStrengthAbbrev={openStrengthAbbrev}
+      onToggleStrength={(abbrev) =>
+        setOpenStrengthAbbrev((prev) => (prev === abbrev ? null : abbrev))
+      }
+      onCloseStrength={() => setOpenStrengthAbbrev(null)}
+    />
+  );
 }
 
 
@@ -48,7 +66,19 @@ interface Matchup {
   bottom: TeamSeriesProjection;
 }
 
-function BracketList({ matchups }: { matchups: Matchup[] }) {
+interface BracketListProps {
+  matchups: Matchup[];
+  openStrengthAbbrev: string | null;
+  onToggleStrength: (abbrev: string) => void;
+  onCloseStrength: () => void;
+}
+
+function BracketList({
+  matchups,
+  openStrengthAbbrev,
+  onToggleStrength,
+  onCloseStrength,
+}: BracketListProps) {
   return (
     <ol className="grid grid-cols-1 lg:grid-cols-2 gap-3">
       {matchups.map((m) => (
@@ -56,9 +86,21 @@ function BracketList({ matchups }: { matchups: Matchup[] }) {
           key={`${m.top.teamAbbrev}-${m.bottom.teamAbbrev}`}
           className="border-2 border-[#1A1A1A] bg-white"
         >
-          <MatchupRow projection={m.top} opponent={m.bottom} />
+          <MatchupRow
+            projection={m.top}
+            opponent={m.bottom}
+            isStrengthOpen={openStrengthAbbrev === m.top.teamAbbrev}
+            onToggleStrength={onToggleStrength}
+            onCloseStrength={onCloseStrength}
+          />
           <div className="h-px bg-[#1A1A1A]" />
-          <MatchupRow projection={m.bottom} opponent={m.top} />
+          <MatchupRow
+            projection={m.bottom}
+            opponent={m.top}
+            isStrengthOpen={openStrengthAbbrev === m.bottom.teamAbbrev}
+            onToggleStrength={onToggleStrength}
+            onCloseStrength={onCloseStrength}
+          />
         </li>
       ))}
     </ol>
@@ -102,9 +144,15 @@ function orderMatchup(
 function MatchupRow({
   projection,
   opponent,
+  isStrengthOpen,
+  onToggleStrength,
+  onCloseStrength,
 }: {
   projection: TeamSeriesProjection;
   opponent: TeamSeriesProjection;
+  isStrengthOpen: boolean;
+  onToggleStrength: (abbrev: string) => void;
+  onCloseStrength: () => void;
 }) {
   const isLeading = projection.wins > opponent.wins;
   const strengthTag = strengthLabel(projection, opponent);
@@ -135,7 +183,14 @@ function MatchupRow({
           )}
         </div>
         <div className="flex items-center gap-2 mt-0.5 text-[10px] text-[var(--color-ink-muted)]">
-          {rating != null && <StrengthBadge value={rating} />}
+          {rating != null && (
+            <StrengthBadge
+              value={rating}
+              isOpen={isStrengthOpen}
+              onToggle={() => onToggleStrength(projection.teamAbbrev)}
+              onClose={onCloseStrength}
+            />
+          )}
           {projection.rosteredTags.length > 0 && (
             <RosteredChips tags={projection.rosteredTags} />
           )}
@@ -185,28 +240,79 @@ function strengthLabel(
 }
 
 /**
- * Numeric team strength with an (i) affordance that explains the blend.
- * Native `title` attribute handles the tooltip — zero JS, keyboard-accessible,
- * works on touch (tap & hold). Not brutalist-styled because native tooltips
- * are OS-rendered, but the (i) glyph itself lives inside the design system.
+ * Numeric team strength with an (i) affordance that opens a clickable popover
+ * explaining the rating. Mirrors the `DatesPopover` pattern on /rankings so
+ * the two surfaces feel the same. Only one popover is open at a time —
+ * selection state lives on the parent `PlayoffBracketTree`.
  */
-function StrengthBadge({ value }: { value: number }) {
-  const description =
-    "Team strength rating. Blend of regular-season standings points (70%) and last-10-games pace extrapolated to 82 games (30%). Used as the per-game win-probability prior in the Monte Carlo simulation.";
+function StrengthBadge({
+  value,
+  isOpen,
+  onToggle,
+  onClose,
+}: {
+  value: number;
+  isOpen: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+}) {
   return (
-    <span className="inline-flex items-center gap-1 tabular-nums">
+    <span className="relative inline-flex items-center gap-1 tabular-nums">
       <span className="uppercase tracking-widest text-[9px] font-bold text-[var(--color-ink-muted)]">
         Strength
       </span>
       <span className="text-[#1A1A1A] font-bold">{Math.round(value)}</span>
-      <span
-        className="inline-flex items-center justify-center w-3 h-3 border border-[var(--color-ink-muted)] text-[8px] font-bold text-[var(--color-ink-muted)] cursor-help leading-none"
-        role="img"
-        aria-label={description}
-        title={description}
+      <button
+        type="button"
+        aria-expanded={isOpen}
+        aria-label={STRENGTH_TOOLTIP_TITLE}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+        className="inline-flex items-center justify-center w-3 h-3 border border-[var(--color-ink-muted)] text-[8px] font-bold text-[var(--color-ink-muted)] leading-none hover:border-[#1A1A1A] hover:text-[#1A1A1A]"
       >
         i
-      </span>
+      </button>
+      {isOpen && <StrengthPopover onClose={onClose} />}
     </span>
+  );
+}
+
+function StrengthPopover({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="absolute z-50 w-64 p-3 bg-white rounded-none border-2 border-[#1A1A1A] mt-1 top-5 left-0 shadow-md">
+      <div className="flex justify-between items-center mb-2">
+        <h4 className="text-[10px] uppercase tracking-widest font-bold text-[#1A1A1A]">
+          {STRENGTH_TOOLTIP_TITLE}
+        </h4>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          aria-label="Close"
+          className="text-[var(--color-ink-muted)] hover:text-[#1A1A1A]"
+        >
+          <svg
+            className="w-3.5 h-3.5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
+          </svg>
+        </button>
+      </div>
+      <p className="text-[11px] leading-snug text-[#1A1A1A] normal-case tracking-normal font-normal">
+        {STRENGTH_TOOLTIP_BODY}
+      </p>
+    </div>
   );
 }
