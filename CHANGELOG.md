@@ -4,6 +4,17 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.17.6 — 2026-04-20 (frontend)
+
+### Fixed — Dashboard "Yesterday's Rankings" truncated at 7
+
+The dashboard card capped the table at 7 rows, so the bottom half of
+the league (ranks 8-14) silently vanished from the home page even
+though the Stats page's equivalent "Daily Fantasy Scores" table
+rendered the full 14. Both read the same `api.getDailyFantasySummary`
+payload, so the split was purely a dashboard prop. Drops the `limit`
+so every rostered team is visible.
+
 ## v1.21.11 — 2026-04-19 (backend)
 
 ### Fixed — Live Rankings "TODAY" column zeroed after midnight UTC

@@ -458,7 +458,6 @@ function RankingsDashboard({
               keyField="teamId"
               rankField="rank"
               title="Yesterday's Rankings"
-              limit={7}
               dateBadge={yesterdayDate}
               initialSortKey="dailyPoints"
               initialSortDirection="desc"
