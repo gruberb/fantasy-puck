@@ -317,6 +317,82 @@ pub async fn calibrate_sweep_handler(
     Ok(json_success(report))
 }
 
+/// Fan out to every NHL team's `/v1/club-stats/{team}/{season}/2`
+/// endpoint and upsert every skater's regular-season line into
+/// `nhl_skater_season_stats`. This is the coverage-fix the 10-min
+/// leaderboard path can't give us — the leaderboard returns top-25
+/// per category, so depth players silently land at `rs_points = 0`
+/// and the projection model collapses to zero for them. One run
+/// populates every skater who dressed for any club this season.
+///
+/// Paced at 250ms per call (the same cadence the meta-poller uses
+/// for its daily roster walk), so the full fan-out takes ~32 × 2 ×
+/// 250ms ≈ 16 seconds wall-clock plus the round-trip time. Blocking
+/// on the request is fine — it finishes well inside any reasonable
+/// edge timeout.
+pub async fn refresh_club_stats(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<ClubStatsRefreshSummary>>> {
+    if !auth.is_admin {
+        return Err(Error::Forbidden("Admin access required".into()));
+    }
+
+    let season = crate::api::season();
+    let teams = state.nhl_client.get_all_teams().await?;
+    let pool = state.db.pool();
+
+    let mut teams_fetched = 0usize;
+    let mut skaters_upserted = 0usize;
+    let mut errors = Vec::<String>::new();
+
+    for (i, team) in teams.iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(crate::tuning::live_mirror::ROSTER_FETCH_DELAY).await;
+        }
+        match state.nhl_client.get_club_stats(team, season, 2).await {
+            Ok(stats) => {
+                match crate::infra::db::nhl_mirror::upsert_team_club_stats(
+                    pool,
+                    season as i32,
+                    2,
+                    team,
+                    &stats.skaters,
+                )
+                .await
+                {
+                    Ok(n) => {
+                        teams_fetched += 1;
+                        skaters_upserted += n;
+                    }
+                    Err(e) => errors.push(format!("{} upsert: {}", team, e)),
+                }
+            }
+            Err(e) => errors.push(format!("{} fetch: {}", team, e)),
+        }
+    }
+
+    info!(
+        teams_fetched,
+        skaters_upserted,
+        error_count = errors.len(),
+        "admin: club-stats refresh complete"
+    );
+
+    Ok(json_success(ClubStatsRefreshSummary {
+        teams_fetched,
+        skaters_upserted,
+        errors,
+    }))
+}
+
+#[derive(serde::Serialize)]
+pub struct ClubStatsRefreshSummary {
+    pub teams_fetched: usize,
+    pub skaters_upserted: usize,
+    pub errors: Vec<String>,
+}
+
 /// Run every NHL-mirror poller step once, synchronously, plus a
 /// one-shot backfill of `nhl_player_game_stats` from every game in
 /// `nhl_games`. Use this right after a fresh deploy to skip the

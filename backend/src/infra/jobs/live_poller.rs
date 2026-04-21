@@ -180,13 +180,13 @@ async fn poll_one_game(
             let leagues = nhl_mirror::list_leagues_with_player_in_game(pool, game_id).await?;
             let cache = db.cache();
             for league_id in &leagues {
-                let prefix = format!("pulse_narrative:{}:", league_id);
+                let prefix = format!("team_diagnosis:{}:", league_id);
                 match cache.invalidate_by_prefix(&prefix).await {
                     Ok(n) => debug!(
                         game_id,
                         league_id = %league_id,
                         removed = n,
-                        "live_poller: invalidated pulse narrative on game end"
+                        "live_poller: invalidated team-diagnosis narrative on game end"
                     ),
                     Err(e) => warn!(
                         game_id,

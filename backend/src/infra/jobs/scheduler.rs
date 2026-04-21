@@ -214,6 +214,53 @@ pub async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
                 league_id, e
             ),
         }
+        // Per-team Pulse diagnosis. Runs after race-odds so
+        // `compose_team_breakdown` reads a warm `race_odds:v4:*`
+        // cache when it builds remaining-points figures. Order
+        // matters; don't invert these two calls.
+        if game_type() == 3 {
+            prewarm_league_team_diagnoses(&state, league_id).await;
+        }
+    }
+}
+
+async fn prewarm_league_team_diagnoses(state: &Arc<AppState>, league_id: &str) {
+    let teams = match state.db.get_all_teams(league_id).await {
+        Ok(ts) => ts,
+        Err(e) => {
+            error!("Failed to list teams for diagnosis prewarm ({}): {}", league_id, e);
+            return;
+        }
+    };
+    for team in teams {
+        let players = match state.db.get_team_players(team.id).await {
+            Ok(p) => p,
+            Err(e) => {
+                error!(
+                    "Failed to load players for diagnosis prewarm (team {}): {}",
+                    team.id, e
+                );
+                continue;
+            }
+        };
+        match crate::api::handlers::team_breakdown::compose_team_breakdown(
+            state,
+            league_id,
+            team.id,
+            &team.name,
+            &players,
+        )
+        .await
+        {
+            Ok(_) => info!(
+                "Pre-warmed team_diagnosis for league {} team {}",
+                league_id, team.id
+            ),
+            Err(e) => error!(
+                "Failed to pre-warm team_diagnosis for league {} team {}: {}",
+                league_id, team.id, e
+            ),
+        }
     }
 }
 

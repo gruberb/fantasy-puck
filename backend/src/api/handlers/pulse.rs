@@ -1,16 +1,19 @@
 //! Pulse — personalised live dashboard.
 //!
-//! Post-Phase-5 the live data (my team status, series forecast, my
-//! games tonight, league board) is recomputed from the NHL mirror
-//! on every request. The expensive bit — the Claude narrative — is
-//! cached separately in `response_cache` under
-//! `pulse_narrative:{league}:{team}:{season}:{gt}:{date}`.
+//! The live data (my team status, series forecast, my games
+//! tonight, per-team breakdown, league outlook) is recomputed from
+//! the NHL mirror on every request. The expensive bits — the
+//! team-diagnosis narrative (one Claude round-trip per caller's
+//! team per hockey-date) and the Monte Carlo race-odds payload —
+//! are cached separately in `response_cache` under
+//! `team_diagnosis:{league}:{team}:{season}:{gt}:{date}` and
+//! `race_odds:v4:{league}:{season}:{gt}:{date}`.
 //!
 //! Cache invalidation: the live poller (see
 //! `infra::jobs::live_poller::poll_one_game`) observes each game's
-//! `LIVE|CRIT -> OFF|FINAL` state transition and deletes narrative
-//! cache rows for the leagues whose rostered players were in that
-//! game. Next Pulse visit from those leagues re-generates the
+//! `LIVE|CRIT -> OFF|FINAL` state transition and deletes the
+//! `team_diagnosis:{league}:*` rows for leagues whose rostered
+//! players were in that game. Next Pulse visit regenerates the
 //! narrative with the final score in view.
 
 use std::collections::{HashMap, HashSet};
@@ -62,23 +65,185 @@ pub async fn get_pulse(
 
     let mut response = generate_pulse(&state, &league_id, my_team_id, &today).await?;
 
-    // Narrative: cached per (league, team, day). Unlike the rest of
-    // the payload (always freshly computed from the mirror), the
-    // Claude call is expensive and its output only needs to change
-    // when a game ends — at which point `live_poller` invalidates
-    // the cache.
-    if response.my_team.is_some() {
-        response.narrative = resolve_narrative(
-            &state,
-            &league_id,
-            my_team_id.unwrap_or(0),
-            &today,
-            &response,
-        )
-        .await;
+    // Your Read block — the per-player breakdown + descriptive
+    // diagnosis narrative. Shares the same composition helper and
+    // cache key (`team_diagnosis:*`) used by the Fantasy Team Detail
+    // handler; the live poller invalidates both on game-end.
+    if let Some(team_id) = my_team_id {
+        response.my_team_diagnosis =
+            build_my_team_diagnosis(&state, &league_id, team_id).await;
     }
 
+    // Your League block — leader, distribution, and top-3 projected
+    // finishers from the cached race-odds payload. Best-effort: if
+    // the cache is cold, this returns None and the UI hides the block.
+    response.league_outlook =
+        build_league_outlook(&state, &league_id, &today, my_team_id).await;
+
     Ok(json_success(response))
+}
+
+async fn build_my_team_diagnosis(
+    state: &Arc<AppState>,
+    league_id: &str,
+    team_id: i64,
+) -> Option<crate::api::dtos::pulse::MyTeamDiagnosis> {
+    if game_type() != 3 {
+        return None;
+    }
+    let team = state.db.get_team(team_id, league_id).await.ok()?;
+    let players = state.db.get_team_players(team_id).await.ok()?;
+    let bundle = crate::api::handlers::team_breakdown::compose_team_breakdown(
+        state,
+        league_id,
+        team_id,
+        &team.name,
+        &players,
+    )
+    .await
+    .ok()?;
+    Some(crate::api::dtos::pulse::MyTeamDiagnosis {
+        team_id,
+        team_name: team.name,
+        total_points: bundle.team_totals.total_points,
+        diagnosis: bundle.diagnosis,
+        players: bundle.players,
+    })
+}
+
+fn largest_stack(nhl_teams: &[String]) -> Option<(String, u32)> {
+    let mut counts: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    for t in nhl_teams {
+        *counts.entry(t.as_str()).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, c)| *c)
+        .map(|(a, c)| (a.to_string(), c))
+}
+
+async fn build_league_outlook(
+    state: &Arc<AppState>,
+    league_id: &str,
+    today: &str,
+    _my_team_id: Option<i64>,
+) -> Option<crate::api::dtos::pulse::LeagueOutlook> {
+    use crate::api::dtos::pulse::{LeagueOutlook, LeagueOutlookEntry, LeagueOutlookStack};
+    use crate::infra::prediction::race_odds_cache;
+
+    if game_type() != 3 {
+        return None;
+    }
+    let pool = state.db.pool();
+
+    let league_totals = nhl_mirror::list_league_team_season_totals(
+        pool,
+        league_id,
+        season() as i32,
+        3,
+        current_date_window(),
+    )
+    .await
+    .ok()?;
+    if league_totals.is_empty() {
+        return None;
+    }
+
+    let leader = league_totals.first()?;
+    let mut points_distribution: Vec<i32> =
+        league_totals.iter().map(|r| r.points as i32).collect();
+    points_distribution.sort_unstable_by(|a, b| b.cmp(a));
+    let median_points = {
+        let n = points_distribution.len();
+        if n == 0 {
+            0.0
+        } else if n % 2 == 0 {
+            (points_distribution[n / 2 - 1] + points_distribution[n / 2]) as f32 / 2.0
+        } else {
+            points_distribution[n / 2] as f32
+        }
+    };
+
+    let race_payload = state
+        .db
+        .cache()
+        .get_cached_response::<crate::api::dtos::race_odds::RaceOddsResponse>(
+            &race_odds_cache::cache_key(league_id, season(), game_type(), today),
+        )
+        .await
+        .ok()
+        .flatten();
+
+    let nhl_team_odds =
+        race_odds_cache::load_nhl_team_odds(state, league_id, season(), game_type(), today).await;
+
+    let teams_with_players = state
+        .db
+        .get_all_teams_with_players(league_id)
+        .await
+        .unwrap_or_default();
+    let rosters_by_team: std::collections::HashMap<i64, Vec<String>> = teams_with_players
+        .iter()
+        .map(|t| {
+            (
+                t.team_id,
+                t.players.iter().map(|p| p.nhl_team.clone()).collect(),
+            )
+        })
+        .collect();
+    let team_totals_by_id: std::collections::HashMap<i64, i32> = league_totals
+        .iter()
+        .map(|r| (r.team_id, r.points as i32))
+        .collect();
+
+    let top_three: Vec<LeagueOutlookEntry> = match &race_payload {
+        Some(payload) if !payload.team_odds.is_empty() => {
+            let mut ranked: Vec<&crate::domain::prediction::race_sim::TeamOdds> =
+                payload.team_odds.iter().collect();
+            ranked.sort_by(|a, b| {
+                b.projected_final_mean
+                    .partial_cmp(&a.projected_final_mean)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            ranked
+                .into_iter()
+                .take(3)
+                .map(|t| {
+                    let top_stack = rosters_by_team
+                        .get(&t.team_id)
+                        .and_then(|nhl_teams| largest_stack(nhl_teams))
+                        .map(|(abbrev, rostered)| LeagueOutlookStack {
+                            cup_win_prob: nhl_team_odds
+                                .get(&abbrev)
+                                .map(|o| o.cup_win_prob)
+                                .unwrap_or(0.0),
+                            nhl_team: abbrev,
+                            rostered: rostered as i32,
+                        });
+                    LeagueOutlookEntry {
+                        team_id: t.team_id,
+                        team_name: t.team_name.clone(),
+                        current_points: team_totals_by_id.get(&t.team_id).copied().unwrap_or(0),
+                        projected_final_mean: t.projected_final_mean,
+                        win_prob: t.win_prob,
+                        top3_prob: t.top3_prob,
+                        top_stack,
+                    }
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+
+    Some(LeagueOutlook {
+        total_teams: league_totals.len() as i32,
+        leader_team_id: leader.team_id,
+        leader_name: leader.team_name.clone(),
+        leader_points: leader.points as i32,
+        points_distribution,
+        median_points,
+        top_three,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +284,14 @@ async fn generate_pulse(
     // race-odds payload. Empty map when the cache hasn't warmed yet
     // (e.g. before the morning Monte Carlo cron) — the narrator simply
     // skips any cup-odds phrasing in that case.
-    let nhl_team_cup_odds = load_cached_cup_odds(state, league_id, today).await;
+    let nhl_team_cup_odds = crate::infra::prediction::race_odds_cache::load_cached_cup_odds(
+        state,
+        league_id,
+        season(),
+        game_type(),
+        today,
+    )
+    .await;
 
     let games_today_matchups: Vec<crate::api::dtos::pulse::GameMatchup> = games_today
         .iter()
@@ -139,71 +311,10 @@ async fn generate_pulse(
         has_live_games,
         games_today: games_today_matchups,
         nhl_team_cup_odds,
-        narrative: None,
+        my_team_diagnosis: None,
+        league_outlook: None,
     })
 }
-
-/// Pull the cup-win probability map from the cached `/api/race-odds`
-/// payload. Returns an empty map when the cache is cold, the deserialize
-/// fails, or the Monte Carlo cron has not run against this league yet.
-async fn load_cached_cup_odds(
-    state: &Arc<AppState>,
-    league_id: &str,
-    today: &str,
-) -> HashMap<String, f32> {
-    let key = format!(
-        "race_odds:v4:{}:{}:{}:{}",
-        if league_id.is_empty() { "global" } else { league_id },
-        season(),
-        game_type(),
-        today
-    );
-    match state
-        .db
-        .cache()
-        .get_cached_response::<crate::api::dtos::race_odds::RaceOddsResponse>(&key)
-        .await
-    {
-        Ok(Some(race_odds)) => race_odds
-            .nhl_teams
-            .iter()
-            .map(|t| (t.abbrev.clone(), t.cup_win_prob))
-            .collect(),
-        _ => HashMap::new(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Narrative cache (tiered)
-// ---------------------------------------------------------------------------
-
-async fn resolve_narrative(
-    state: &Arc<AppState>,
-    league_id: &str,
-    my_team_id: i64,
-    today: &str,
-    response: &PulseResponse,
-) -> Option<String> {
-    let key = format!(
-        "pulse_narrative:{}:{}:{}:{}:{}",
-        league_id,
-        my_team_id,
-        season(),
-        game_type(),
-        today
-    );
-    if let Ok(Some(cached)) = state.db.cache().get_cached_response::<String>(&key).await {
-        return Some(cached);
-    }
-    let generated = state.prediction.pulse_narrative(response).await?;
-    let _ = state
-        .db
-        .cache()
-        .store_response(&key, today, &generated)
-        .await;
-    Some(generated)
-}
-
 
 // ---------------------------------------------------------------------------
 // Series Forecast (pure compute against carousel + rosters)

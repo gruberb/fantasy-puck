@@ -22,7 +22,7 @@ pub struct AppState {
     pub draft_hub: DraftHub,
     /// Text-generation adapter (production: Claude via
     /// `infra::prediction::claude::ClaudeNarrator`). Handlers call
-    /// `state.prediction.pulse_narrative(...)` rather than building
+    /// `state.prediction.team_diagnosis(...)` rather than building
     /// a Claude request themselves.
     pub prediction: Arc<dyn PredictionService>,
 }
@@ -273,6 +273,10 @@ pub fn create_router(
         .route(
             "/api/admin/rehydrate",
             get(handlers::admin::rehydrate_mirror),
+        )
+        .route(
+            "/api/admin/refresh-club-stats",
+            get(handlers::admin::refresh_club_stats),
         )
         // ---------------------------------------------------------------
         // WebSocket

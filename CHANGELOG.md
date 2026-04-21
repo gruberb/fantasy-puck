@@ -4,6 +4,95 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.23.0 / v1.19.0 — 2026-04-21 (BE v1.23.0 / FE v1.19.0)
+
+### Changed — Pulse rebuilt around Your Read, Roster Breakdown, and Your League
+
+Pulse's narrative-only "Your Read" is replaced by three descriptive
+blocks that render from one API round-trip:
+
+- **Your Read** — rank/gap strip, concentration-by-NHL-team chips,
+  and a three-section markdown narrative (Where You Stand /
+  Player-by-Player / What to Expect) generated per
+  `(league, team, hockey-date)`. The voice is deliberately
+  descriptive, not prescriptive — the roster is locked for the
+  playoffs, so no "start/sit/drop" phrasing, no action items, just
+  what happened, why, and what the model expects.
+- **Roster Breakdown** — per-player table with the full playoff box
+  line (GP, G, A, P, SOG, PIM, +/-, HIT, TOI/game), a projected PPG
+  from the existing Bayesian blend, a letter grade (A–F) that scores
+  actual vs expected via a Negative-Binomial variance model matching
+  the Monte Carlo, an expected-remaining-points figure sourced from
+  the cached race-odds payload, and a descriptive status bucket
+  (Ahead, On Expected, Due, Below Expected, Fading, Not In Lineup,
+  Team Out, Too Early). Sortable on every column.
+- **Your League** — leader, points distribution across all teams,
+  and the top-3 projected finishers from the Monte Carlo with each
+  team's largest NHL stack and that team's cup-win probability.
+
+The old "League Live Board" with sparklines is retired from Pulse.
+The same data still drives the Dashboard's Live Rankings widget.
+
+### Added — Per-player performance grading module
+
+New pure-domain module that converts a skater's projected PPG, actual
+playoff points, games played, projection availability multiplier, and
+series state into a letter grade, a z-score, an expected-remaining
+impact figure, and one of eight descriptive buckets. Gated below two
+games played to avoid judging a player on a single goose-egg. Live
+poller invalidates the cached narrative on every game-end transition
+involving a rostered player, so the next Pulse load regenerates
+against the final score.
+
+### Added — Regular-season coverage via per-team club-stats fan-out
+
+The NHL skater-stats-leaders endpoint only captures the top-25 per
+category, which silently zeroed out projections for every depth
+player on a fantasy roster. The meta-poller's 24-hour roster walk
+now also hits `/v1/club-stats/{team}/{season}/2` for every NHL club
+and upserts every skater who dressed into `nhl_skater_season_stats`.
+Complete regular-season PPG coverage for every rostered player.
+
+A matching admin endpoint, `GET /api/admin/refresh-club-stats`, fans
+out the same walk on demand. Exposed in the admin dashboard as
+"Refresh Club Stats".
+
+### Added — Per-team Pulse narrative pre-warm
+
+The daily 10:00 UTC prewarm cron plus the on-demand
+`GET /api/admin/prewarm` now pre-generate the Pulse diagnosis
+narrative per `(league × team)`, so the first Pulse load of the day
+is a warm cache hit rather than a Claude round-trip.
+
+### Fixed — TOI wasn't being persisted from the boxscore
+
+The player-game-stats upsert was hard-coding NULL for `toi_seconds`,
+even though the NHL boxscore returns per-skater time on ice as
+`"MM:SS"`. The boxscore model now parses the field, and the upsert
+stores integer seconds with a COALESCE so retries don't clobber a
+previously filled value. `GET /api/admin/rehydrate` backfills
+historical rows on demand.
+
+### Fixed — Grade gating no longer reports healthy-looking falsehoods
+
+Below two playoff games played, the classifier now reports a neutral
+"Too Early" bucket instead of collapsing into the green "On Expected"
+label — a zero-game roster no longer reads as a passing grade.
+
+### Fantasy Team Detail page
+
+Unchanged. Existing table shape and columns preserved; all new
+per-player breakdown and diagnosis work lives on Pulse.
+
+## v1.18.3 — 2026-04-20 (frontend)
+
+### Changed — Brand header shortened to "FANTASY NHL 2026"
+
+The NavBar and login page brand label previously included the current
+game-type affix, rendering as "FANTASY NHL PLAYOFFS 2026" during the
+playoff window. Dropped the game-type word from `BRAND_LABEL` so the
+header now reads "FANTASY NHL 2026" year-round.
+
 ## v1.18.2 — 2026-04-20 (frontend)
 
 ### Fixed — Bracket "Strength" tooltip described the wrong formula

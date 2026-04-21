@@ -15,12 +15,17 @@
 //! handlers degrade by omitting the narrative block; no response
 //! fails outright just because the model call did.
 
-use crate::api::dtos::pulse::PulseResponse;
+use crate::api::dtos::teams::TeamPointsResponse;
 
 #[async_trait::async_trait]
 pub trait PredictionService: Send + Sync {
-    /// Write a ~4-7 sentence personal dispatch for the Pulse page.
-    /// Called once per (league, team, hockey-day) and cached until
-    /// the next game-end transition of a rostered game.
-    async fn pulse_narrative(&self, pulse: &PulseResponse) -> Option<String>;
+    /// Produce the markdown narrative for the Pulse "Your Read" block
+    /// and the fantasy-team detail page. The caller populates every
+    /// field on `team` except the narrative string itself;
+    /// implementations read league rank, concentration, and per-player
+    /// bucket/grade/recent-games and emit three `### Heading` sections
+    /// (Where You Stand / Player-by-Player / What to Expect). Cached
+    /// by the handler; returning `None` lets the UI fall back to a
+    /// static summary without failing the request.
+    async fn team_diagnosis(&self, team: &TeamPointsResponse) -> Option<String>;
 }

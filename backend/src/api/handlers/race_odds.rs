@@ -31,6 +31,7 @@ use crate::api::{current_date_window, game_type, season};
 use crate::error::Result;
 use crate::domain::models::fantasy::FantasyTeamInGame;
 use crate::domain::models::nhl::{PlayoffCarousel, StatsLeaders};
+use crate::domain::prediction::carousel::games_played_from_carousel;
 use crate::domain::prediction::player_projection::{PlayerInput, Projection};
 use crate::domain::prediction::race_sim::{
     self, simulate, BracketState, RaceSimInput, RaceSimOutput, SeriesState, SimFantasyTeam,
@@ -721,21 +722,6 @@ fn bracket_from_carousel(carousel: Option<&PlayoffCarousel>) -> BracketState {
     BracketState { rounds }
 }
 
-fn games_played_from_carousel(carousel: Option<&PlayoffCarousel>) -> HashMap<String, u32> {
-    let mut map = HashMap::new();
-    let Some(c) = carousel else {
-        return map;
-    };
-    for round in &c.rounds {
-        for s in &round.series {
-            let games = (s.top_seed.wins + s.bottom_seed.wins).max(0) as u32;
-            // Each team in a series has played the same number of games.
-            *map.entry(s.top_seed.abbrev.clone()).or_insert(0) += games;
-            *map.entry(s.bottom_seed.abbrev.clone()).or_insert(0) += games;
-        }
-    }
-    map
-}
 
 fn ratings_from_standings(standings: Option<&serde_json::Value>) -> HashMap<String, TeamRating> {
     let Some(root) = standings else {

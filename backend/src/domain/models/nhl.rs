@@ -64,6 +64,48 @@ pub struct GameVenue {
     pub default: String,
 }
 
+/// Payload shape returned by `/v1/club-stats/{team}/{season}/{gt}`.
+/// Contains every skater who appeared for the team in that season
+/// with their full season totals. Missing fields default to empty
+/// lists so a team with no goalies (rare, but possible early) still
+/// deserialises cleanly.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ClubStats {
+    #[serde(default)]
+    pub skaters: Vec<ClubStatsSkater>,
+    #[serde(default)]
+    pub goalies: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClubStatsSkater {
+    pub player_id: i64,
+    pub first_name: HashMap<String, String>,
+    pub last_name: HashMap<String, String>,
+    pub position_code: String,
+    #[serde(default)]
+    pub games_played: i32,
+    #[serde(default)]
+    pub goals: i32,
+    #[serde(default)]
+    pub assists: i32,
+    #[serde(default)]
+    pub points: i32,
+    #[serde(default)]
+    pub plus_minus: Option<i32>,
+    #[serde(default)]
+    pub shots: Option<i32>,
+    #[serde(default)]
+    pub faceoff_winning_pctg: Option<f32>,
+    /// Average time on ice per game, in **seconds** (float). The NHL
+    /// endpoint returns e.g. `1132.5732` — we round to integer
+    /// seconds on the way into the mirror.
+    #[serde(default)]
+    pub avg_time_on_ice_per_game: Option<f32>,
+}
+
 // Define a struct to hold the combined game data
 #[derive(Debug)]
 pub struct GameData {
@@ -234,6 +276,11 @@ pub struct BoxscorePlayer {
     pub hits: Option<i32>,
     pub power_play_goals: Option<i32>,
     pub sog: Option<i32>,
+    /// NHL boxscore returns time-on-ice as `"MM:SS"`. Optional because
+    /// the field is occasionally absent on older boxscores and on
+    /// goalies with a non-standard row shape.
+    #[serde(default)]
+    pub toi: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

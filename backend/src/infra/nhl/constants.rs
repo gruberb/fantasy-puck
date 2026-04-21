@@ -54,6 +54,20 @@ pub mod teams {
     pub fn standings_url() -> String {
         format!("{}{}", NHL_API_BASE_URL, STANDINGS)
     }
+
+    /// Season-scoped full club stats. Unlike
+    /// `skater-stats-leaders/{season}/{gt}` (which returns a top-N
+    /// list per category), this endpoint returns every skater who
+    /// appeared for the club with their complete season line —
+    /// goals, assists, points, plus_minus, shots, time-on-ice.
+    /// Fanning out to all 32 teams is how we get depth-player RS
+    /// coverage for the projection model.
+    pub fn club_stats(team_abbrev: &str, season: u32, game_type: u8) -> String {
+        format!(
+            "{}/v1/club-stats/{}/{}/{}",
+            NHL_API_BASE_URL, team_abbrev, season, game_type
+        )
+    }
 }
 
 /// Playoffs related endpoints

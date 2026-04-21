@@ -55,10 +55,10 @@ Each row: what the page calls, at what staleTime, and whether anything polls. "U
 | `LeaguePickerPage` | `LeagueContext` | GET `/api/leagues`, GET `/api/auth/memberships` | DEFAULT (5 min) | - | - |
 | `HomePage` | Uses several dashboards (rankings, top skaters, upcoming games) + `LiveRankingsTable` via `usePulse` when `hasLiveGames` | Multiple + GET `/api/pulse?league_id=...` (piggy-backs on PulsePage's query) | DEFAULT | Inherits Pulse's 60 s poll while any game is LIVE/CRIT | - |
 | `FantasyTeamsPage` | `useFantasyTeams` | GET `/api/fantasy/teams?league_id=...` | DEFAULT | - | - |
-| `FantasyTeamDetailPage` | `useFantasyTeam` | GET `/api/fantasy/teams/{id}` | DEFAULT | - | - |
+| `FantasyTeamDetailPage` | `useTeamDetail` | GET `/api/fantasy/teams/{id}` | DEFAULT | - | - |
 | `RankingsPage` | `useRankingsData` | GET `/api/fantasy/rankings/daily`, GET `/api/fantasy/rankings/playoffs` | DEFAULT | 30 s when viewing today; off otherwise | - |
 | `InsightsPage` | `useInsights`, `useRaceOdds` | GET `/api/insights`, GET `/api/race-odds` | 15 min each | - | - |
-| `PulsePage` | `usePulse` | GET `/api/pulse?league_id=...` | 60 s | 60 s when `hasLiveGames`; off otherwise | - |
+| `PulsePage` | `usePulse` | GET `/api/pulse?league_id=...` — now renders Your Read (per-player breakdown + descriptive diagnosis narrative) and Your League (leader + top-3 projected finishers) in place of the retired League Live Board | 60 s | 60 s when `hasLiveGames`; off otherwise | - |
 | `GamesPage` | `useGamesData` | GET `/api/nhl/games?date=&league_id=` | DEFAULT | 30 s when any game is LIVE/CRIT; off otherwise | - |
 | `SkatersPage` | `useSkatersData` | GET `/api/nhl/skaters/top` | DEFAULT | - | - |
 | `DraftPage` | `useDraftSession`, `usePlayerPool`, `useDraftPicks`, `useMakePick`, `useFinalizeDraft`, `useSleeperRound`, `useLeagueMembers` | GET `/api/leagues/{id}/draft`, GET `/api/draft/{id}`, POST `/api/draft/{id}/pick`, ... | DEFAULT | - | **Yes** |

@@ -39,6 +39,68 @@ export interface SkaterStats {
   imageUrl?: string;
   teamLogo?: string;
   nhlTeamUrlSlug?: string;
+  breakdown?: PlayerBreakdown;
+}
+
+export type PlayerGrade = "a" | "b" | "c" | "d" | "f" | "notEnoughData";
+
+export type PlayerBucket =
+  | "tooEarly"
+  | "keepFaith"
+  | "onPace"
+  | "outperforming"
+  | "fineButFragile"
+  | "needMiracle"
+  | "problemAsset"
+  | "teamEliminated";
+
+export type SeriesStateCode =
+  | "eliminated"
+  | "facingElim"
+  | "trailing"
+  | "tied"
+  | "leading"
+  | "aboutToAdvance"
+  | "advanced";
+
+export interface GradeReport {
+  grade: PlayerGrade;
+  zScore: number;
+  expectedPoints: number;
+  actualPoints: number;
+  gamesPlayed: number;
+}
+
+export interface RemainingImpact {
+  expectedRemainingGames: number;
+  expectedRemainingPoints: number;
+  nhlTeamEliminated: boolean;
+}
+
+export interface PlayerRecentGameCell {
+  gameDate: string;
+  opponent: string;
+  toiSeconds?: number | null;
+  goals: number;
+  assists: number;
+  points: number;
+}
+
+export interface PlayerBreakdown {
+  gamesPlayed: number;
+  sog: number;
+  pim: number;
+  plusMinus: number;
+  hits: number;
+  toiSecondsPerGame: number;
+  projectedPpg: number;
+  activeProb: number;
+  toiMultiplier: number;
+  grade: GradeReport;
+  remainingImpact: RemainingImpact;
+  seriesState: SeriesStateCode;
+  bucket: PlayerBucket;
+  recentGames: PlayerRecentGameCell[];
 }
 
 export interface TopSkater {

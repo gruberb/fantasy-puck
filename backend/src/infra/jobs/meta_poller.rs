@@ -334,7 +334,8 @@ async fn tick_body(
         }
         match nhl.get_all_teams().await {
             Ok(teams) => {
-                let mut count = 0;
+                let mut roster_count = 0;
+                let mut club_stats_count = 0;
                 for (i, team) in teams.iter().enumerate() {
                     if i > 0 {
                         tokio::time::sleep(live_mirror::ROSTER_FETCH_DELAY).await;
@@ -347,13 +348,49 @@ async fn tick_body(
                             {
                                 warn!(team = %team, "meta_poller: roster upsert failed: {}", e);
                             } else {
-                                count += 1;
+                                roster_count += 1;
                             }
                         }
                         Err(e) => warn!(team = %team, "meta_poller: roster fetch failed: {}", e),
                     }
+
+                    tokio::time::sleep(live_mirror::ROSTER_FETCH_DELAY).await;
+                    // Full per-team skater season stats — the club-stats
+                    // endpoint returns every skater who dressed, not just
+                    // the top-25-per-category leaderboard. Always hit
+                    // `game_type = 2` (regular season) because the
+                    // projection model reads RS PPG from that row.
+                    match nhl.get_club_stats(team, season, 2).await {
+                        Ok(stats) => {
+                            match nhl_mirror::upsert_team_club_stats(
+                                pool,
+                                season as i32,
+                                2,
+                                team,
+                                &stats.skaters,
+                            )
+                            .await
+                            {
+                                Ok(n) => club_stats_count += n,
+                                Err(e) => warn!(
+                                    team = %team,
+                                    "meta_poller: club-stats upsert failed: {}",
+                                    e
+                                ),
+                            }
+                        }
+                        Err(e) => warn!(
+                            team = %team,
+                            "meta_poller: club-stats fetch failed: {}",
+                            e
+                        ),
+                    }
                 }
-                info!(count, "meta_poller: team rosters refreshed");
+                info!(
+                    rosters = roster_count,
+                    skaters = club_stats_count,
+                    "meta_poller: rosters + per-team season stats refreshed"
+                );
             }
             Err(e) => warn!("meta_poller: team list fetch failed: {}", e),
         }

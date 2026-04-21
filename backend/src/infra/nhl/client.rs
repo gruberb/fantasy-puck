@@ -202,6 +202,22 @@ impl NhlClient {
         self.make_request_cached(&url, ttl::SKATER_STATS).await
     }
 
+    /// Fetch the full per-team season stat line from
+    /// `/v1/club-stats/{team}/{season}/{gt}`. Unlike the
+    /// leaderboard endpoint (top-N per category), this returns every
+    /// skater who dressed for the club — the projection model needs
+    /// this coverage for depth players who never charted in a
+    /// top-25 leaderboard.
+    pub async fn get_club_stats(
+        &self,
+        team_abbrev: &str,
+        season: u32,
+        game_type: u8,
+    ) -> Result<crate::domain::models::nhl::ClubStats> {
+        let url = endpoints::teams::club_stats(team_abbrev, season, game_type);
+        self.make_request_cached(&url, ttl::SKATER_STATS).await
+    }
+
     /// Fetch goalie stats leaders for a specific season and game type.
     /// Used by the race-odds path to derive a per-team goalie bonus for
     /// the Monte Carlo — see `domain::prediction::goalie_rating`.

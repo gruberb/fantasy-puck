@@ -1,7 +1,9 @@
 import { Link } from "react-router-dom";
 import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
-import Sparkbars from "@/components/common/Sparkbars";
 import SeriesForecastHero from "@/components/pulse/SeriesForecastHero";
+import YourReadSection from "@/components/pulse/YourReadSection";
+import RosterBreakdownSection from "@/components/pulse/RosterBreakdownSection";
+import YourLeagueSection from "@/components/pulse/YourLeagueSection";
 import { usePulse } from "@/features/pulse";
 import { RaceOddsSection } from "@/features/race-odds/components/RaceOddsSection";
 import { MyStakes } from "@/features/race-odds/components/MyStakes";
@@ -21,8 +23,14 @@ const PulsePage = () => {
     return <ErrorMessage message="Failed to load pulse data." />;
   }
 
-  const { myTeam, seriesForecast, myGamesTonight, leagueBoard, hasGamesToday, narrative } =
-    pulse;
+  const {
+    myTeam,
+    seriesForecast,
+    myGamesTonight,
+    hasGamesToday,
+    myTeamDiagnosis,
+    leagueOutlook,
+  } = pulse;
 
   return (
     <div className="space-y-6">
@@ -74,21 +82,23 @@ const PulsePage = () => {
         </section>
       )}
 
-      {/* Personal Pulse narrative. Three sections: The Read, Swing Pieces,
-          Rival Risk — rendered inline via markdown H3 parsing in
-          `PulseNarrative`. Hidden entirely if the LLM call failed. */}
-      {narrative && (
-        <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-          <header className="bg-[var(--color-you)] px-6 py-3">
-            <h2 className="font-extrabold uppercase tracking-wider text-sm text-[#1A1A1A]">
-              Your Read
-            </h2>
-          </header>
-          <div className="p-6">
-            <PulseNarrative text={narrative} />
-          </div>
-        </section>
+      {/* Your Read — descriptive diagnosis narrative + concentration
+          chips. Hidden when the caller has no team in this league or
+          when the projection pipeline couldn't build a bundle (e.g.
+          regular season). */}
+      {myTeamDiagnosis && <YourReadSection data={myTeamDiagnosis} />}
+
+      {/* Roster Breakdown — full per-player table. Separated from
+          Your Read so the narrative block doesn't inherit the
+          table's 14-column horizontal scroll. */}
+      {myTeamDiagnosis && (
+        <RosterBreakdownSection players={myTeamDiagnosis.players} />
       )}
+
+      {/* Your League — leader, points distribution, top-3 expected
+          finishers. Hidden when the cache is cold or we don't yet
+          have league totals. */}
+      {leagueOutlook && <YourLeagueSection data={leagueOutlook} />}
 
       {/* Race Odds — per-league Monte Carlo projections. Includes the
           Head-to-Head card internally, so no separate rivalry section here. */}
@@ -120,174 +130,9 @@ const PulsePage = () => {
         myTeamId={myTeam?.teamId ?? null}
       />
 
-      {/* League Live Board with sparklines */}
-      {leagueBoard.length > 0 && (
-        <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-          <header className="bg-white px-6 py-3 border-b-2 border-[#1A1A1A]">
-            <h2 className="font-extrabold uppercase tracking-wider text-sm">
-              League Live Board
-            </h2>
-          </header>
-          <div className="divide-y divide-gray-100">
-            <div className="grid grid-cols-[1.5rem_minmax(0,1fr)_2.5rem_2.5rem_2.5rem] sm:grid-cols-[2rem_minmax(0,1fr)_4rem_4rem_4rem_5rem] gap-2 px-3 sm:px-4 py-2 text-[10px] uppercase tracking-wider text-gray-400 font-bold">
-              <span>#</span>
-              <span>Team</span>
-              <span className="text-right">Total</span>
-              <span className="text-right">Active</span>
-              <span className="text-right">Today</span>
-              <span className="text-right hidden sm:block">5-day</span>
-            </div>
-            {leagueBoard.map((team) => (
-              <div
-                key={team.teamId}
-                className={`grid grid-cols-[1.5rem_minmax(0,1fr)_2.5rem_2.5rem_2.5rem] sm:grid-cols-[2rem_minmax(0,1fr)_4rem_4rem_4rem_5rem] gap-2 px-3 sm:px-4 py-2.5 text-sm items-center ${
-                  team.isMyTeam
-                    ? "bg-[#FACC15]/10 border-l-4 border-[#FACC15]"
-                    : ""
-                }`}
-              >
-                <span
-                  className={`font-bold ${
-                    team.isMyTeam ? "" : "text-gray-400"
-                  }`}
-                >
-                  {team.rank}
-                </span>
-                <Link
-                  to={`${lp}/teams/${team.teamId}`}
-                  className={`truncate hover:text-[#2563EB] ${
-                    team.isMyTeam ? "font-bold" : "font-medium"
-                  }`}
-                >
-                  {team.teamName}
-                </Link>
-                <span className="text-right tabular-nums font-bold">
-                  {team.totalPoints}
-                </span>
-                <span className="text-right tabular-nums text-gray-500">
-                  {team.playersActiveToday}
-                </span>
-                <span
-                  className={`text-right tabular-nums ${
-                    team.isMyTeam ? "font-bold text-[#2563EB]" : ""
-                  }`}
-                >
-                  {team.pointsToday}
-                </span>
-                <span className="hidden sm:flex justify-end">
-                  <Sparkbars values={team.sparkline} label="last 5 days" />
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
     </div>
   );
 };
-
-/**
- * Render a Claude narrative. Supports a tiny markdown subset sufficient
- * for the Pulse Your Read prompt: `### Heading`, `- bullet`, `**bold**`.
- * Anything else falls through as a paragraph.
- */
-function PulseNarrative({ text }: { text: string }) {
-  const blocks = parseNarrativeBlocks(text);
-  return (
-    <div className="space-y-3 text-sm leading-relaxed text-[#1A1A1A]">
-      {blocks.map((block, i) => {
-        if (block.kind === "heading") {
-          return (
-            <h3
-              key={i}
-              className={`font-extrabold uppercase tracking-wider text-xs text-[#1A1A1A] ${
-                i === 0 ? "" : "pt-3 border-t border-gray-200"
-              }`}
-            >
-              {block.text}
-            </h3>
-          );
-        }
-        if (block.kind === "list") {
-          return (
-            <ul key={i} className="space-y-1.5 pl-0">
-              {block.items.map((item, j) => (
-                <li key={j} className="flex gap-2">
-                  <span aria-hidden className="text-[#1A1A1A]/40">—</span>
-                  <span className="flex-1">{renderBoldSegments(item)}</span>
-                </li>
-              ))}
-            </ul>
-          );
-        }
-        return <p key={i}>{renderBoldSegments(block.text)}</p>;
-      })}
-    </div>
-  );
-}
-
-type NarrativeBlock =
-  | { kind: "heading"; text: string }
-  | { kind: "paragraph"; text: string }
-  | { kind: "list"; items: string[] };
-
-function parseNarrativeBlocks(text: string): NarrativeBlock[] {
-  const blocks: NarrativeBlock[] = [];
-  let paragraph: string[] = [];
-  let list: string[] = [];
-
-  const flushParagraph = () => {
-    if (paragraph.length > 0) {
-      blocks.push({ kind: "paragraph", text: paragraph.join(" ").trim() });
-      paragraph = [];
-    }
-  };
-  const flushList = () => {
-    if (list.length > 0) {
-      blocks.push({ kind: "list", items: list });
-      list = [];
-    }
-  };
-
-  for (const rawLine of text.split("\n")) {
-    const line = rawLine.trim();
-    if (line === "") {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-    if (line.startsWith("### ")) {
-      flushParagraph();
-      flushList();
-      blocks.push({ kind: "heading", text: line.slice(4).trim() });
-      continue;
-    }
-    if (line.startsWith("- ")) {
-      flushParagraph();
-      list.push(line.slice(2).trim());
-      continue;
-    }
-    flushList();
-    paragraph.push(line);
-  }
-  flushParagraph();
-  flushList();
-  return blocks;
-}
-
-function renderBoldSegments(text: string): React.ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return (
-        <strong key={i} className="font-bold">
-          {part.slice(2, -2)}
-        </strong>
-      );
-    }
-    return <span key={i}>{part}</span>;
-  });
-}
 
 function StatCol({
   label,

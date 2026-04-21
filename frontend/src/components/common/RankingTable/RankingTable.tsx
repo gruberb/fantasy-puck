@@ -315,17 +315,15 @@ const RankingTable = ({
               </table>
             </div>
           </div>
-          <>
-            <style jsx global>{`
-              .scrollbar-hide {
-                -ms-overflow-style: none; /* IE and Edge */
-                scrollbar-width: none; /* Firefox */
-              }
-              .scrollbar-hide::-webkit-scrollbar {
-                display: none; /* Chrome, Safari and Opera */
-              }
-            `}</style>
-          </>
+          <style>{`
+            .scrollbar-hide {
+              -ms-overflow-style: none; /* IE and Edge */
+              scrollbar-width: none; /* Firefox */
+            }
+            .scrollbar-hide::-webkit-scrollbar {
+              display: none; /* Chrome, Safari and Opera */
+            }
+          `}</style>
           {/* Scroll indicator - only show when scrollable */}
           {isScrollable && (
             <div className="table-scroll-indicator">

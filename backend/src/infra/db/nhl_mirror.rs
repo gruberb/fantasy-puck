@@ -362,6 +362,8 @@ async fn upsert_boxscore_player(
         .points
         .unwrap_or_else(|| p.goals.unwrap_or(0) + p.assists.unwrap_or(0));
 
+    let toi_seconds = p.toi.as_deref().and_then(parse_toi_seconds);
+
     sqlx::query(
         r#"
         INSERT INTO nhl_player_game_stats (
@@ -369,7 +371,7 @@ async fn upsert_boxscore_player(
             goals, assists, points, sog, pim, plus_minus, hits, toi_seconds, updated_at
         )
         VALUES ($1, $2, $3, $4, $5,
-                $6, $7, $8, $9, $10, $11, $12, NULL, NOW())
+                $6, $7, $8, $9, $10, $11, $12, $13, NOW())
         ON CONFLICT (game_id, player_id) DO UPDATE SET
             team_abbrev = EXCLUDED.team_abbrev,
             position = EXCLUDED.position,
@@ -381,6 +383,7 @@ async fn upsert_boxscore_player(
             pim = EXCLUDED.pim,
             plus_minus = EXCLUDED.plus_minus,
             hits = EXCLUDED.hits,
+            toi_seconds = COALESCE(EXCLUDED.toi_seconds, nhl_player_game_stats.toi_seconds),
             updated_at = NOW()
         "#,
     )
@@ -396,10 +399,51 @@ async fn upsert_boxscore_player(
     .bind(p.pim)
     .bind(p.plus_minus)
     .bind(p.hits)
+    .bind(toi_seconds)
     .execute(&mut **tx)
     .await
     .map_err(Error::Database)?;
     Ok(())
+}
+
+/// Parse `"MM:SS"` (as emitted by the NHL boxscore) into total seconds.
+/// Returns `None` for empty strings, malformed values, or non-numeric
+/// parts — callers treat `None` as "no data" and preserve whatever was
+/// previously stored (via `COALESCE` in the upsert).
+fn parse_toi_seconds(toi: &str) -> Option<i32> {
+    let trimmed = toi.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (m, s) = trimmed.split_once(':')?;
+    let minutes: i32 = m.trim().parse().ok()?;
+    let seconds: i32 = s.trim().parse().ok()?;
+    if minutes < 0 || seconds < 0 || seconds >= 60 {
+        return None;
+    }
+    Some(minutes * 60 + seconds)
+}
+
+#[cfg(test)]
+mod parse_toi_tests {
+    use super::parse_toi_seconds;
+
+    #[test]
+    fn well_formed_values_parse() {
+        assert_eq!(parse_toi_seconds("18:24"), Some(18 * 60 + 24));
+        assert_eq!(parse_toi_seconds("0:05"), Some(5));
+        assert_eq!(parse_toi_seconds("26:04"), Some(26 * 60 + 4));
+    }
+
+    #[test]
+    fn malformed_returns_none() {
+        assert_eq!(parse_toi_seconds(""), None);
+        assert_eq!(parse_toi_seconds("foo"), None);
+        assert_eq!(parse_toi_seconds("18"), None);
+        assert_eq!(parse_toi_seconds("18:xx"), None);
+        assert_eq!(parse_toi_seconds("-1:30"), None);
+        assert_eq!(parse_toi_seconds("20:75"), None);
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -550,6 +594,86 @@ pub async fn upsert_skater_leaderboard(
         .map_err(Error::Database)?;
         count += 1;
     }
+    tx.commit().await.map_err(Error::Database)?;
+    Ok(count)
+}
+
+/// Upsert the full per-team skater season line from the
+/// `/v1/club-stats/{team}/{season}/{gt}` payload. Writes every skater
+/// the team has dressed — no top-N filter — so the projection model
+/// has complete RS coverage for depth players.
+///
+/// `avgTimeOnIcePerGame` arrives as a float of seconds per game
+/// (e.g. `1132.5732` ≈ 18:52). We round to integer seconds before
+/// persisting.
+pub async fn upsert_team_club_stats(
+    pool: &PgPool,
+    season: i32,
+    game_type: i16,
+    team_abbrev: &str,
+    skaters: &[crate::domain::models::nhl::ClubStatsSkater],
+) -> Result<usize> {
+    if skaters.is_empty() {
+        return Ok(0);
+    }
+    let mut tx = pool.begin().await.map_err(Error::Database)?;
+    let mut count = 0;
+
+    for s in skaters {
+        let first = s.first_name.get("default").cloned().unwrap_or_default();
+        let last = s.last_name.get("default").cloned().unwrap_or_default();
+        let toi_seconds: Option<i32> = s.avg_time_on_ice_per_game.map(|f| f.round() as i32);
+        let headshot_url = format!(
+            "https://assets.nhle.com/mugs/nhl/{}/{}/{}.png",
+            season, team_abbrev, s.player_id
+        );
+
+        sqlx::query(
+            r#"
+            INSERT INTO nhl_skater_season_stats (
+                player_id, season, game_type, first_name, last_name,
+                team_abbrev, position, goals, assists, points,
+                plus_minus, faceoff_pct, toi_per_game, sog, headshot_url, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                    $11, $12, $13, $14, $15, NOW())
+            ON CONFLICT (player_id, season, game_type) DO UPDATE SET
+                first_name = EXCLUDED.first_name,
+                last_name = EXCLUDED.last_name,
+                team_abbrev = EXCLUDED.team_abbrev,
+                position = EXCLUDED.position,
+                goals = EXCLUDED.goals,
+                assists = EXCLUDED.assists,
+                points = EXCLUDED.points,
+                plus_minus = COALESCE(EXCLUDED.plus_minus, nhl_skater_season_stats.plus_minus),
+                faceoff_pct = COALESCE(EXCLUDED.faceoff_pct, nhl_skater_season_stats.faceoff_pct),
+                toi_per_game = COALESCE(EXCLUDED.toi_per_game, nhl_skater_season_stats.toi_per_game),
+                sog = COALESCE(EXCLUDED.sog, nhl_skater_season_stats.sog),
+                headshot_url = EXCLUDED.headshot_url,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(s.player_id)
+        .bind(season)
+        .bind(game_type)
+        .bind(&first)
+        .bind(&last)
+        .bind(team_abbrev)
+        .bind(&s.position_code)
+        .bind(s.goals)
+        .bind(s.assists)
+        .bind(s.points)
+        .bind(s.plus_minus)
+        .bind(s.faceoff_winning_pctg)
+        .bind(toi_seconds)
+        .bind(s.shots)
+        .bind(&headshot_url)
+        .execute(&mut *tx)
+        .await
+        .map_err(Error::Database)?;
+        count += 1;
+    }
+
     tx.commit().await.map_err(Error::Database)?;
     Ok(count)
 }
@@ -1184,6 +1308,10 @@ pub struct PlayerGameStatRow {
     pub goals: i32,
     pub assists: i32,
     pub points: i32,
+    pub sog: Option<i32>,
+    pub pim: Option<i32>,
+    pub plus_minus: Option<i32>,
+    pub hits: Option<i32>,
     pub toi_seconds: Option<i32>,
 }
 
@@ -1200,12 +1328,135 @@ pub async fn list_player_game_stats_for_games(
         r#"
         SELECT
             game_id, player_id, team_abbrev, position, name,
-            goals, assists, points, toi_seconds
+            goals, assists, points,
+            sog, pim, plus_minus, hits,
+            toi_seconds
         FROM nhl_player_game_stats
         WHERE game_id = ANY($1)
         "#,
     )
     .bind(game_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// Per-player playoff aggregate from `nhl_player_game_stats`, clamped
+/// to the active window. Powers the fantasy-team breakdown page where
+/// every rostered skater gets a full box line (G/A/P/SOG/PIM/+/-/HIT)
+/// plus average TOI.
+#[derive(Debug, FromRow)]
+pub struct PlayerPlayoffRollupRow {
+    pub player_id: i64,
+    pub games: i64,
+    pub goals: i64,
+    pub assists: i64,
+    pub points: i64,
+    pub sog: i64,
+    pub pim: i64,
+    pub plus_minus: i64,
+    pub hits: i64,
+    pub total_toi_seconds: i64,
+}
+
+pub async fn list_player_playoff_rollup(
+    pool: &PgPool,
+    player_ids: &[i64],
+    season: i32,
+    window: crate::infra::db::DateWindow<'_>,
+) -> Result<Vec<PlayerPlayoffRollupRow>> {
+    if player_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, PlayerPlayoffRollupRow>(
+        r#"
+        SELECT pgs.player_id,
+               COUNT(*)::bigint                              AS games,
+               COALESCE(SUM(pgs.goals), 0)::bigint           AS goals,
+               COALESCE(SUM(pgs.assists), 0)::bigint         AS assists,
+               COALESCE(SUM(pgs.points), 0)::bigint          AS points,
+               COALESCE(SUM(pgs.sog), 0)::bigint             AS sog,
+               COALESCE(SUM(pgs.pim), 0)::bigint             AS pim,
+               COALESCE(SUM(pgs.plus_minus), 0)::bigint      AS plus_minus,
+               COALESCE(SUM(pgs.hits), 0)::bigint            AS hits,
+               COALESCE(SUM(pgs.toi_seconds), 0)::bigint     AS total_toi_seconds
+          FROM nhl_player_game_stats pgs
+          JOIN nhl_games g ON g.game_id = pgs.game_id
+         WHERE pgs.player_id = ANY($1)
+           AND g.season      = $2
+           AND g.game_type   = 3
+           AND g.game_state IN ('OFF', 'FINAL')
+           AND ($3::text IS NULL OR g.game_date::text >= $3)
+           AND ($4::text IS NULL OR g.game_date::text <= $4)
+         GROUP BY pgs.player_id
+        "#,
+    )
+    .bind(player_ids)
+    .bind(season)
+    .bind(window.min_date)
+    .bind(window.max_date)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// One recent playoff game per player, ordered newest-first. Used to
+/// power the diagnosis narrator's "26:04 TOI in Game 2" phrasing and
+/// the UI's recent-games strip.
+#[derive(Debug, FromRow)]
+pub struct PlayerRecentGameRow {
+    pub player_id: i64,
+    pub game_date: chrono::NaiveDate,
+    pub opponent: String,
+    pub toi_seconds: Option<i32>,
+    pub goals: i32,
+    pub assists: i32,
+    pub points: i32,
+    pub sog: Option<i32>,
+    pub plus_minus: Option<i32>,
+}
+
+pub async fn list_player_recent_games(
+    pool: &PgPool,
+    player_ids: &[i64],
+    season: i32,
+    limit_per_player: i32,
+) -> Result<Vec<PlayerRecentGameRow>> {
+    if player_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, PlayerRecentGameRow>(
+        r#"
+        WITH ranked AS (
+            SELECT pgs.player_id,
+                   g.game_date,
+                   CASE WHEN g.home_team = pgs.team_abbrev
+                        THEN g.away_team ELSE g.home_team END AS opponent,
+                   pgs.toi_seconds, pgs.goals, pgs.assists, pgs.points,
+                   pgs.sog, pgs.plus_minus,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY pgs.player_id
+                       ORDER BY g.game_date DESC, g.game_id DESC
+                   ) AS rn
+              FROM nhl_player_game_stats pgs
+              JOIN nhl_games g ON g.game_id = pgs.game_id
+             WHERE pgs.player_id = ANY($1)
+               AND g.season      = $2
+               AND g.game_type   = 3
+               AND g.game_state IN ('OFF', 'FINAL')
+        )
+        SELECT player_id, game_date, opponent,
+               toi_seconds, goals, assists, points, sog, plus_minus
+          FROM ranked
+         WHERE rn <= $3
+         ORDER BY player_id, game_date DESC
+        "#,
+    )
+    .bind(player_ids)
+    .bind(season)
+    .bind(limit_per_player)
     .fetch_all(pool)
     .await
     .map_err(Error::Database)?;

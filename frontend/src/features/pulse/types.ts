@@ -94,6 +94,44 @@ export interface GameMatchup {
   awayTeam: string;
 }
 
+import type { SkaterStats } from "@/types/skaters";
+import type { TeamDiagnosis } from "@/types/team-diagnosis";
+
+export interface MyTeamDiagnosis {
+  teamId: number;
+  teamName: string;
+  totalPoints: number;
+  diagnosis: TeamDiagnosis;
+  players: SkaterStats[];
+}
+
+export interface LeagueOutlookStack {
+  nhlTeam: string;
+  rostered: number;
+  teamPlayoffPoints: number;
+  cupWinProb: number;
+}
+
+export interface LeagueOutlookEntry {
+  teamId: number;
+  teamName: string;
+  currentPoints: number;
+  projectedFinalMean: number;
+  winProb: number;
+  top3Prob: number;
+  topStack: LeagueOutlookStack | null;
+}
+
+export interface LeagueOutlook {
+  totalTeams: number;
+  leaderTeamId: number;
+  leaderName: string;
+  leaderPoints: number;
+  pointsDistribution: number[];
+  medianPoints: number;
+  topThree: LeagueOutlookEntry[];
+}
+
 export interface PulseResponse {
   generatedAt: string;
   myTeam: MyTeamStatus | null;
@@ -106,6 +144,6 @@ export interface PulseResponse {
    *  by the Live Rankings section to cross-reference each fantasy
    *  team's rostered NHL teams. Empty on off-days. */
   gamesToday: GameMatchup[];
-  /** Personal narrative from Claude Sonnet 4.6, or null if unavailable. */
-  narrative: string | null;
+  myTeamDiagnosis: MyTeamDiagnosis | null;
+  leagueOutlook: LeagueOutlook | null;
 }

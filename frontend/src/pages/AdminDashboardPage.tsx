@@ -52,6 +52,7 @@ function AdminDashboardInner({ userId }: { userId: string }) {
           <PrewarmPanel />
           <ProcessRankingsPanel defaultDate={today} />
           <RehydratePanel />
+          <RefreshClubStatsPanel />
         </div>
       </section>
 
@@ -217,6 +218,22 @@ function PrewarmPanel() {
     <AdminActionCard
       title="Prewarm Caches"
       description="Fire-and-forget: queue background jobs to refresh the Edge mirror and regenerate insights + race-odds for every league. Returns immediately."
+      onRun={() => void action.run()}
+      data={action.data}
+      error={action.error}
+      ranAt={action.ranAt}
+      isPending={action.isPending}
+    />
+  );
+}
+
+function RefreshClubStatsPanel() {
+  const action = useAdminAction(adminApi.refreshClubStats);
+
+  return (
+    <AdminActionCard
+      title="Refresh Club Stats"
+      description="Fan out to every NHL team's club-stats endpoint and upsert every skater's regular-season line into the mirror. Use when rostered depth players (outside the top-25 leaderboard) are projecting at 0.00 PPG. Paced ~16s wall-clock, 32 NHL calls."
       onRun={() => void action.run()}
       data={action.data}
       error={action.error}

@@ -13,5 +13,6 @@ pub mod race_odds;
 pub mod rankings;
 pub mod sleepers;
 pub mod stats;
+pub mod team_breakdown;
 pub mod team_stats;
 pub mod teams;

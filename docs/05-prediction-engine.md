@@ -448,6 +448,60 @@ Used purely for UI colour coding on the series cards, not by the Monte Carlo. Th
 
 The race simulator does not use the lookup table; it re-derives series probabilities from team strength per trial. The lookup is the right tool for UI because it does not need rating inputs and gives stable numbers a user can recognise ("3-0 up, 95% chance to advance").
 
+## 6a. Player grading
+
+File: [`backend/src/domain/prediction/grade.rs`](../backend/src/domain/prediction/grade.rs).
+
+Used by `GET /api/fantasy/teams/{id}` to convert a player's projection and their actual playoff output into a letter grade (A–F) and a descriptive status bucket. Pure domain; no IO.
+
+### Grade formula
+
+```
+expected   = ppg × games_played
+variance   = max(expected × (1 + ppg / NB_DISPERSION), 0.5)
+z          = (actual − expected) / sqrt(variance)
+```
+
+`NB_DISPERSION = 4.0` is the same Negative-Binomial parameter the Monte Carlo uses for per-player point draws, so the variance model the grader compares against is the one the simulator actually samples from. The `0.5` floor keeps `z` finite for fringe skaters whose expected output is near zero.
+
+Cutoffs:
+
+| Letter | Z-score band |
+| --- | --- |
+| A | `z ≥ 1.0` |
+| B | `0.3 ≤ z < 1.0` |
+| C | `−0.3 ≤ z < 0.3` |
+| D | `−1.0 ≤ z < −0.3` |
+| F | `z < −1.0` |
+
+Gated to `NotEnoughData` when `games_played < MIN_GAMES_FOR_GRADE` (=2) or `ppg ≤ 0` — a single goose-egg doesn't brand a player as cold, and a skater whose projection itself rounds to zero can't meaningfully over- or under-perform.
+
+### Bucket classifier
+
+`classify_bucket(grade_report, projection, series_state)` returns one of seven labels. Priority order — first match wins:
+
+1. `series_state == Eliminated` → `TeamEliminated`
+2. `projection.active_prob < 1.0` → `ProblemAsset` (likely-scratch signal from `player_projection::project_one`)
+3. `projection.toi_multiplier < 0.80` → `ProblemAsset` (demoted off the depth chart)
+4. Grade A or B → `Outperforming`
+5. Grade D or F + series in `FacingElim`/`Trailing` + `toi_multiplier ≥ 0.9` → `KeepFaith` (role intact, finishing cold)
+6. Grade F → `NeedMiracle`
+7. Grade D → `FineButFragile`
+8. Grade C or `NotEnoughData` → `OnPace`
+
+**Descriptive, not prescriptive.** The roster is locked for the playoffs; the bucket labels describe the player's situation, not a roster action. The frontend's `BucketPill` component maps them to reader-facing strings like `AHEAD`, `DUE`, `FADING`, `NOT IN LINEUP` — never "start/sit/drop" language.
+
+### Remaining impact
+
+`remaining_impact(ppg, expected_games_total, team_games_already_played, nhl_team_eliminated)` projects the rest-of-run contribution:
+
+```
+remaining_games = max(0, expected_games_total - team_games_already_played)
+remaining_points = ppg × remaining_games
+```
+
+`expected_games_total` is pulled per NHL team from the cached `race_odds:v4:*` payload via [`infra::prediction::race_odds_cache::load_nhl_team_odds`](../backend/src/infra/prediction/race_odds_cache.rs) — never re-run the Monte Carlo on the request path. When the cache is cold or the NHL team is out, both fields zero out; the page renders `—` rather than a crash.
+
 ## 7. Inputs from the database
 
 The `infra::prediction` module (adapters) builds the pure-domain inputs from the mirror:
@@ -496,5 +550,6 @@ Operators run the sweep off-line. The endpoint is capped at 200 grid cells so a 
 | `/api/race-odds` (Race Odds page, Fantasy Champion board) | `race_sim::simulate` wrapped in `response_cache` | Per-fantasy-team win probability, head-to-head, Stanley Cup odds per NHL team |
 | `/api/pulse` (Pulse page) | `series_projection` for series badges; race-sim outputs for fan-wide context | "Your team has X% chance to finish first"; today's stakes |
 | `/api/insights` (Insights page) | Player projection + bracket enrichment | Hot / cold players; round previews |
+| `/api/pulse` (Pulse "Your Read" + "Your League" blocks) | `project_players` + `grade` + cached race-odds + Claude narrator | Per-player box line + grade + bucket + remaining-points impact; team-level descriptive diagnosis narrative; top-3 projected finishers across the league |
 
 See [`03-api.md`](./03-api.md) for endpoint shapes and cache keys.

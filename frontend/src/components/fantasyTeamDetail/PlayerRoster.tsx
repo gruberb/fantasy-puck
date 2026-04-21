@@ -10,7 +10,6 @@ interface PlayerRosterProps {
 export default function PlayerRoster({ players }: PlayerRosterProps) {
   const { isTeamInPlayoffs } = usePlayoffsData();
 
-  // Define columns for the RankingTable
   const columns = [
     {
       key: "name",
@@ -123,7 +122,6 @@ export default function PlayerRoster({ players }: PlayerRosterProps) {
     },
   ];
 
-  // Check if we have players
   if (players.length === 0) {
     return (
       <section className="card">
@@ -142,7 +140,7 @@ export default function PlayerRoster({ players }: PlayerRosterProps) {
           keyField="nhlId"
           initialSortKey="totalPoints"
           initialSortDirection="desc"
-          showRankColors={false} // Don't show rank colors
+          showRankColors={false}
           className="bg-transparent shadow-none border-0"
           title="Fantasy Team Roster"
         />

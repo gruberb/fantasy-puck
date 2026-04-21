@@ -97,6 +97,7 @@ pub async fn get_team(
             total_points: player_stats.total_points,
             image_url: state.nhl_client.get_player_image_url(player.nhl_id),
             team_logo: state.nhl_client.get_team_logo_url(&player.nhl_team),
+            breakdown: None,
         });
 
         // Add to team totals
@@ -114,6 +115,7 @@ pub async fn get_team(
             assists: team_totals.assists,
             total_points: team_totals.total_points,
         },
+        diagnosis: None,
     }))
 }
 

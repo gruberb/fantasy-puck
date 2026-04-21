@@ -21,6 +21,12 @@ export interface RehydrateResult {
   elapsed_ms: number;
 }
 
+export interface ClubStatsRefreshResult {
+  teams_fetched: number;
+  skaters_upserted: number;
+  errors: string[];
+}
+
 export interface BackfillHistoricalResult {
   games_ingested: number;
   stats_rows: number;

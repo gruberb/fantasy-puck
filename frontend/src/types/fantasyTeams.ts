@@ -1,4 +1,5 @@
 import { SkaterStats } from "./skaters";
+import { TeamDiagnosis } from "./team-diagnosis";
 
 export interface FantasyTeam {
   teamId: number;
@@ -14,6 +15,7 @@ export interface FantasyTeamPoints {
     assists: number;
     totalPoints: number;
   };
+  diagnosis?: TeamDiagnosis;
 }
 
 export interface NHLTeamBet {

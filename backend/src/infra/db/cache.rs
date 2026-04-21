@@ -155,7 +155,7 @@ impl CacheService {
 
 impl CacheService {
     /// Delete every row whose `cache_key` begins with `prefix`. Used
-    /// by the live poller to invalidate all `pulse_narrative:{league}:*`
+    /// by the live poller to invalidate all `team_diagnosis:{league}:*`
     /// entries when a game a rostered player is in transitions to
     /// FINAL.
     pub async fn invalidate_by_prefix(&self, prefix: &str) -> Result<u64> {

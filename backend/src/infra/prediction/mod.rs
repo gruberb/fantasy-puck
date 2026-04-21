@@ -15,6 +15,7 @@
 
 pub mod claude;
 pub mod elo;
+pub mod race_odds_cache;
 
 // Keep the pre-Phase-5.5 call sites working (`use crate::infra::
 // prediction::compute_current_elo;`) by re-exporting the Elo

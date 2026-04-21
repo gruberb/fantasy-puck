@@ -3,6 +3,7 @@ import type {
   BackfillHistoricalResult,
   CacheScope,
   CalibrationReport,
+  ClubStatsRefreshResult,
   InvalidateCacheResult,
   PrewarmResult,
   ProcessRankingsResult,
@@ -36,6 +37,10 @@ export const adminApi = {
 
   rehydrate() {
     return fetchApi<RehydrateResult>("admin/rehydrate");
+  },
+
+  refreshClubStats() {
+    return fetchApi<ClubStatsRefreshResult>("admin/refresh-club-stats");
   },
 
   backfillHistorical(start: string, end: string) {
