@@ -4,6 +4,16 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.19.1 — 2026-04-21 (frontend)
+
+### Changed — Roster Breakdown Skater column compacted
+
+Removed the player headshot, the separate Team column, and the
+position. The Skater cell now renders the abbreviated name plus team
+on one line (`A. Tuch · BUF`), freeing roughly 10 rem of horizontal
+space for the 13 stats columns so the table breathes without needing
+horizontal scroll.
+
 ## v1.23.1 — 2026-04-21 (backend)
 
 ### Fixed — Claude timeout bumped to 90 s for team-diagnosis prompt

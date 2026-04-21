@@ -11,45 +11,15 @@ export function useTeamBreakdownColumns(): Column[] {
       render: (_v, row) => {
         const s = row as unknown as SkaterStats;
         return (
-          <div className="flex items-center space-x-2 min-w-[10rem]">
-            {s.imageUrl ? (
-              <img
-                src={s.imageUrl}
-                alt={s.name}
-                className="w-8 h-8 rounded-none"
-              />
-            ) : (
-              <div className="w-8 h-8 bg-gray-200 flex items-center justify-center text-[10px] font-bold">
-                {s.name
-                  .split(" ")
-                  .map((w) => w[0])
-                  .join("")
-                  .slice(0, 2)
-                  .toUpperCase()}
-              </div>
-            )}
-            <a
-              href={`https://www.nhl.com/player/${s.nhlId}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-bold text-base text-[#1A1A1A] hover:text-[#2563EB]"
-            >
-              {s.name}
-            </a>
-          </div>
-        );
-      },
-    },
-    {
-      key: "nhlTeam",
-      header: "Team",
-      sortable: true,
-      render: (_v, row) => {
-        const s = row as unknown as SkaterStats;
-        return (
-          <span className="text-xs tracking-wider">
-            {s.nhlTeam} · {s.position}
-          </span>
+          <a
+            href={`https://www.nhl.com/player/${s.nhlId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-bold text-sm text-[#1A1A1A] hover:text-[#2563EB] whitespace-nowrap"
+          >
+            {abbreviateName(s.name)}
+            <span className="text-gray-500 font-normal"> · {s.nhlTeam}</span>
+          </a>
         );
       },
     },
@@ -238,4 +208,16 @@ function formatToi(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** "Alex Tuch" → "A. Tuch"; "Sebastian Aho" → "S. Aho". Keeps accents
+ *  and hyphens intact so "Juraj Slafkovský" → "J. Slafkovský". */
+function abbreviateName(name: string): string {
+  const trimmed = name.trim();
+  const space = trimmed.indexOf(" ");
+  if (space <= 0) return trimmed;
+  const first = trimmed.slice(0, space);
+  const rest = trimmed.slice(space + 1);
+  const initial = Array.from(first)[0] ?? "";
+  return `${initial}. ${rest}`;
 }
