@@ -4,6 +4,18 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.23.1 — 2026-04-21 (backend)
+
+### Fixed — Claude timeout bumped to 90 s for team-diagnosis prompt
+
+The team-diagnosis prompt sends the full per-player breakdown plus a
+recent-games strip for every rostered skater, and Sonnet 4.6 can
+comfortably take 45–60 s to produce the three 2200-token sections.
+The previous 30 s cap caught sporadic timeouts on the daily prewarm;
+the fallback path is graceful (empty narrative, static UI fallback)
+but the cached row ends up empty instead of populated. 90 s gives
+the prompt headroom while remaining well under any edge/proxy cap.
+
 ## v1.23.0 / v1.19.0 — 2026-04-21 (BE v1.23.0 / FE v1.19.0)
 
 ### Changed — Pulse rebuilt around Your Read, Roster Breakdown, and Your League

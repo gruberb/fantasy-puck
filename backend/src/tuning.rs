@@ -223,11 +223,15 @@ pub mod http {
     /// retry loop is cut off by the outer timeout.
     pub const AXUM_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-    /// Anthropic `/v1/messages` timeout. Covers both the insights
-    /// haiku prompt and the pulse sonnet prompt. 30 s is comfortable
-    /// for the largest prompt we send (full signals payload) plus the
-    /// longest completion we request (3072 tokens).
-    pub const CLAUDE_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Anthropic `/v1/messages` timeout. Covers the insights haiku
+    /// prompt, the team-diagnosis sonnet prompt, and any future
+    /// narrative calls. Set at 90 s because the team-diagnosis
+    /// payload is the heaviest one we send — full per-player
+    /// breakdown + recent-games strip for every rostered skater —
+    /// and Sonnet 4.6 can comfortably take 45–60 s to produce the
+    /// three 2200-token sections. 30 s was tight enough that the
+    /// daily prewarm caught sporadic timeouts on first deploy.
+    pub const CLAUDE_TIMEOUT: Duration = Duration::from_secs(90);
 
     /// Daily Faceoff headline scraper. The insights page renders
     /// without the news block if the scraper times out, so this is

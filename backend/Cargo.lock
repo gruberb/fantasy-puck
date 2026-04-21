@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "fantasy-hockey"
-version = "1.23.0"
+version = "1.23.1"
 dependencies = [
  "anyhow",
  "argon2",
