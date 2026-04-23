@@ -4,6 +4,16 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.23.2 / v1.19.2 — 2026-04-23 (BE v1.23.2 / FE v1.19.2)
+
+### Fixed — Skaters leaderboard stat and ownership columns
+
+The playoff skaters leaderboard now returns the full table line the
+frontend renders: goals, assists, points, PIM, plus/minus, and
+average TOI. The Skaters page also passes the active league id to the
+leaderboard endpoint, so rostered players show their assigned fantasy
+team and link to that team page instead of rendering blank ownership.
+
 ## v1.19.1 — 2026-04-21 (frontend)
 
 ### Changed — Roster Breakdown Skater column compacted

@@ -157,9 +157,18 @@ export const api = {
     season: number,
     gameType: number,
     formGames: number,
+    leagueId?: string | null,
   ): Promise<TopSkater[]> {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      season: String(season),
+      game_type: String(gameType),
+      form_games: String(formGames),
+    });
+    if (leagueId) params.set("league_id", leagueId);
+
     return fetchApi<TopSkater[]>(
-      `nhl/skaters/top?limit=${limit}&season=${season}&game_type=${gameType}&form_games=${formGames}`,
+      `nhl/skaters/top?${params.toString()}`,
       { fallback: [] },
     );
   },

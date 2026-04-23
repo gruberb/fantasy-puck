@@ -3,13 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/api/client";
 import { authService } from "@/features/auth";
-import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
+import { PageHeader } from "@gruberb/fun-ui";
 
 const SettingsPage = () => {
   const { user, profile, signOut } = useAuth();
   const navigate = useNavigate();
 
-  const [loading, setLoading] = useState(false);
   const [displayName, setDisplayName] = useState(profile?.displayName ?? "");
   const [saving, setSaving] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
@@ -56,7 +55,6 @@ const SettingsPage = () => {
   };
 
   if (!user) return null;
-  if (loading) return <LoadingSpinner message="Loading settings..." />;
 
   return (
     <div className="max-w-2xl mx-auto space-y-8">

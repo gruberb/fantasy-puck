@@ -31,7 +31,6 @@ const DailyRankingsSection = () => {
   const {
     data: dailyRankings,
     isLoading: dailyRankingsLoading,
-    error: dailyRankingsError,
   } = useQuery({
     queryKey: ["dailyRankings", selectedDate],
     queryFn: () => api.getDailyFantasySummary(selectedDate),

@@ -16,7 +16,6 @@ import {
   useSleeperRound,
   getPickerForPick,
   draftApi,
-  type LeagueMember,
   type PlayerPoolEntry,
 } from "@/features/draft";
 
@@ -96,7 +95,7 @@ function TeamDropdown({ teams, value, onChange, playerCount }: { teams: string[]
 const DraftPage = () => {
   const { leagueId } = useParams<{ leagueId: string }>();
   const navigate = useNavigate();
-  const { user, profile, loading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const { activeLeague } = useLeague();
   const isLeagueOwner = !!(user && activeLeague?.created_by === user.id);
 
@@ -110,7 +109,7 @@ const DraftPage = () => {
   const { members, loading: membersLoading } = useLeagueMembers(leagueId ?? null);
   const { session, loading: sessionLoading, fetchSession } = useDraftSession(leagueId ?? null);
   const { players, loading: playersLoading } = usePlayerPool(session?.id ?? null);
-  const { picks, loading: picksLoading, fetchPicks } = useDraftPicks(session?.id ?? null, leagueId);
+  const { picks, loading: picksLoading } = useDraftPicks(session?.id ?? null, leagueId);
   const { makePick, picking } = useMakePick();
   const { finalizeDraft, finalizing } = useFinalizeDraft();
   const [finalized, setFinalized] = useState(false);
@@ -245,7 +244,6 @@ const DraftPage = () => {
     sleeperPicks,
     sleeperPicker,
     sleeperPicking,
-    startSleeperRound,
     makeSleeperPick,
   } = useSleeperRound(session, leagueId ?? null, members);
 

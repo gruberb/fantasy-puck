@@ -3,9 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { APP_CONFIG } from "@/config";
 import { usePlayoffsData } from "@/features/rankings/hooks/use-playoffs-data";
+import { useLeague } from "@/contexts/LeagueContext";
 
 export function useSkaters() {
   const { isTeamInPlayoffs } = usePlayoffsData();
+  const { activeLeagueId } = useLeague();
 
   // Filter states
   const [searchTerm, setSearchTerm] = useState("");
@@ -17,15 +19,16 @@ export function useSkaters() {
     data: skaters,
     isLoading,
     error,
-    refetch
+    refetch,
   } = useQuery({
-    queryKey: ["topSkaters", APP_CONFIG.SKATERS_LIMIT],
+    queryKey: ["topSkaters", APP_CONFIG.SKATERS_LIMIT, activeLeagueId],
     queryFn: () => api.getTopSkaters(
       APP_CONFIG.SKATERS_LIMIT,
       parseInt(APP_CONFIG.DEFAULT_SEASON),
       APP_CONFIG.DEFAULT_GAME_TYPE,
       APP_CONFIG.FORM_GAMES,
-    )
+      activeLeagueId,
+    ),
   });
 
   // Make sure we have an array of skaters

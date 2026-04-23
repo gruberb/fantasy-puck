@@ -148,7 +148,7 @@ Handlers in [`handlers/games.rs`](../backend/src/api/handlers/games.rs), [`handl
 | --- | --- | --- | --- | --- |
 | GET | `/api/nhl/games` | `list_games` | Optional | `nhl_games` + `nhl_player_game_stats`; extended shape when `league_id` + `detail=extended` is passed |
 | GET | `/api/nhl/match-day` | `get_match_day` | Required | `nhl_games` for today (+ yesterday if early morning) + fantasy overlays; cached at `match_day:{date}` |
-| GET | `/api/nhl/skaters/top` | `get_top_skaters` | Optional | Playoffs: `nhl_mirror`; regular season: NHL API fallback wrapped in `response_cache` |
+| GET | `/api/nhl/skaters/top` | `get_top_skaters` | Optional | Playoffs: `nhl_player_game_stats` aggregate with G/A/P, PIM, +/-, and TOI/gm; regular season: NHL API fallback wrapped in `response_cache`. Optional `league_id` adds fantasy-team ownership tags. |
 | GET | `/api/nhl/roster/{team}` | `get_team_roster` | Optional | `nhl_team_rosters` (JSONB roster) |
 | GET | `/api/nhl/playoffs` | `get_playoff_info` | Optional | `nhl_playoff_bracket` |
 

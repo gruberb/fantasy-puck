@@ -69,6 +69,11 @@ pub async fn get_top_skaters(
                 stats.insert("goals".to_string(), r.goals as i32);
                 stats.insert("assists".to_string(), r.assists as i32);
                 stats.insert("points".to_string(), r.points as i32);
+                stats.insert("plusMinus".to_string(), r.plus_minus as i32);
+                stats.insert("penaltyMins".to_string(), r.pim as i32);
+                if let Some(toi) = r.toi {
+                    stats.insert("toi".to_string(), toi as i32);
+                }
                 ConsolidatedPlayerStats {
                     id: r.player_id,
                     first_name,

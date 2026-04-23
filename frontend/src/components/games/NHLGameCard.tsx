@@ -86,12 +86,10 @@ function DiagonalStripes({
 // ── Status Badge ────────────────────────────────────────────────────────────
 
 function StatusBadge({
-  gameStatus,
   period,
   isLive,
   isGameComplete,
 }: {
-  gameStatus: string;
   period: string | null | undefined;
   isLive: boolean;
   isGameComplete: boolean;
@@ -253,7 +251,6 @@ const NHLGameCard = ({
                     </span>
                     <div className="flex flex-col items-center min-w-[60px] sm:min-w-[80px]">
                       <StatusBadge
-                        gameStatus={gameStatus}
                         period={game.period}
                         isLive={isLive}
                         isGameComplete={isGameComplete}
@@ -287,7 +284,6 @@ const NHLGameCard = ({
                     {isLive && (
                       <div className="mt-1.5">
                         <StatusBadge
-                          gameStatus={gameStatus}
                           period={game.period}
                           isLive={isLive}
                           isGameComplete={isGameComplete}

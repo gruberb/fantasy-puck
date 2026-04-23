@@ -60,7 +60,7 @@ Each row: what the page calls, at what staleTime, and whether anything polls. "U
 | `InsightsPage` | `useInsights`, `useRaceOdds` | GET `/api/insights`, GET `/api/race-odds` | 15 min each | - | - |
 | `PulsePage` | `usePulse` | GET `/api/pulse?league_id=...` — now renders Your Read (per-player breakdown + descriptive diagnosis narrative) and Your League (leader + top-3 projected finishers) in place of the retired League Live Board | 60 s | 60 s when `hasLiveGames`; off otherwise | - |
 | `GamesPage` | `useGamesData` | GET `/api/nhl/games?date=&league_id=` | DEFAULT | 30 s when any game is LIVE/CRIT; off otherwise | - |
-| `SkatersPage` | `useSkatersData` | GET `/api/nhl/skaters/top` | DEFAULT | - | - |
+| `SkatersPage` | `useSkatersData` | GET `/api/nhl/skaters/top`, with `league_id` when a last-viewed league is active so fantasy ownership tags render | DEFAULT | - | - |
 | `DraftPage` | `useDraftSession`, `usePlayerPool`, `useDraftPicks`, `useMakePick`, `useFinalizeDraft`, `useSleeperRound`, `useLeagueMembers` | GET `/api/leagues/{id}/draft`, GET `/api/draft/{id}`, POST `/api/draft/{id}/pick`, ... | DEFAULT | - | **Yes** |
 | `MyLeaguesPage` | `useLeagues` | GET `/api/leagues` | DEFAULT | - | - |
 | `AdminDashboardPage` | `useAdminAction` per panel | GET `/api/admin/cache/invalidate`, `/api/admin/process-rankings/{date}`, `/api/admin/prewarm`, `/api/admin/rehydrate`, `/api/admin/backfill-historical`, `/api/admin/rebackfill-carousel`, `/api/admin/calibrate`, `/api/admin/calibrate-sweep` | n/a (one-shot on button press) | - | Admin-only; non-admins redirect to `/my-leagues` |

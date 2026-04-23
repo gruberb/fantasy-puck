@@ -1861,12 +1861,10 @@ pub async fn aggregate_skater_totals(
         .collect())
 }
 
-/// One leaderboard row: every skater who has appeared in any
-/// completed game of the current `(season, game_type)`, with
-/// totals summed across their boxscore rows. Ordered by points
-/// descending. The metadata fields (`name`, `position`,
-/// `team_abbrev`) come from the most recent game appearance —
-/// captures mid-season trades correctly.
+/// One leaderboard row for every skater who has appeared in the current
+/// `(season, game_type)`, with totals summed across their boxscore rows
+/// and TOI expressed as seconds per game. Metadata comes from the most
+/// recent game appearance so mid-season trades resolve to the current team.
 #[derive(Debug, FromRow)]
 pub struct TopSkaterRow {
     pub player_id: i64,
@@ -1876,6 +1874,9 @@ pub struct TopSkaterRow {
     pub goals: i64,
     pub assists: i64,
     pub points: i64,
+    pub pim: i64,
+    pub plus_minus: i64,
+    pub toi: Option<i64>,
 }
 
 pub async fn list_top_skaters(
@@ -1891,6 +1892,9 @@ pub async fn list_top_skaters(
                    COALESCE(SUM(pgs.goals),   0)::bigint AS goals,
                    COALESCE(SUM(pgs.assists), 0)::bigint AS assists,
                    COALESCE(SUM(pgs.points),  0)::bigint AS points,
+                   COALESCE(SUM(pgs.pim),     0)::bigint AS pim,
+                   COALESCE(SUM(pgs.plus_minus), 0)::bigint AS plus_minus,
+                   ROUND(AVG(pgs.toi_seconds))::bigint AS toi,
                    (ARRAY_AGG(pgs.name        ORDER BY pgs.updated_at DESC))[1] AS name,
                    (ARRAY_AGG(pgs.position    ORDER BY pgs.updated_at DESC))[1] AS position,
                    (ARRAY_AGG(pgs.team_abbrev ORDER BY pgs.updated_at DESC))[1] AS team_abbrev
@@ -1900,7 +1904,9 @@ pub async fn list_top_skaters(
                AND g.game_type = $2
              GROUP BY pgs.player_id
         )
-        SELECT player_id, name, position, team_abbrev, goals, assists, points
+        SELECT
+            player_id, name, position, team_abbrev,
+            goals, assists, points, pim, plus_minus, toi
           FROM agg
          WHERE position <> 'G'
          ORDER BY points DESC, goals DESC, player_id
