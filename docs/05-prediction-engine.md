@@ -550,6 +550,6 @@ Operators run the sweep off-line. The endpoint is capped at 200 grid cells so a 
 | `/api/race-odds` (Race Odds page, Fantasy Champion board) | `race_sim::simulate` wrapped in `response_cache` | Per-fantasy-team win probability, head-to-head, Stanley Cup odds per NHL team |
 | `/api/pulse` (Pulse page) | `series_projection` for series badges; race-sim outputs for fan-wide context | "Your team has X% chance to finish first"; today's stakes |
 | `/api/insights` (Insights page) | Player projection + bracket enrichment | Hot / cold players; round previews |
-| `/api/pulse` (Pulse "Your Read" + "Your League" blocks) | `project_players` + `grade` + cached race-odds + Claude narrator | Per-player box line + grade + bucket + remaining-points impact; team-level descriptive diagnosis narrative; top-3 projected finishers across the league |
+| `/api/pulse` (Pulse "Your Read" + "Your League" blocks) | `project_players` + `grade` + previous-date mirror stats + cached race-odds + Claude narrator | Per-player box line + grade + bucket + remaining-points impact; team-level descriptive diagnosis narrative with a Yesterday section; top-3 projected finishers across the league |
 
 See [`03-api.md`](./03-api.md) for endpoint shapes and cache keys.

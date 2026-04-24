@@ -15,10 +15,9 @@ use crate::domain::ports::prediction::PredictionService;
 const CLAUDE_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const CLAUDE_API_VERSION: &str = "2023-06-01";
 const MODEL: &str = "claude-sonnet-4-6";
-// Large enough for three full markdown sections with bullet lists in
-// the Player-by-Player block — a 10-skater roster can run to ~10
-// bullets, each 20-30 words.
-const MAX_TOKENS: u32 = 2200;
+// Large enough for four markdown sections with bullet lists in the
+// Player-by-Player block — a 10-skater roster can run to ~10 bullets.
+const MAX_TOKENS: u32 = 2600;
 
 pub struct ClaudeNarrator {
     api_key: String,
@@ -150,6 +149,48 @@ fn build_team_diagnosis_headline(
             c.nhl_team, c.rostered, c.team_playoff_points
         ));
     }
+    out.push_str("\nYesterday:\n");
+    let y = &diagnosis.yesterday;
+    out.push_str(&format!(
+        "  date {date} · NHL games {games} ({completed} completed) · caller {g}G {a}A {p}P\n",
+        date = y.date,
+        games = y.nhl_games,
+        completed = y.completed_games,
+        g = y.my_goals,
+        a = y.my_assists,
+        p = y.my_points,
+    ));
+    if y.my_players.is_empty() {
+        out.push_str("  caller players: none appeared\n");
+    } else {
+        out.push_str("  caller players:\n");
+        for p in &y.my_players {
+            out.push_str(&format!(
+                "    {name} ({team}) · {g}G {a}A {pts}P\n",
+                name = p.name,
+                team = p.nhl_team,
+                g = p.goals,
+                a = p.assists,
+                pts = p.points,
+            ));
+        }
+    }
+    let source_label = if y.league_top_three_source == "yesterday" {
+        "yesterday fantasy top 3"
+    } else {
+        "current playoff top 3 fallback"
+    };
+    out.push_str(&format!("  {source_label}:\n"));
+    for (i, t) in y.league_top_three.iter().enumerate() {
+        out.push_str(&format!(
+            "    #{rank} {team} · {g}G {a}A {pts}P\n",
+            rank = i + 1,
+            team = t.team_name,
+            g = t.goals,
+            a = t.assists,
+            pts = t.points,
+        ));
+    }
     out.push_str("\nRoster lines:\n");
     for p in &team.players {
         let b = match &p.breakdown {
@@ -217,7 +258,10 @@ Think The Athletic column: dry, specific, grounded in the numbers. Descriptive, 
 
 Do NOT write like a marketing bot. Do NOT recommend trades, drops, lineup changes, or "who to watch" — the caller isn't choosing anything. Banned: "keep faith", "need a miracle", "who to watch tonight", "drop", "pick up", "start", "sit", "who to start", any phrasing that implies a roster decision. Banned: "dive in", "unleash", "game-changer", "exciting journey", "let's break it down", "buckle up", exclamation points, hype adjectives.
 
-Output exactly three sections, each introduced by a level-3 markdown header on its own line:
+Output exactly four sections, each introduced by a level-3 markdown header on its own line:
+
+### Yesterday
+One paragraph, 2–4 sentences. Explain what happened on the previous hockey date and why the caller moved or did not move: which of the caller's rostered players appeared, who scored, who was quiet, and how the top fantasy teams did that day. If there were no NHL games, say so and use the current playoff top-3 fallback to situate the league race. If NHL games happened but none of the caller's skaters appeared, say that directly and use the fantasy top-3/fallback lines rather than inventing action.
 
 ### Where You Stand
 One paragraph, 3–5 sentences. State the current rank and the structural reason for it. Name the shape of the roster (concentrated vs diversified), which stacks have produced, which haven't, and whether that's a finishing-luck story or a role-and-deployment story. Cite specific NHL teams, player names, numbers. Wrap team names and player names in **double asterisks** for bold.

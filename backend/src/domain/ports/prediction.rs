@@ -23,8 +23,8 @@ pub trait PredictionService: Send + Sync {
     /// and the fantasy-team detail page. The caller populates every
     /// field on `team` except the narrative string itself;
     /// implementations read league rank, concentration, and per-player
-    /// bucket/grade/recent-games and emit three `### Heading` sections
-    /// (Where You Stand / Player-by-Player / What to Expect). Cached
+    /// bucket/grade/recent-games and emit four `### Heading` sections
+    /// (Yesterday / Where You Stand / Player-by-Player / What to Expect). Cached
     /// by the handler; returning `None` lets the UI fall back to a
     /// static summary without failing the request.
     async fn team_diagnosis(&self, team: &TeamPointsResponse) -> Option<String>;

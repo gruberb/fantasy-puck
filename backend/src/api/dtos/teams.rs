@@ -77,6 +77,7 @@ pub struct TeamDiagnosis {
     pub league_size: i32,
     pub gap_to_first: i32,
     pub gap_to_third: i32,
+    pub yesterday: TeamYesterdaySummary,
     pub concentration_by_team: Vec<TeamConcentrationCell>,
 }
 
@@ -86,6 +87,40 @@ pub struct TeamConcentrationCell {
     pub nhl_team: String,
     pub rostered: i32,
     pub team_playoff_points: i32,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamYesterdaySummary {
+    pub date: String,
+    pub nhl_games: i32,
+    pub completed_games: i32,
+    pub my_goals: i32,
+    pub my_assists: i32,
+    pub my_points: i32,
+    pub my_players: Vec<TeamYesterdayPlayerLine>,
+    pub league_top_three_source: String,
+    pub league_top_three: Vec<TeamYesterdayTeamLine>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamYesterdayPlayerLine {
+    pub name: String,
+    pub nhl_team: String,
+    pub goals: i32,
+    pub assists: i32,
+    pub points: i32,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamYesterdayTeamLine {
+    pub team_id: i64,
+    pub team_name: String,
+    pub goals: i32,
+    pub assists: i32,
+    pub points: i32,
 }
 
 #[derive(Serialize)]

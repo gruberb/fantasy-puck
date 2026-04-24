@@ -37,8 +37,9 @@ pub struct PulseResponse {
     pub nhl_team_cup_odds: HashMap<String, f32>,
     /// Full per-player breakdown + descriptive diagnosis for the
     /// caller's team — concentration chips, grades, remaining-points
-    /// projections, and the Claude `### Where You Stand / ###
-    /// Player-by-Player / ### What to Expect` narrative. Populated
+    /// projections, yesterday's mirror-backed recap, and the Claude
+    /// `### Yesterday / ### Where You Stand / ### Player-by-Player /
+    /// ### What to Expect` narrative. Populated
     /// only when `my_team` is resolved and we're in playoff mode.
     /// The Pulse page's "Your Read" block renders from here.
     #[serde(default, skip_serializing_if = "Option::is_none")]

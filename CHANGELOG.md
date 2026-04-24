@@ -4,6 +4,21 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.23.3 / v1.19.3 — 2026-04-24 (BE v1.23.3 / FE v1.19.3)
+
+### Added — Pulse Yesterday recap
+
+Your Read now opens with a Yesterday section backed by mirrored game
+and player boxscore rows for the previous hockey date. The recap
+explains which rostered players appeared, who produced, how the top
+fantasy teams performed that day, and why the caller moved or stayed
+flat. When yesterday has no useful game or rostered-player action, the
+section falls back to the current playoff top three so the league race
+still has fresh context.
+
+The team-diagnosis narrative cache key moved to `:v2`, which forces
+existing cached reads to regenerate with the four-section structure.
+
 ## v1.23.2 / v1.19.2 — 2026-04-23 (BE v1.23.2 / FE v1.19.2)
 
 ### Fixed — Skaters leaderboard stat and ownership columns

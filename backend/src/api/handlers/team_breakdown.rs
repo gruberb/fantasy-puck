@@ -17,7 +17,8 @@ use std::sync::Arc;
 
 use crate::api::dtos::teams::{
     PlayerBreakdown, PlayerRecentGameCell, PlayerStatsResponse, TeamConcentrationCell,
-    TeamDiagnosis, TeamPointsResponse, TeamTotalsResponse,
+    TeamDiagnosis, TeamPointsResponse, TeamTotalsResponse, TeamYesterdayPlayerLine,
+    TeamYesterdaySummary, TeamYesterdayTeamLine,
 };
 use crate::api::handlers::insights::hockey_today;
 use crate::api::routes::AppState;
@@ -53,9 +54,18 @@ pub async fn compose_team_breakdown(
     let pool = state.db.pool();
     let season_num = season();
     let today = hockey_today();
+    let yesterday = previous_hockey_date(&today);
     let nhl_ids: Vec<i64> = players.iter().map(|p| p.nhl_id).collect();
 
-    let (rollup_rows, recent_rows, carousel, season_rs, league_totals) = tokio::try_join!(
+    let (
+        rollup_rows,
+        recent_rows,
+        carousel,
+        season_rs,
+        league_totals,
+        yesterday_games,
+        yesterday_rows,
+    ) = tokio::try_join!(
         nhl_mirror::list_player_playoff_rollup(
             pool,
             &nhl_ids,
@@ -72,6 +82,8 @@ pub async fn compose_team_breakdown(
             3,
             current_date_window(),
         ),
+        nhl_mirror::list_games_for_date(pool, &yesterday),
+        nhl_mirror::list_league_player_stats_for_date(pool, league_id, &yesterday),
     )?;
 
     let rollup_by_id: HashMap<i64, PlayerPlayoffRollupRow> =
@@ -155,7 +167,15 @@ pub async fn compose_team_breakdown(
         total_points: team_totals.total_points,
     };
 
-    let diagnosis_stub = build_diagnosis_stub(team_name, team_id, &league_totals, &players_out);
+    let yesterday_summary =
+        build_yesterday_summary(&yesterday, team_id, &league_totals, &yesterday_games, &yesterday_rows);
+    let diagnosis_stub = build_diagnosis_stub(
+        team_name,
+        team_id,
+        &league_totals,
+        &players_out,
+        yesterday_summary,
+    );
     let diagnosis_narrative = resolve_team_diagnosis_narrative(
         state,
         league_id,
@@ -283,6 +303,7 @@ fn build_diagnosis_stub(
     team_id: i64,
     league_totals: &[LeagueTeamSeasonTotalsRow],
     players: &[PlayerStatsResponse],
+    yesterday: TeamYesterdaySummary,
 ) -> TeamDiagnosis {
     let league_size = league_totals.len() as i32;
     let (league_rank, my_total) = league_totals
@@ -336,7 +357,108 @@ fn build_diagnosis_stub(
         league_size,
         gap_to_first,
         gap_to_third,
+        yesterday,
         concentration_by_team: concentration,
+    }
+}
+
+fn previous_hockey_date(today: &str) -> String {
+    chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.checked_sub_signed(chrono::Duration::days(1)))
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| today.to_string())
+}
+
+fn build_yesterday_summary(
+    date: &str,
+    team_id: i64,
+    league_totals: &[LeagueTeamSeasonTotalsRow],
+    games: &[nhl_mirror::NhlGameRow],
+    rows: &[nhl_mirror::LeagueTeamPlayerDailyRow],
+) -> TeamYesterdaySummary {
+    let completed_games = games
+        .iter()
+        .filter(|g| matches!(g.game_state.as_str(), "OFF" | "FINAL"))
+        .count() as i32;
+
+    let mut my_players = Vec::new();
+    let mut team_daily: HashMap<i64, TeamYesterdayTeamLine> = HashMap::new();
+
+    for r in rows {
+        let entry = team_daily.entry(r.team_id).or_insert(TeamYesterdayTeamLine {
+            team_id: r.team_id,
+            team_name: r.team_name.clone(),
+            goals: 0,
+            assists: 0,
+            points: 0,
+        });
+        entry.goals += r.goals;
+        entry.assists += r.assists;
+        entry.points += r.points;
+
+        if r.team_id == team_id {
+            my_players.push(TeamYesterdayPlayerLine {
+                name: r.player_name.clone(),
+                nhl_team: r.nhl_team.clone(),
+                goals: r.goals,
+                assists: r.assists,
+                points: r.points,
+            });
+        }
+    }
+
+    my_players.sort_by(|a, b| {
+        b.points
+            .cmp(&a.points)
+            .then_with(|| b.goals.cmp(&a.goals))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    let mut daily_top_three: Vec<TeamYesterdayTeamLine> = team_daily.into_values().collect();
+    daily_top_three.sort_by(|a, b| {
+        b.points
+            .cmp(&a.points)
+            .then_with(|| b.goals.cmp(&a.goals))
+            .then_with(|| a.team_name.cmp(&b.team_name))
+    });
+
+    let (league_top_three_source, league_top_three) = if daily_top_three.is_empty() {
+        (
+            "playoff_total".to_string(),
+            league_totals
+                .iter()
+                .take(3)
+                .map(|r| TeamYesterdayTeamLine {
+                    team_id: r.team_id,
+                    team_name: r.team_name.clone(),
+                    goals: r.goals as i32,
+                    assists: r.assists as i32,
+                    points: r.points as i32,
+                })
+                .collect(),
+        )
+    } else {
+        (
+            "yesterday".to_string(),
+            daily_top_three.into_iter().take(3).collect(),
+        )
+    };
+
+    let my_goals = my_players.iter().map(|p| p.goals).sum();
+    let my_assists = my_players.iter().map(|p| p.assists).sum();
+    let my_points = my_players.iter().map(|p| p.points).sum();
+
+    TeamYesterdaySummary {
+        date: date.to_string(),
+        nhl_games: games.len() as i32,
+        completed_games,
+        my_goals,
+        my_assists,
+        my_points,
+        my_players,
+        league_top_three_source,
+        league_top_three,
     }
 }
 
@@ -348,7 +470,7 @@ async fn resolve_team_diagnosis_narrative(
     response: &TeamPointsResponse,
 ) -> Option<String> {
     let key = format!(
-        "team_diagnosis:{}:{}:{}:{}:{}",
+        "team_diagnosis:{}:{}:{}:{}:{}:v2",
         league_id,
         team_id,
         season(),

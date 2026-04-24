@@ -6,8 +6,8 @@ interface Props {
 
 /**
  * "Your Read" block on Pulse: rank/gap strip, concentration-by-team
- * chips, and the descriptive diagnosis narrative (Where You Stand /
- * Player-by-Player / What to Expect). The per-player breakdown table
+ * chips, and the descriptive diagnosis narrative (Yesterday / Where
+ * You Stand / Player-by-Player / What to Expect). The per-player breakdown table
  * lives in a sibling `RosterBreakdownSection`.
  */
 export default function YourReadSection({ data }: Props) {

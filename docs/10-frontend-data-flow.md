@@ -58,7 +58,7 @@ Each row: what the page calls, at what staleTime, and whether anything polls. "U
 | `FantasyTeamDetailPage` | `useTeamDetail` | GET `/api/fantasy/teams/{id}` | DEFAULT | - | - |
 | `RankingsPage` | `useRankingsData` | GET `/api/fantasy/rankings/daily`, GET `/api/fantasy/rankings/playoffs` | DEFAULT | 30 s when viewing today; off otherwise | - |
 | `InsightsPage` | `useInsights`, `useRaceOdds` | GET `/api/insights`, GET `/api/race-odds` | 15 min each | - | - |
-| `PulsePage` | `usePulse` | GET `/api/pulse?league_id=...` — now renders Your Read (per-player breakdown + descriptive diagnosis narrative) and Your League (leader + top-3 projected finishers) in place of the retired League Live Board | 60 s | 60 s when `hasLiveGames`; off otherwise | - |
+| `PulsePage` | `usePulse` | GET `/api/pulse?league_id=...` — renders Your Read (yesterday recap, per-player breakdown + descriptive diagnosis narrative) and Your League (leader + top-3 projected finishers) in place of the retired League Live Board | 60 s | 60 s when `hasLiveGames`; off otherwise | - |
 | `GamesPage` | `useGamesData` | GET `/api/nhl/games?date=&league_id=` | DEFAULT | 30 s when any game is LIVE/CRIT; off otherwise | - |
 | `SkatersPage` | `useSkatersData` | GET `/api/nhl/skaters/top`, with `league_id` when a last-viewed league is active so fantasy ownership tags render | DEFAULT | - | - |
 | `DraftPage` | `useDraftSession`, `usePlayerPool`, `useDraftPicks`, `useMakePick`, `useFinalizeDraft`, `useSleeperRound`, `useLeagueMembers` | GET `/api/leagues/{id}/draft`, GET `/api/draft/{id}`, POST `/api/draft/{id}/pick`, ... | DEFAULT | - | **Yes** |

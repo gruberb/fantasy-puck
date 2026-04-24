@@ -6,7 +6,7 @@
 //! team-diagnosis narrative (one Claude round-trip per caller's
 //! team per hockey-date) and the Monte Carlo race-odds payload —
 //! are cached separately in `response_cache` under
-//! `team_diagnosis:{league}:{team}:{season}:{gt}:{date}` and
+//! `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:v2` and
 //! `race_odds:v4:{league}:{season}:{gt}:{date}`.
 //!
 //! Cache invalidation: the live poller (see
