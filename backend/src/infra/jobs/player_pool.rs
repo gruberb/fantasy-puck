@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
-use futures::future::try_join_all;
 use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::api::dtos::PlayoffCarouselResponse;
-use crate::infra::db::FantasyDb;
 use crate::error::{Error, Result};
+use crate::infra::db::FantasyDb;
 use crate::infra::nhl::client::NhlClient;
+use crate::tuning::live_mirror;
 
 /// (name, position, team_abbrev, headshot_url)
 pub type PoolEntry = (String, String, String, String);
@@ -66,12 +66,15 @@ pub async fn fetch_stats_leader_pool(
 pub async fn fetch_playoff_roster_pool(client: &NhlClient, season: u32) -> Result<PoolMap> {
     let abbrevs = playoff_team_abbrevs(client, season).await?;
 
-    let rosters = try_join_all(abbrevs.iter().map(|abbrev| client.get_team_roster(abbrev)))
-        .await
-        .map_err(|e| Error::NhlApi(format!("Failed to fetch playoff team roster: {}", e)))?;
-
     let mut map: PoolMap = HashMap::new();
-    for roster in rosters {
+    for (i, abbrev) in abbrevs.iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(live_mirror::ROSTER_FETCH_DELAY).await;
+        }
+        let roster = client
+            .get_team_roster(abbrev)
+            .await
+            .map_err(|e| Error::NhlApi(format!("Failed to fetch playoff team roster: {}", e)))?;
         for player in roster {
             let player_id = player.id as i64;
             map.entry(player_id).or_insert_with(|| {
@@ -91,10 +94,11 @@ pub async fn fetch_playoff_roster_pool(client: &NhlClient, season: u32) -> Resul
 
 /// Playoff roster pool with a Postgres cache in front.
 ///
-/// Cold reads cost 16 parallel `get_team_roster` calls to NHL — enough to
-/// burst the rate limit when the in-memory client cache expires (30m TTL)
-/// or on every restart. The scheduler's 10:00 UTC prewarm refreshes this
-/// row, and every subsequent read is a single SELECT.
+/// Cold reads cost 16 `get_team_roster` calls to NHL — enough to
+/// burst the rate limit if fired in parallel when the in-memory client
+/// cache expires (30m TTL) or on every restart. The scheduler's 10:00
+/// UTC prewarm refreshes this row with paced roster fetches, and every
+/// subsequent read is a single SELECT.
 ///
 /// Cache miss semantics: fetch from NHL, warm the row, return. Even if
 /// the NHL fetch fails we propagate the error to the caller — we'd
@@ -133,14 +137,34 @@ pub async fn fetch_playoff_roster_pool_cached(
 
 /// Force-refresh the playoff roster cache row. Called from the 10:00 UTC
 /// prewarm and from the admin prewarm endpoint. Returns the count of
-/// players written for logging.
+/// players available for logging.
 pub async fn refresh_playoff_roster_cache(
     db: &FantasyDb,
     client: &NhlClient,
     season: u32,
     game_type: u8,
 ) -> Result<usize> {
-    let map = fetch_playoff_roster_pool(client, season).await?;
+    let map = match fetch_playoff_roster_pool(client, season).await {
+        Ok(map) => map,
+        Err(fetch_err) => {
+            if let Some(cached) = db
+                .get_playoff_roster_cache(season as i32, game_type as i16)
+                .await?
+            {
+                if let Ok(map) = serde_json::from_value::<PoolMap>(cached) {
+                    warn!(
+                        season,
+                        game_type,
+                        players = map.len(),
+                        "Keeping existing playoff_roster_cache after refresh failure: {}",
+                        fetch_err
+                    );
+                    return Ok(map.len());
+                }
+            }
+            return Err(fetch_err);
+        }
+    };
     let value = serde_json::to_value(&map)
         .map_err(|e| Error::Internal(format!("Failed to serialize roster pool: {}", e)))?;
     db.upsert_playoff_roster_cache(season as i32, game_type as i16, &value)

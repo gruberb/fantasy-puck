@@ -42,7 +42,7 @@ All four crons register in `init_rankings_scheduler` ([`scheduler.rs:221-346`](.
 | Morning rankings | `0 0 9 * * *` | 09:00 | 05:00 | `process_daily_rankings_all_leagues(yesterday)` + prune `response_cache` rows older than seven days | `GET /api/admin/process-rankings/{date}` |
 | Afternoon rankings | `0 0 15 * * *` | 15:00 | 11:00 | Same as morning, without the prune step - safety net for late-published boxscores | Same as above |
 | Daily prewarm | `0 0 10 * * *` | 10:00 | 06:00 | `ingest_yesterdays_playoff_games` → `prewarm_derived_payloads` (insights + race-odds per league, plus global) | `GET /api/admin/prewarm` |
-| Edge refresh | `0 30 9 * * *` | 09:30 | 05:30 | `edge_refresher::run(force=false)` | Triggered implicitly by `/api/admin/prewarm` with `force=true` |
+| Edge refresh | `0 30 9 * * *` | 09:30 | 05:30 | `edge_refresher::run(force=false)` | Triggered opportunistically by `/api/admin/prewarm` with the same freshness gate |
 
 ### Morning rankings (09:00 UTC)
 
@@ -67,7 +67,7 @@ Defined at [`scheduler.rs:293-302`](../backend/src/infra/jobs/scheduler.rs). Two
 1. **`ingest_yesterdays_playoff_games`** ([`scheduler.rs:127-148`](../backend/src/infra/jobs/scheduler.rs)) - `playoff_ingest::ingest_playoff_games_for_date(yesterday)`. Upserts per-skater playoff stats into `playoff_skater_game_stats` and team results into `playoff_game_results`.
 2. **`prewarm_derived_payloads`** ([`scheduler.rs:154-218`](../backend/src/infra/jobs/scheduler.rs)):
    - Rebuild an `AppState` inside the job so it can call handler functions directly.
-   - If `game_type == 3`, refresh `playoff_roster_cache` (one JSONB blob with all 16 playoff rosters).
+   - If `game_type == 3`, refresh `playoff_roster_cache` (one JSONB blob with all 16 playoff rosters, fetched sequentially with roster pacing; if NHL rejects the refresh but a cache row already exists, keep the existing row).
    - Call `generate_and_cache_insights(state, "")` and `generate_and_cache_race_odds(state, "", None)` for the global (no-league) variant.
    - For every league, call the same two functions with that league's id.
 
@@ -75,7 +75,7 @@ Order matters: playoff ingest goes first so the projection model inside `race_od
 
 ### Edge refresh (09:30 UTC)
 
-Defined at [`scheduler.rs:307-315`](../backend/src/infra/jobs/scheduler.rs). Calls `edge_refresher::run(db, nhl, force=false)`. The freshness gate inside the refresher skips the run if `nhl_skater_edge` was updated within the last 18 hours - which means the 09:30 cron is a no-op if the admin prewarm already forced a refresh that morning. See [`04-nhl-integration.md`](./04-nhl-integration.md) for the refresh mechanics.
+Defined at [`scheduler.rs:307-315`](../backend/src/infra/jobs/scheduler.rs). Calls `edge_refresher::run(db, nhl, force=false)`. The freshness gate inside the refresher skips the run if `nhl_skater_edge` was updated within the last 18 hours - which means either the 09:30 cron or an admin prewarm becomes a no-op when the other already refreshed Edge recently. See [`04-nhl-integration.md`](./04-nhl-integration.md) for the refresh mechanics.
 
 ## Continuous pollers
 
@@ -154,7 +154,7 @@ Admin handlers are at [`backend/src/api/handlers/admin.rs`](../backend/src/api/h
 | `GET /api/admin/rebackfill-carousel?season=` | `admin.rs:142-158` | Rebuild `playoff_game_results` for a past season via the playoff-carousel + series-games endpoints. |
 | `GET /api/admin/calibrate?...` | `admin.rs` | Single-run calibration report. See [`05-prediction-engine.md`](./05-prediction-engine.md). |
 | `GET /api/admin/calibrate-sweep?...` | `admin.rs:291-318` | Grid-search calibration. Capped at 200 cells. |
-| `GET /api/admin/prewarm` | `admin.rs:258-281` | Fire `edge_refresher::run(force=true)`, then `scheduler::prewarm_derived_payloads`. Runs in `tokio::spawn` so the HTTP response returns immediately; progress in server logs. |
+| `GET /api/admin/prewarm` | `admin.rs:258-281` | Fire `edge_refresher::run(force=false)`, then `scheduler::prewarm_derived_payloads`. Runs in `tokio::spawn` so the HTTP response returns immediately; progress in server logs. |
 | `GET /api/admin/rehydrate` | `admin.rs:327-337` | Synchronous run of every mirror-poller step plus a boxscore backfill for every game in `nhl_games`. Returns a JSON summary of row counts. |
 
 ## Retention and pruning

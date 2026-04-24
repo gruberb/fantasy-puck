@@ -86,9 +86,9 @@ The pool is rebuilt by `POST /draft/{id}/populate`. Two branches depending on `g
 `fetch_playoff_roster_pool_cached` ([`player_pool.rs:103-132`](../backend/src/infra/jobs/player_pool.rs)). Read-through cache:
 
 1. Check `playoff_roster_cache` table for a row keyed by `(season, game_type)`. If present and deserialises cleanly, return it. One SELECT, no NHL calls.
-2. On miss, call `fetch_playoff_roster_pool`: fetch the 16 rosters in parallel via `try_join_all`, merge into a `PoolMap`, write back to the cache table, and return.
+2. On miss, call `fetch_playoff_roster_pool`: fetch the 16 rosters sequentially with `ROSTER_FETCH_DELAY` pacing, merge into a `PoolMap`, write back to the cache table, and return.
 
-The 10:00 UTC prewarm cron calls `refresh_playoff_roster_cache` explicitly, so in practice the cache is always warm during the playoffs.
+The 10:00 UTC prewarm cron calls `refresh_playoff_roster_cache` explicitly, so in practice the cache is always warm during the playoffs. If that refresh hits the NHL rate limit after a valid row already exists, the job keeps the existing row rather than failing the downstream prewarm.
 
 The 16 team abbreviations come from `playoff_team_abbrevs` ([`player_pool.rs:161-178`](../backend/src/infra/jobs/player_pool.rs)): try the playoff carousel first; fall back to the top 16 teams by points percentage from `/v1/standings/now` if the carousel has fewer than 16 entries (which can happen briefly between regular-season end and when the NHL posts round 1 matchups).
 

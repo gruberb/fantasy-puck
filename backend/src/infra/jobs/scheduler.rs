@@ -171,12 +171,12 @@ pub async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
     });
 
     // Playoff roster pool — 16 team rosters written into Postgres so
-    // every downstream cold read is one SELECT instead of 16 parallel
-    // NHL calls. Failures are logged but non-fatal; the cached fetch
-    // path falls back to the NHL fanout on first read.
+    // every downstream cold read is one SELECT instead of a paced NHL
+    // fan-out. Failures are logged but non-fatal; the cached fetch path
+    // falls back to the NHL fan-out on first read.
     if game_type() == 3 {
         match refresh_playoff_roster_cache(db, nhl_client, season(), game_type()).await {
-            Ok(n) => info!("Pre-warmed playoff roster cache ({} players)", n),
+            Ok(n) => info!("Playoff roster cache ready ({} players)", n),
             Err(e) => error!("Failed to pre-warm playoff roster cache: {}", e),
         }
     }

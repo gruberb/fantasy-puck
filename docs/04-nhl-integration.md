@@ -201,7 +201,7 @@ Run sequence:
 3. Sequentially (with a 500 ms sleep between), call `nhl.get_skater_edge_detail(player_id)` and upsert `nhl_skater_edge(player_id, top_speed_mph, top_shot_speed_mph)`.
 4. Return a `RefreshSummary { refreshed, errors, skipped_fresh }`.
 
-At 30 players × 500 ms, the run takes about 15 seconds of wall-clock time. Operator admin prewarm passes `force=true` so a manual trigger skips the freshness gate.
+At 30 players × 500 ms, the run takes about 15 seconds of wall-clock time. Operator admin prewarm also passes `force=false`, so a manual trigger respects the same freshness gate and does not immediately spend another 30 Edge calls after the scheduled refresh.
 
 ## Auto-seed on boot
 

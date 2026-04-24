@@ -4,6 +4,20 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.23.4 — 2026-04-24 (backend)
+
+### Fixed — Admin prewarm rate-limit bursts
+
+Admin-triggered prewarm now respects the NHL Edge freshness gate
+instead of forcing another 30-player Edge refresh after the scheduled
+cron has already run. Playoff roster cache refreshes also fetch team
+rosters sequentially with the existing roster pacing instead of
+launching all 16 roster requests at once.
+
+If NHL still rejects a roster-cache refresh but Postgres already has a
+valid playoff roster cache row, prewarm keeps that existing row and
+continues with downstream cache generation.
+
 ## v1.23.3 / v1.19.3 — 2026-04-24 (BE v1.23.3 / FE v1.19.3)
 
 ### Added — Pulse Yesterday recap
