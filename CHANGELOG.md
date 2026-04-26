@@ -4,7 +4,7 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
-## v1.23.5 / v1.19.4 — 2026-04-25 (BE v1.23.5 / FE v1.19.4)
+## v1.23.5 / v1.19.6 — 2026-04-25 (BE v1.23.5 / FE v1.19.6)
 
 ### Fixed — Pulse stalls on game-end and missing Live Rankings during a live game
 
