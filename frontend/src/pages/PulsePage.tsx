@@ -239,12 +239,12 @@ function GameTonightCard({ game }: { game: MyGameTonight }) {
             >
               {p.name}
             </a>
-            <span className="text-gray-400 ml-1 shrink-0">{p.position}</span>
-            {(p.goals !== 0 || p.assists !== 0) && (
-              <span className="ml-2 font-bold text-[#2563EB] tabular-nums">
-                {p.goals}G {p.assists}A
-              </span>
-            )}
+            {/* Fixed-width slots so the position letter always lands in
+                the same column, with or without a stat line. */}
+            <span className="ml-2 w-14 text-right font-bold text-[#2563EB] tabular-nums shrink-0">
+              {(p.goals !== 0 || p.assists !== 0) ? `${p.goals}G ${p.assists}A` : ""}
+            </span>
+            <span className="ml-1 w-3 text-right text-gray-400 shrink-0">{p.position}</span>
           </div>
         ))}
       </div>

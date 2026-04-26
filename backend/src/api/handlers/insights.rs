@@ -482,27 +482,50 @@ async fn compute_todays_games(
         (date - chrono::Duration::days(1)).format("%Y-%m-%d").to_string()
     };
 
-    // Standings context: streak string + L10 record per team.
-    let standings_rows =
-        crate::infra::db::nhl_mirror::list_team_standings_context(pool, crate::api::season() as i32)
-            .await
-            .unwrap_or_default();
-    let standings_map: HashMap<String, (String, String)> = standings_rows
-        .into_iter()
-        .map(|r| {
-            let streak = match (r.streak_code.as_deref(), r.streak_count) {
-                (Some(code), Some(n)) if !code.is_empty() => format!("{}{}", code, n),
-                _ => String::new(),
-            };
-            let l10 = format!(
-                "{}-{}-{}",
-                r.l10_wins.unwrap_or(0),
-                r.l10_losses.unwrap_or(0),
-                r.l10_ot_losses.unwrap_or(0)
-            );
-            (r.team_abbrev, (streak, l10))
-        })
-        .collect();
+    // Standings context per team. In playoff mode the streak is
+    // computed from `nhl_games` so it reflects this postseason — the
+    // `nhl_standings.streak_code` column is regular-season-only and
+    // freezes at season's end, which would mislabel an eliminated team
+    // as `W1` if they happened to win their final regular-season game.
+    // L10 is dropped in playoff mode for the same reason: it's a
+    // regular-season concept and the series banner already conveys
+    // recent form.
+    let is_playoffs = crate::api::game_type() == 3;
+    let standings_map: HashMap<String, (String, String)> = if is_playoffs {
+        let streaks = crate::infra::db::nhl_mirror::list_team_playoff_streaks(
+            pool,
+            crate::api::season() as i32,
+        )
+        .await
+        .unwrap_or_default();
+        streaks
+            .into_iter()
+            .map(|(team, streak)| (team, (streak, String::new())))
+            .collect()
+    } else {
+        let standings_rows = crate::infra::db::nhl_mirror::list_team_standings_context(
+            pool,
+            crate::api::season() as i32,
+        )
+        .await
+        .unwrap_or_default();
+        standings_rows
+            .into_iter()
+            .map(|r| {
+                let streak = match (r.streak_code.as_deref(), r.streak_count) {
+                    (Some(code), Some(n)) if !code.is_empty() => format!("{}{}", code, n),
+                    _ => String::new(),
+                };
+                let l10 = format!(
+                    "{}-{}-{}",
+                    r.l10_wins.unwrap_or(0),
+                    r.l10_losses.unwrap_or(0),
+                    r.l10_ot_losses.unwrap_or(0)
+                );
+                (r.team_abbrev, (streak, l10))
+            })
+            .collect()
+    };
 
     // Yesterday's final scores → "W 4-2 vs OPP" caption per team.
     // Mirror's `list_games_for_date` already carries home/away scores
@@ -538,13 +561,18 @@ async fn compute_todays_games(
             .map(build_landing_from_matchup)
             .unwrap_or_default();
 
+        // Empty strings collapse to `None` so the API response and the
+        // Claude prompt builder both treat "no data" uniformly. In
+        // playoff mode the standings_map carries an empty L10 by
+        // construction (see comment near `is_playoffs` above).
+        let lift = |s: &String| (!s.is_empty()).then(|| s.clone());
         let (home_streak, home_l10) = standings_map
             .get(&home)
-            .map(|(s, l)| (Some(s.clone()), Some(l.clone())))
+            .map(|(s, l)| (lift(s), lift(l)))
             .unwrap_or((None, None));
         let (away_streak, away_l10) = standings_map
             .get(&away)
-            .map(|(s, l)| (Some(s.clone()), Some(l.clone())))
+            .map(|(s, l)| (lift(s), lift(l)))
             .unwrap_or((None, None));
 
         let home_last_result = last_result_map.get(&home).cloned();

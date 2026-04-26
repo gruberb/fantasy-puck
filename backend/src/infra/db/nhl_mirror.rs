@@ -1127,6 +1127,72 @@ pub async fn list_team_standings_context(
     Ok(rows)
 }
 
+/// Per-team playoff streak strings (`"W4"`, `"L3"`, `"OT1"`) computed
+/// from `nhl_games` rows for the requested postseason. Walks each
+/// team's completed playoff games in reverse chronological order and
+/// counts the consecutive run of identical result kinds.
+///
+/// Result kinds:
+///
+/// - `W`: any win (regulation or OT — playoffs don't have shootouts)
+/// - `L`: regulation loss
+/// - `OT`: overtime loss (`period_type = 'OT'` and the team lost)
+///
+/// Why: `nhl_standings.streak_code` is regular-season-only and freezes
+/// at season's end. A team eliminated 4-0 in the playoffs would still
+/// show a regular-season `W1` if they happened to win their final
+/// regular-season game. The Insights card uses this helper instead in
+/// playoff mode.
+pub async fn list_team_playoff_streaks(
+    pool: &PgPool,
+    season: i32,
+) -> Result<std::collections::HashMap<String, String>> {
+    let rows: Vec<(i64, String, String, Option<i32>, Option<i32>, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT game_id, home_team, away_team, home_score, away_score, period_type
+          FROM nhl_games
+         WHERE season = $1
+           AND game_type = 3
+           AND game_state IN ('OFF', 'FINAL')
+           AND home_score IS NOT NULL
+           AND away_score IS NOT NULL
+         ORDER BY game_date DESC, game_id DESC
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+
+    // Bucket each team's results in the order returned (already
+    // reverse-chronological), tagging each game with the kind of
+    // result that team experienced. The first kind in each bucket
+    // anchors the streak; we count forward until the kind changes.
+    let mut by_team: std::collections::HashMap<String, Vec<&'static str>> =
+        std::collections::HashMap::new();
+    for (_, home, away, home_score, away_score, period_type) in &rows {
+        let (Some(hs), Some(as_)) = (home_score, away_score) else {
+            continue;
+        };
+        let ot = matches!(period_type.as_deref(), Some("OT"));
+        let (home_kind, away_kind) = match hs.cmp(as_) {
+            std::cmp::Ordering::Greater => ("W", if ot { "OT" } else { "L" }),
+            std::cmp::Ordering::Less => (if ot { "OT" } else { "L" }, "W"),
+            std::cmp::Ordering::Equal => continue,
+        };
+        by_team.entry(home.clone()).or_default().push(home_kind);
+        by_team.entry(away.clone()).or_default().push(away_kind);
+    }
+
+    let mut out = std::collections::HashMap::with_capacity(by_team.len());
+    for (team, kinds) in by_team {
+        let Some(&first) = kinds.first() else { continue };
+        let count = kinds.iter().take_while(|&&k| k == first).count();
+        out.insert(team, format!("{}{}", first, count));
+    }
+    Ok(out)
+}
+
 /// Reconstruct the NHL-shaped standings JSON from the mirror for
 /// functions that still take the raw payload shape
 /// (`team_ratings::from_standings`, `playoff_elo::seed_from_standings`,

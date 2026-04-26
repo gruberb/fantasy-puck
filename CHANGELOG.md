@@ -4,6 +4,26 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.23.6 / v1.19.7 — 2026-04-25 (BE v1.23.6 / FE v1.19.7)
+
+### Fixed — Insights streak reflected regular-season standings during the playoffs
+
+The "Won 1" / "Lost 3" badge on each Insights game card was reading
+`nhl_standings.streak_code`, which is regular-season-only and freezes
+at season's end. A team eliminated 4-0 in the playoffs would still
+show `W1` if they happened to win their final regular-season game.
+The streak is now computed from `nhl_games` against the active
+postseason: `W` for any win (regulation or OT), `L` for a regulation
+loss, `OT` for an OT loss. `L10` is dropped in playoff mode since the
+series banner already conveys recent form.
+
+### Changed — Pulse "Tonight" player rows column-aligned
+
+In the per-game roster card, the goals/assists slot now renders before
+the position letter and reserves a fixed width whether or not the
+player has produced. Position lands in the same x-coordinate on every
+row so the cell scans cleanly.
+
 ## v1.23.5 / v1.19.6 — 2026-04-25 (BE v1.23.5 / FE v1.19.6)
 
 ### Fixed — Pulse stalls on game-end and missing Live Rankings during a live game
