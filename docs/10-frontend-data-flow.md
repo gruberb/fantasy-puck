@@ -53,7 +53,7 @@ Each row: what the page calls, at what staleTime, and whether anything polls. "U
 | --- | --- | --- | --- | --- | --- |
 | `LoginPage` | `useAuth` (context) | POST `/api/auth/login`, `/api/auth/register` | n/a | - | - |
 | `LeaguePickerPage` | `LeagueContext` | GET `/api/leagues`, GET `/api/auth/memberships` | DEFAULT (5 min) | - | - |
-| `HomePage` | Uses several dashboards (rankings, top skaters, upcoming games) + `LiveRankingsTable` via `usePulse` when `hasLiveGames` | Multiple + GET `/api/pulse?league_id=...` (piggy-backs on PulsePage's query) | DEFAULT | Inherits Pulse's 60 s poll while any game is LIVE/CRIT | - |
+| `HomePage` | Uses several dashboards (rankings, top skaters, upcoming games) + `LiveRankingsTable` driven by its own `GET /api/games?date=today` query (decoupled from Pulse so a slow Pulse load can't hide live rankings) | Multiple + GET `/api/games?date=today&league_id=...` | `QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS` | Same interval while any game is `LIVE`/`CRIT`; off otherwise | - |
 | `FantasyTeamsPage` | `useFantasyTeams` | GET `/api/fantasy/teams?league_id=...` | DEFAULT | - | - |
 | `FantasyTeamDetailPage` | `useTeamDetail` | GET `/api/fantasy/teams/{id}` | DEFAULT | - | - |
 | `RankingsPage` | `useRankingsData` | GET `/api/fantasy/rankings/daily`, GET `/api/fantasy/rankings/playoffs` | DEFAULT | 30 s when viewing today; off otherwise | - |

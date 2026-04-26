@@ -175,12 +175,12 @@ The tick body ([`live_poller.rs:85-109`](../backend/src/infra/jobs/live_poller.r
 2. `nhl_mirror::list_live_game_ids_for_date(pool, today)` returns game_ids where state is `LIVE`, `CRIT`, or `PRE`. If empty, return - this is the off-night cost: one SELECT per minute per leader.
 3. For each live game, call `poll_one_game`.
 
-`poll_one_game` ([`live_poller.rs:112-201`](../backend/src/infra/jobs/live_poller.rs)) does:
+`poll_one_game` ([`live_poller.rs:118-214`](../backend/src/infra/jobs/live_poller.rs)) does:
 
 1. Snapshot the previous `game_state` from the mirror.
 2. `get_game_boxscore(game_id)` → `upsert_boxscore_players` writes every skater and goalie row into `nhl_player_game_stats`.
 3. `get_game_data(game_id)` returns the state/score/period block; `update_game_live_state` writes those columns on `nhl_games`.
-4. If `(previous, new)` transitioned from `LIVE|CRIT` to `OFF|FINAL`, look up every league that had a rostered player in this game, and for each call `cache.invalidate_by_prefix(f"pulse_narrative:{league_id}:")`. Scores do not need invalidation - they live in the mirror. Only the narrative text, which refers to the in-progress game by name, needs to be regenerated.
+4. If `(previous, new)` transitioned from `LIVE|CRIT` to `OFF|FINAL`, look up every league that had a rostered player in this game, and for each call `cache.invalidate_by_like(f"team_diagnosis:{league_id}:%:v2")`. Scores do not need invalidation — they live in the mirror. Only the narrative text, which refers to the in-progress game by name, needs regeneration. The sibling `:bundle:v1` payload is intentionally left in place: its projections, grades, and recent-games rollup are stable through the evening, and wiping it would stall the next Pulse load on a synchronous Claude rebuild.
 
 The invalidation runs exactly once per game because the state write in step 3 flips the mirror before the check in step 4 fires; the next tick sees the new state and skips the block.
 

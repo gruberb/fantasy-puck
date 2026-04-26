@@ -1,20 +1,24 @@
 //! Pulse — personalised live dashboard.
 //!
 //! The live data (my team status, series forecast, my games
-//! tonight, per-team breakdown, league outlook) is recomputed from
-//! the NHL mirror on every request. The expensive bits — the
-//! team-diagnosis narrative (one Claude round-trip per caller's
-//! team per hockey-date) and the Monte Carlo race-odds payload —
-//! are cached separately in `response_cache` under
-//! `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:v2` and
-//! `race_odds:v4:{league}:{season}:{gt}:{date}`.
+//! tonight, league board, league outlook) is recomputed from the NHL
+//! mirror on every request. The expensive caller-specific breakdown
+//! (per-player projections, grades, recent games, yesterday recap,
+//! and the Claude narrative) is cached as a single
+//! `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:bundle:v1`
+//! payload. The nested narrative still has its own
+//! `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:v2` cache key
+//! so a bundle miss does not necessarily mean a Claude miss.
 //!
 //! Cache invalidation: the live poller (see
 //! `infra::jobs::live_poller::poll_one_game`) observes each game's
-//! `LIVE|CRIT -> OFF|FINAL` state transition and deletes the
-//! `team_diagnosis:{league}:*` rows for leagues whose rostered
-//! players were in that game. Next Pulse visit regenerates the
-//! narrative with the final score in view.
+//! `LIVE|CRIT -> OFF|FINAL` state transition and deletes only the
+//! `:v2` narrative tail for leagues whose rostered players were in
+//! that game. The `:bundle:v1` payload survives the transition: its
+//! projections and rollups are stable mid-evening and a blanket wipe
+//! would force a synchronous Claude regen on the next Pulse load.
+//! The bundle ages out on the date roll and is rebuilt by the daily
+//! prewarm with the fresh narrative nested inside.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -71,7 +75,7 @@ pub async fn get_pulse(
     // handler; the live poller invalidates both on game-end.
     if let Some(team_id) = my_team_id {
         response.my_team_diagnosis =
-            build_my_team_diagnosis(&state, &league_id, team_id).await;
+            build_my_team_diagnosis(&state, &league_id, team_id, &today).await;
     }
 
     // Your League block — leader, distribution, and top-3 projected
@@ -87,12 +91,44 @@ async fn build_my_team_diagnosis(
     state: &Arc<AppState>,
     league_id: &str,
     team_id: i64,
+    today: &str,
 ) -> Option<crate::api::dtos::pulse::MyTeamDiagnosis> {
-    if game_type() != 3 {
-        return None;
+    match resolve_my_team_diagnosis(state, league_id, team_id, today).await {
+        Ok(diagnosis) => diagnosis,
+        Err(e) => {
+            warn!(
+                league_id = %league_id,
+                team_id,
+                "Failed to build Pulse team diagnosis: {}",
+                e
+            );
+            None
+        }
     }
-    let team = state.db.get_team(team_id, league_id).await.ok()?;
-    let players = state.db.get_team_players(team_id).await.ok()?;
+}
+
+pub(crate) async fn resolve_my_team_diagnosis(
+    state: &Arc<AppState>,
+    league_id: &str,
+    team_id: i64,
+    today: &str,
+) -> Result<Option<crate::api::dtos::pulse::MyTeamDiagnosis>> {
+    if game_type() != 3 {
+        return Ok(None);
+    }
+
+    let cache_key = team_diagnosis_bundle_cache_key(league_id, team_id, today);
+    if let Some(cached) = state
+        .db
+        .cache()
+        .get_cached_response::<crate::api::dtos::pulse::MyTeamDiagnosis>(&cache_key)
+        .await?
+    {
+        return Ok(Some(cached));
+    }
+
+    let team = state.db.get_team(team_id, league_id).await?;
+    let players = state.db.get_team_players(team_id).await?;
     let bundle = crate::api::handlers::team_breakdown::compose_team_breakdown(
         state,
         league_id,
@@ -100,15 +136,31 @@ async fn build_my_team_diagnosis(
         &team.name,
         &players,
     )
-    .await
-    .ok()?;
-    Some(crate::api::dtos::pulse::MyTeamDiagnosis {
+    .await?;
+    let diagnosis = crate::api::dtos::pulse::MyTeamDiagnosis {
         team_id,
         team_name: team.name,
         total_points: bundle.team_totals.total_points,
         diagnosis: bundle.diagnosis,
         players: bundle.players,
-    })
+    };
+    let _ = state
+        .db
+        .cache()
+        .store_response(&cache_key, today, &diagnosis)
+        .await;
+    Ok(Some(diagnosis))
+}
+
+fn team_diagnosis_bundle_cache_key(league_id: &str, team_id: i64, today: &str) -> String {
+    format!(
+        "team_diagnosis:{}:{}:{}:{}:{}:bundle:v1",
+        league_id,
+        team_id,
+        season(),
+        game_type(),
+        today
+    )
 }
 
 fn largest_stack(nhl_teams: &[String]) -> Option<(String, u32)> {

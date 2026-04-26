@@ -124,7 +124,7 @@ async fn poll_one_game(
 
     // Snapshot the previous state before anything else so we can
     // detect the LIVE|CRIT -> OFF|FINAL transition and fire the
-    // Pulse-narrative cache invalidation exactly once per game end.
+    // team-diagnosis narrative invalidation exactly once per game end.
     let previous_state = nhl_mirror::get_game_state(pool, game_id).await?;
 
     // Boxscore drives player stats and (as a side benefit) carries the
@@ -169,10 +169,19 @@ async fn poll_one_game(
         .await?;
     }
 
-    // Post-update: fire pulse-narrative invalidation exactly once
-    // per observed LIVE|CRIT -> OFF|FINAL transition. Done after the
-    // state write so a subsequent tick sees the new state and never
+    // Post-update: fire team-diagnosis narrative invalidation exactly
+    // once per observed LIVE|CRIT -> OFF|FINAL transition. Done after
+    // the state write so a subsequent tick sees the new state and never
     // re-fires the invalidation for the same game.
+    //
+    // Only the `:v2` narrative tail is wiped. The `:bundle:v1` payload
+    // (projections, grades, recent-games rollup, yesterday recap) is
+    // left in place: those columns are stable mid-evening and the
+    // expensive Claude regen would otherwise stall the next Pulse load
+    // for every team that had a player in the just-ended game. The
+    // bundle ages out naturally on the date roll, and the daily
+    // prewarm rebuilds it the next morning with the new narrative
+    // already nested inside.
     if let (Some(prev), Some(new)) = (previous_state, new_state_for_invalidation) {
         let was_live = matches!(prev.as_str(), "LIVE" | "CRIT");
         let is_final = matches!(new.as_str(), "OFF" | "FINAL");
@@ -180,8 +189,8 @@ async fn poll_one_game(
             let leagues = nhl_mirror::list_leagues_with_player_in_game(pool, game_id).await?;
             let cache = db.cache();
             for league_id in &leagues {
-                let prefix = format!("team_diagnosis:{}:", league_id);
-                match cache.invalidate_by_prefix(&prefix).await {
+                let pattern = format!("team_diagnosis:{}:%:v2", league_id);
+                match cache.invalidate_by_like(&pattern).await {
                     Ok(n) => debug!(
                         game_id,
                         league_id = %league_id,
@@ -191,7 +200,7 @@ async fn poll_one_game(
                     Err(e) => warn!(
                         game_id,
                         league_id = %league_id,
-                        "live_poller: narrative invalidation failed: {}",
+                        "live_poller: team-diagnosis narrative invalidation failed: {}",
                         e
                     ),
                 }

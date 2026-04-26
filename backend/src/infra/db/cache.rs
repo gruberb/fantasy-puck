@@ -154,13 +154,26 @@ impl CacheService {
 }
 
 impl CacheService {
-    /// Delete every row whose `cache_key` begins with `prefix`. Used
-    /// by the live poller to invalidate all `team_diagnosis:{league}:*`
-    /// entries when a game a rostered player is in transitions to
-    /// FINAL.
+    /// Delete every row whose `cache_key` begins with `prefix`.
     pub async fn invalidate_by_prefix(&self, prefix: &str) -> Result<u64> {
         let query = "DELETE FROM response_cache WHERE cache_key LIKE $1";
         let pattern = format!("{}%", prefix);
+        let result = sqlx::query(query)
+            .bind(pattern)
+            .execute(&self.pool)
+            .await
+            .map_err(Error::Database)?;
+        Ok(result.rows_affected())
+    }
+
+    /// Delete every row whose `cache_key` matches the SQL LIKE
+    /// `pattern`. Used to target a narrow slice of the keyspace where a
+    /// pure prefix would also wipe sibling keys the caller wants to
+    /// keep — for example, the live poller wipes only the `:v2`
+    /// narrative tail of the team-diagnosis family on game-end while
+    /// leaving the `:bundle:v1` payload intact for the rest of the day.
+    pub async fn invalidate_by_like(&self, pattern: &str) -> Result<u64> {
+        let query = "DELETE FROM response_cache WHERE cache_key LIKE $1";
         let result = sqlx::query(query)
             .bind(pattern)
             .execute(&self.pool)

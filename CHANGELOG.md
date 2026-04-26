@@ -4,6 +4,31 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.23.5 / v1.19.4 — 2026-04-25 (BE v1.23.5 / FE v1.19.4)
+
+### Fixed — Pulse stalls on game-end and missing Live Rankings during a live game
+
+The Pulse "Your Read" block now ships as a single bundle cache
+(`team_diagnosis:{league}:{team}:{season}:{gt}:{date}:bundle:v1`)
+populated by the daily 10:00 UTC prewarm, so a warm Pulse load is one
+SELECT instead of seven batched DB reads plus a Claude round-trip.
+
+The live poller's game-end invalidation now narrows to only the `:v2`
+narrative tail (`team_diagnosis:{league}:%:v2`) rather than wiping the
+entire `team_diagnosis:{league}:*` family. The bundle's projections,
+grades, recent-games rollup, and yesterday recap are stable through
+the evening, so leaving them in place keeps subsequent Pulse loads off
+Claude until the next morning's prewarm rebuilds the bundle with the
+fresh narrative nested inside.
+
+### Fixed — Live Rankings disappeared when Pulse was slow
+
+The dashboard's Live Rankings table no longer reads from `usePulse`.
+It now drives off `GET /api/games?date=today&league_id=...` directly,
+sourcing the same `pointsToday` figures from the games endpoint's
+`fantasyTeams[].playersInAction[]` block. A slow or stalled Pulse can
+no longer hide live rankings from the dashboard during a live game.
+
 ## v1.23.4 — 2026-04-24 (backend)
 
 ### Fixed — Admin prewarm rate-limit bursts

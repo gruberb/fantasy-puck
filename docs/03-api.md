@@ -168,7 +168,7 @@ Handler in [`handlers/pulse.rs`](../backend/src/api/handlers/pulse.rs).
 
 | Method | Path | Handler | Auth | Data source |
 | --- | --- | --- | --- | --- |
-| GET | `/api/pulse?league_id=...` | `get_pulse` | Required | `v_daily_fantasy_totals` (live), `nhl_games`, `nhl_playoff_bracket`, `nhl_player_game_stats` rollup, yesterday's mirror recap, cached race-odds payload, plus the Claude team-diagnosis narrative cached at `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:v2` |
+| GET | `/api/pulse?league_id=...` | `get_pulse` | Required | `v_daily_fantasy_totals` (live), `nhl_games`, `nhl_playoff_bracket`, `nhl_player_game_stats` rollup, yesterday's mirror recap, cached race-odds payload, plus the per-caller `MyTeamDiagnosis` bundle cached at `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:bundle:v1` (which itself nests the Claude narrative cached at `…:v2`) |
 
 `PulseResponse` carries: the `leagueBoard` (with live `pointsToday` from `v_daily_fantasy_totals`, consumed by the dashboard's Live Rankings section — the Pulse page itself no longer renders this list), a per-team `seriesForecast`, the caller's `myGamesTonight`, a flat `gamesToday` list of today's NHL matchups, and an `nhlTeamCupOdds` map lifted from the cached race-odds payload.
 
@@ -177,9 +177,11 @@ Two additional blocks drive the Pulse page directly:
 - **`myTeamDiagnosis`** — full per-player breakdown (G/A/P/SOG/PIM/+/-/HIT/TOI, projected PPG, letter grade, bucket, remaining-points impact, last-5 games) plus a descriptive `diagnosis.narrativeMarkdown`. `diagnosis.yesterday` is built from `nhl_games` + `nhl_player_game_stats` for the previous hockey date, with a current top-3 league fallback when nobody relevant appeared. The narrative has four `### Heading` sections — Yesterday / Where You Stand / Player-by-Player / What to Expect — written in a descriptive-not-prescriptive voice since the roster is locked for the playoffs.
 - **`leagueOutlook`** — leader + points distribution across all teams, plus the top-3 projected finishers from the Monte Carlo with each team's largest NHL stack and its cup-win probability.
 
-Both blocks share one composition helper ([`handlers/team_breakdown::compose_team_breakdown`](../backend/src/api/handlers/team_breakdown.rs)) and are pre-warmed per (league × team) by the daily 10:00 UTC prewarm job + the on-demand `GET /api/admin/prewarm` endpoint — so the first Pulse load after prewarm is a warm cache hit, not a Claude round-trip.
+Both blocks share one composition helper ([`handlers/team_breakdown::compose_team_breakdown`](../backend/src/api/handlers/team_breakdown.rs)). The daily 10:00 UTC prewarm job + the on-demand `GET /api/admin/prewarm` endpoint call `pulse::resolve_my_team_diagnosis` per (league × team) so the bundle cache is filled before any user lands on Pulse — the first request becomes a single SELECT.
 
-**Narrative cache**: `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:v2`. Invalidated by the live poller on `LIVE|CRIT → OFF|FINAL` transitions for games that any rostered player was in, so the next Pulse load regenerates with the final score in view.
+**Bundle cache**: `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:bundle:v1`. Holds the full `MyTeamDiagnosis` payload (per-player breakdown + `diagnosis.narrativeMarkdown`). Survives mid-evening game-end transitions intentionally — wiping it would force a synchronous Claude regen on the next Pulse load. Ages out on the date roll; rebuilt by the next morning's prewarm.
+
+**Narrative cache**: `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:v2`. The Claude-generated text only. Invalidated by the live poller on `LIVE|CRIT → OFF|FINAL` transitions for games that any rostered player was in, so the next prewarm regenerates the narrative with the final score in view and folds it into the new bundle.
 
 ### Race odds
 
@@ -225,7 +227,8 @@ All written to `response_cache` by handlers. All read from the same table. Inval
 | `match_day:{date}` | `handlers/games.rs` (`get_match_day`) | Admin invalidate, scope=`{date}` |
 | `insights:...` | `handlers/insights.rs` | Daily prewarm overwrites at 10:00 UTC; admin invalidate |
 | `race_odds:...` | `handlers/race_odds.rs` | Same pattern as insights |
-| `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:v2` | `handlers/pulse.rs` (via `handlers/team_breakdown`) | Live poller's `invalidate_by_prefix` on `LIVE \| CRIT → OFF \| FINAL` for games involving any rostered player |
+| `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:v2` | `handlers/team_breakdown.rs` (Claude narrative) | Live poller's `invalidate_by_like("team_diagnosis:{league}:%:v2")` on `LIVE \| CRIT → OFF \| FINAL` for games involving any rostered player |
+| `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:bundle:v1` | `handlers/pulse.rs` (`resolve_my_team_diagnosis`) | Daily 10:00 UTC prewarm overwrite; admin invalidate. Not wiped on game-end — see `06-business-logic.md`. |
 
 ## Query params worth knowing
 

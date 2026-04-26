@@ -112,19 +112,21 @@ A walk through what happens between a goal being scored in an NHL arena and the 
 
 ### Cache invalidation on game end
 
-The live poller detects the `LIVE|CRIT → OFF|FINAL` state transition once per game ([`live_poller.rs:170-197`](../backend/src/infra/jobs/live_poller.rs)) and invalidates `pulse_narrative:{league}:*` entries for every league that had a rostered player in that game:
+The live poller detects the `LIVE|CRIT → OFF|FINAL` state transition once per game ([`live_poller.rs:172-210`](../backend/src/infra/jobs/live_poller.rs)) and invalidates only the `:v2` narrative tail of `team_diagnosis:{league}:*` for every league that had a rostered player in that game:
 
 ```rust
 if was_live && is_final {
     let leagues = nhl_mirror::list_leagues_with_player_in_game(pool, game_id).await?;
     for league_id in &leagues {
-        let prefix = format!("pulse_narrative:{}:", league_id);
-        cache.invalidate_by_prefix(&prefix).await?;
+        let pattern = format!("team_diagnosis:{}:%:v2", league_id);
+        cache.invalidate_by_like(&pattern).await?;
     }
 }
 ```
 
-**Scores do not need to be invalidated.** They live in the mirror and are always fresh. Only the Claude-generated narrative text, which names the game and references in-progress stats, gets regenerated on the next Pulse visit. That's the expensive bit worth caching ([`handlers/pulse.rs:1-14`](../backend/src/api/handlers/pulse.rs)).
+**Scores do not need to be invalidated.** They live in the mirror and are always fresh. Only the Claude-generated narrative text, which names the game and references in-progress stats, gets regenerated on the next Pulse visit. That's the expensive bit worth caching ([`handlers/pulse.rs:1-21`](../backend/src/api/handlers/pulse.rs)).
+
+The sibling `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:bundle:v1` payload is **not** wiped on this transition. The bundle's projections, grades, recent-games rollup, and yesterday recap are stable through the evening, so wiping it would force every Pulse load until the next prewarm to re-run `compose_team_breakdown` (seven batched DB reads + projection fold) just to surface the same numbers. The bundle ages out naturally on the date roll, and the daily prewarm at 10:00 UTC rebuilds it with the freshly regenerated narrative nested inside.
 
 ### What Pulse reads
 
@@ -140,8 +142,9 @@ From [`handlers/pulse.rs`](../backend/src/api/handlers/pulse.rs):
 | `nhl_mirror::list_league_team_season_totals(..., current_date_window())` | Season-to-date totals, clamped to `[playoff_start, season_end]` in playoff mode | No |
 | Cached `race_odds:v4:*` payload | `nhl_team_cup_odds: HashMap<String, f32>` for the narrator — best-effort, empty if the morning cron hasn't warmed | Yes (reused, not regenerated) |
 | `state.prediction.team_diagnosis(...)` via `response_cache` | Structured "Your Read" narrative (`### Yesterday` / `### Where You Stand` / `### Player-by-Player` / `### What to Expect`) | Yes - `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:v2` |
+| `compose_team_breakdown(...)` result via `response_cache` | The full caller-specific breakdown (per-player projections, grades, recent games, yesterday recap, narrative) returned as `MyTeamDiagnosis` | Yes - `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:bundle:v1` |
 
-Everything except the narrative and the race-odds cross-read is recomputed on every request. The data sizes are small enough (one league × ~10 teams × ~30 players × a few live games) that this stays in the single-digit millisecond range.
+Everything except the narrative, the race-odds cross-read, and the per-caller breakdown bundle is recomputed on every request. The data sizes are small enough (one league × ~10 teams × ~30 players × a few live games) that this stays in the single-digit millisecond range. The bundle is what keeps the request path off Claude during the playoffs — a warm bundle turns the Pulse "Your Read" block into one SELECT.
 
 ### Playoff window clamping
 

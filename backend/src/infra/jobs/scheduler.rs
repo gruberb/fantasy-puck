@@ -232,30 +232,21 @@ async fn prewarm_league_team_diagnoses(state: &Arc<AppState>, league_id: &str) {
             return;
         }
     };
+    let today = crate::api::handlers::insights::hockey_today();
     for team in teams {
-        let players = match state.db.get_team_players(team.id).await {
-            Ok(p) => p,
-            Err(e) => {
-                error!(
-                    "Failed to load players for diagnosis prewarm (team {}): {}",
-                    team.id, e
-                );
-                continue;
-            }
-        };
-        match crate::api::handlers::team_breakdown::compose_team_breakdown(
+        match crate::api::handlers::pulse::resolve_my_team_diagnosis(
             state,
             league_id,
             team.id,
-            &team.name,
-            &players,
+            &today,
         )
         .await
         {
-            Ok(_) => info!(
+            Ok(Some(_)) => info!(
                 "Pre-warmed team_diagnosis for league {} team {}",
                 league_id, team.id
             ),
+            Ok(None) => {}
             Err(e) => error!(
                 "Failed to pre-warm team_diagnosis for league {} team {}: {}",
                 league_id, team.id, e

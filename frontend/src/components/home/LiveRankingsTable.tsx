@@ -1,19 +1,22 @@
 import { Link } from "react-router-dom";
-import { usePulse } from "@/features/pulse";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/api/client";
 import RankingTable from "@/components/common/RankingTable";
 import {
   useLiveRankingsColumns,
   type LiveRankingRow,
 } from "@/components/rankingsPageTableColumns/liveColumns";
-import type { PulseResponse } from "@/features/pulse/types";
+import { QUERY_INTERVALS } from "@/config";
+import { useLeague } from "@/contexts/LeagueContext";
+import type { Game, GamesResponse } from "@/types/games";
+import type { FantasyTeamInAction } from "@/types/matchDay";
 import { getHockeyDateToday } from "@/utils/timezone";
 
 /**
  * Appears at the top of the dashboard only while games are in flight
- * (`hasLiveGames` from Pulse). Lists every league team with at least
- * one rostered skater in tonight's NHL slate, sorted by today's live
- * points (from `v_daily_fantasy_totals`, same source as the Pulse
- * League Live Board).
+ * according to the Games mirror endpoint. Lists every league team
+ * with at least one rostered skater in today's NHL slate, sorted by
+ * current same-day boxscore points.
  *
  * Uses the shared `RankingTable` body so rank badges, row heights,
  * and cell typography match the other dashboard tables (Overall,
@@ -22,17 +25,32 @@ import { getHockeyDateToday } from "@/utils/timezone";
  * `customHeader` slot.
  */
 export function LiveRankingsTable() {
-  const { pulse, isLoading } = usePulse();
+  const { activeLeagueId, myMemberships } = useLeague();
   const columns = useLiveRankingsColumns();
+  const today = getHockeyDateToday();
 
-  // Render nothing when pulse hasn't loaded, there are no live games,
+  const { data, isLoading } = useQuery({
+    queryKey: ["dashboardLiveGames", today, activeLeagueId],
+    queryFn: () => api.getGames(today, activeLeagueId ?? undefined),
+    enabled: !!activeLeagueId,
+    retry: 1,
+    staleTime: QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS,
+    refetchInterval: (query) => {
+      const games = (query.state.data as GamesResponse | undefined)?.games ?? [];
+      return games.some((g) => isUnfinishedState(g.gameState))
+        ? QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS
+        : false;
+    },
+  });
+
+  // Render nothing when games haven't loaded, there are no live games,
   // or no team has any active skaters. The section is a live-only
   // surface; we'd rather omit it than flash an empty frame.
-  if (isLoading || !pulse || !pulse.hasLiveGames) return null;
+  if (isLoading || !data || !data.games.some((g) => isLiveState(g.gameState))) return null;
 
-  const today = getHockeyDateToday();
-  const rosterByTeam = buildRosterIndex(pulse);
-  const rows = buildRows(pulse, rosterByTeam);
+  const myTeamId =
+    myMemberships.find((m) => m.league_id === activeLeagueId)?.fantasy_team_id ?? null;
+  const rows = buildRows(data, myTeamId);
 
   if (rows.length === 0) return null;
 
@@ -78,42 +96,48 @@ function LiveHeader({ to }: { to: string }) {
   );
 }
 
-function buildRows(
-  pulse: PulseResponse,
-  rosterByTeam: Map<number, Set<string>>,
-): LiveRankingRow[] {
-  return pulse.leagueBoard
-    .filter((t) => t.playersActiveToday > 0)
+function buildRows(data: GamesResponse, myTeamId: number | null): LiveRankingRow[] {
+  return (data.fantasyTeams ?? [])
+    .map((team) => buildRow(team, data.games, myTeamId))
+    .filter((row) => row.playersActiveToday > 0)
     .sort((a, b) => {
       if (b.pointsToday !== a.pointsToday) return b.pointsToday - a.pointsToday;
-      return b.playersActiveToday - a.playersActiveToday;
+      if (b.playersActiveToday !== a.playersActiveToday) {
+        return b.playersActiveToday - a.playersActiveToday;
+      }
+      return a.teamName.localeCompare(b.teamName);
     })
-    .map((t, idx) => {
-      const roster = rosterByTeam.get(t.teamId) ?? new Set<string>();
-      const games = pulse.gamesToday.filter(
-        (g) => roster.has(g.homeTeam) || roster.has(g.awayTeam),
-      );
-      return {
-        rank: idx + 1,
-        teamId: t.teamId,
-        teamName: t.teamName,
-        pointsToday: t.pointsToday,
-        playersActiveToday: t.playersActiveToday,
-        games,
-        roster,
-        isMyTeam: t.isMyTeam,
-      };
-    });
+    .map((row, idx) => ({ ...row, rank: idx + 1 }));
 }
 
-function buildRosterIndex(pulse: PulseResponse): Map<number, Set<string>> {
-  const map = new Map<number, Set<string>>();
-  for (const team of pulse.seriesForecast) {
-    const set = new Set<string>();
-    for (const cell of team.cells) {
-      set.add(cell.nhlTeam);
-    }
-    map.set(team.teamId, set);
-  }
-  return map;
+function buildRow(
+  team: FantasyTeamInAction,
+  gamesToday: Game[],
+  myTeamId: number | null,
+): LiveRankingRow {
+  const roster = new Set(team.playersInAction.map((p) => p.nhlTeam));
+  const games = gamesToday
+    .filter((g) => roster.has(g.homeTeam) || roster.has(g.awayTeam))
+    .map((g) => ({ homeTeam: g.homeTeam, awayTeam: g.awayTeam }));
+
+  return {
+    rank: 0,
+    teamId: team.teamId,
+    teamName: team.teamName,
+    pointsToday: team.playersInAction.reduce((sum, p) => sum + p.points, 0),
+    playersActiveToday: team.totalPlayersToday,
+    games,
+    roster,
+    isMyTeam: team.teamId === myTeamId,
+  };
+}
+
+function isLiveState(state: string | null | undefined): boolean {
+  const s = (state ?? "").toUpperCase();
+  return s === "LIVE" || s === "CRIT";
+}
+
+function isUnfinishedState(state: string | null | undefined): boolean {
+  const s = (state ?? "").toUpperCase();
+  return s !== "OFF" && s !== "FINAL";
 }
