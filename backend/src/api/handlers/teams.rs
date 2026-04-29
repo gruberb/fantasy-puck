@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::{
@@ -5,17 +6,15 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
-use tracing::error;
 
 use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{game_type, season};
+use crate::api::{current_date_window, game_type, season};
 use crate::auth::middleware::AuthUser;
 use crate::error::Result;
 use crate::domain::models::db::{FantasyPlayer, FantasyTeam};
-use crate::domain::models::nhl::StatsLeaders;
-use crate::domain::models::fantasy::PlayerStats;
+use crate::infra::db::nhl_mirror;
 
 // ---------------------------------------------------------------------------
 // Request types
@@ -49,7 +48,16 @@ pub async fn list_teams(
     Ok(json_success(teams))
 }
 
-/// Calculate points for a specific team
+/// Per-team detail view rendered on `/league/:id/team/:id`.
+///
+/// Reads the same `nhl_player_game_stats` aggregate the dashboard's
+/// overall rankings use, so `Total Points` here is a strict refinement
+/// of that team's row on the dashboard rather than an independent
+/// computation that drifts. Before the seal-on-final pipeline existed
+/// this handler called the NHL skater-stats-leaders endpoint directly,
+/// which gave a "live-correct" cumulative number that disagreed with
+/// the dashboard's per-game-mirror sum every time a game's post-buzzer
+/// adjustment landed (see commit history for the playoff drift bug).
 pub async fn get_team(
     State(state): State<Arc<AppState>>,
     Path(team_id): Path<i64>,
@@ -57,53 +65,51 @@ pub async fn get_team(
 ) -> Result<Json<ApiResponse<TeamPointsResponse>>> {
     let league_id = &league_params.league_id;
 
-    // Get team and players (verifies team is in league)
     let team = state.db.get_team(team_id, league_id).await?;
     let players = state.db.get_team_players(team_id).await?;
 
-    // Fetch stats from NHL API
-    let stats = state
-        .nhl_client
-        .get_skater_stats(&season(), game_type())
-        .await
-        .unwrap_or_else(|e| {
-            error!("Warning: Couldn't fetch detailed stats: {}", e);
-            StatsLeaders::default()
-        });
+    let totals = nhl_mirror::list_team_player_season_totals(
+        state.db.pool(),
+        team_id,
+        season() as i32,
+        game_type() as i16,
+        current_date_window(),
+    )
+    .await?;
+    let totals_by_id: HashMap<i64, &nhl_mirror::TeamPlayerSeasonTotalsRow> =
+        totals.iter().map(|r| (r.nhl_id, r)).collect();
 
-    // Calculate points for each player
-    let mut team_totals = PlayerStats::default();
-
-    // Track unique players
-    let mut seen_players = std::collections::HashSet::new();
+    let mut seen_players = HashSet::new();
     let mut player_stats_list = Vec::new();
+    let mut team_goals = 0i32;
+    let mut team_assists = 0i32;
+    let mut team_points = 0i32;
 
     for player in &players {
-        // Skip if we've already processed this player
         if !seen_players.insert(player.nhl_id) {
             continue;
         }
+        let row = totals_by_id.get(&player.nhl_id);
+        let goals = row.map(|r| r.goals as i32).unwrap_or(0);
+        let assists = row.map(|r| r.assists as i32).unwrap_or(0);
+        let points = row.map(|r| r.points as i32).unwrap_or(0);
 
-        let player_stats = PlayerStats::default().calculate_player_points(player.nhl_id, &stats);
+        team_goals += goals;
+        team_assists += assists;
+        team_points += points;
 
-        // Add to player stats list
         player_stats_list.push(PlayerStatsResponse {
             name: player.name.clone(),
             nhl_team: player.nhl_team.clone(),
             nhl_id: player.nhl_id,
             position: player.position.clone(),
-            goals: player_stats.goals,
-            assists: player_stats.assists,
-            total_points: player_stats.total_points,
+            goals,
+            assists,
+            total_points: points,
             image_url: state.nhl_client.get_player_image_url(player.nhl_id),
             team_logo: state.nhl_client.get_team_logo_url(&player.nhl_team),
             breakdown: None,
         });
-
-        // Add to team totals
-        team_totals.goals += player_stats.goals;
-        team_totals.assists += player_stats.assists;
-        team_totals.total_points += player_stats.total_points;
     }
 
     Ok(json_success(TeamPointsResponse {
@@ -111,9 +117,9 @@ pub async fn get_team(
         team_name: team.name,
         players: player_stats_list,
         team_totals: TeamTotalsResponse {
-            goals: team_totals.goals,
-            assists: team_totals.assists,
-            total_points: team_totals.total_points,
+            goals: team_goals,
+            assists: team_assists,
+            total_points: team_points,
         },
         diagnosis: None,
     }))

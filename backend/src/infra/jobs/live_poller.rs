@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use chrono_tz::America::New_York;
 use tokio::time::{interval_at, Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
@@ -27,6 +27,13 @@ use tracing::{debug, info, warn};
 use crate::infra::db::{nhl_mirror, FantasyDb};
 use crate::infra::nhl::client::NhlClient;
 use crate::tuning::live_mirror;
+
+/// Wall-clock window we give NHL between a game flipping to FINAL/OFF
+/// and our final boxscore re-sync. Long enough that scoring corrections
+/// (empty-net assist credit, OT/shootout settlement, late official
+/// review) have landed; short enough that the dashboard catches up
+/// within the same evening.
+const FINAL_SYNC_GRACE_MINUTES: i64 = 15;
 
 pub async fn run(db: FantasyDb, nhl: Arc<NhlClient>, cancel: CancellationToken) {
     let start = Instant::now() + live_mirror::LIVE_POLL_STARTUP_DELAY;
@@ -102,16 +109,76 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>) -> anyhow::Result<()> {
     // it, and the stuck row would keep rendering as live on the Games
     // page until someone manually ran /api/admin/rehydrate.
     let game_ids = nhl_mirror::list_games_needing_poll(pool, &today).await?;
-    if game_ids.is_empty() {
-        debug!("live_poller: no games needing poll");
-        return Ok(());
-    }
-
-    for game_id in game_ids {
-        if let Err(e) = poll_one_game(db, nhl, game_id).await {
+    for game_id in &game_ids {
+        if let Err(e) = poll_one_game(db, nhl, *game_id).await {
             warn!(game_id, "live_poller: game tick failed: {}", e);
         }
     }
+
+    // Final-sync sweep. Re-fetch the boxscore one last time for every
+    // game that has flipped FINAL/OFF and sat untouched for the grace
+    // window, then stamp `stats_finalized_at` so aggregated surfaces
+    // begin counting it. Without this, post-buzzer scoring corrections
+    // (empty-net assist credit, OT/shootout settlement, late review)
+    // are silently lost: the LIVE-state-only poll loop above has stopped
+    // visiting the game by the time those corrections land in NHL's
+    // boxscore feed, so the cumulative-leaderboard endpoint and our
+    // per-game mirror disagree by a goal or three per night.
+    let grace = Duration::minutes(FINAL_SYNC_GRACE_MINUTES);
+    match nhl_mirror::list_games_needing_final_sync(pool, grace).await {
+        Ok(ids) if !ids.is_empty() => {
+            debug!(
+                count = ids.len(),
+                "live_poller: final-sync sweep starting"
+            );
+            for game_id in ids {
+                if let Err(e) = finalize_one_game(db, nhl, game_id).await {
+                    warn!(
+                        game_id,
+                        "live_poller: final-sync failed (will retry next tick): {}", e
+                    );
+                }
+            }
+        }
+        Ok(_) => {}
+        Err(e) => warn!("live_poller: final-sync query failed: {}", e),
+    }
+
+    if game_ids.is_empty() {
+        debug!("live_poller: no live games this tick");
+    }
+    Ok(())
+}
+
+/// Pull the boxscore one final time, write it, and stamp the game as
+/// finalised so the next aggregated read includes it. Splits the poll
+/// path from `poll_one_game` because the final-sync pass intentionally
+/// skips the team-diagnosis cache invalidation: `poll_one_game` already
+/// fired that hook on the LIVE -> FINAL transition tick, and re-firing
+/// it 15 minutes later would just churn the narrative cache without
+/// changing the numbers it renders.
+async fn finalize_one_game(
+    db: &FantasyDb,
+    nhl: &Arc<NhlClient>,
+    game_id: i64,
+) -> anyhow::Result<()> {
+    let pool = db.pool();
+
+    let box_score = nhl.get_game_boxscore(game_id as u32).await?;
+    let (home, away): (String, String) = sqlx::query_as(
+        "SELECT home_team, away_team FROM nhl_games WHERE game_id = $1",
+    )
+    .bind(game_id)
+    .fetch_one(pool)
+    .await?;
+    let written =
+        nhl_mirror::upsert_boxscore_players(pool, game_id, &home, &away, &box_score).await?;
+    nhl_mirror::mark_game_stats_finalized(pool, game_id).await?;
+    info!(
+        game_id,
+        players = written,
+        "live_poller: final boxscore sealed"
+    );
     Ok(())
 }
 

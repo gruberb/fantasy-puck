@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
@@ -8,67 +9,56 @@ use axum::{
 use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::api::{game_type, season};
+use crate::api::{current_date_window, game_type, season};
 use crate::auth::middleware::AuthUser;
 use crate::error::Result;
+use crate::infra::db::nhl_mirror;
 
+/// Sleeper-pick widget. Reads counting stats from the per-game mirror
+/// rather than the cumulative-leaderboard endpoint so the totals match
+/// every other surface in the league dashboard. The leaderboard path
+/// previously used here was the second offender in the dashboard-vs-
+/// detail point drift; this share-the-source rewrite is what closes
+/// that gap.
+///
+/// Plus/minus and TOI are still presented per-player but as cumulative
+/// boxscore-derived numbers from `nhl_player_game_stats`, not the NHL
+/// leaderboard's per-category top-N rendering.
 pub async fn get_sleepers(
     State(state): State<Arc<AppState>>,
     Query(league_params): Query<LeagueParams>,
 ) -> Result<Json<ApiResponse<Vec<SleeperStatsResponse>>>> {
     let league_id = &league_params.league_id;
     let sleepers = state.db.get_all_sleepers(league_id).await?;
-    let stats = state
-        .nhl_client
-        .get_skater_stats(&season(), game_type())
-        .await?;
 
-    // Get fantasy team names for this league
+    let nhl_ids: Vec<i64> = sleepers.iter().map(|s| s.nhl_id).collect();
+    let totals = nhl_mirror::list_player_season_totals(
+        state.db.pool(),
+        &nhl_ids,
+        season() as i32,
+        game_type() as i16,
+        current_date_window(),
+    )
+    .await?;
+    let totals_by_id: HashMap<i64, &nhl_mirror::TeamPlayerSeasonTotalsRow> =
+        totals.iter().map(|r| (r.nhl_id, r)).collect();
+
     let fantasy_teams = state.db.get_all_teams(league_id).await?;
-    let team_name_map: std::collections::HashMap<i64, String> = fantasy_teams
+    let team_name_map: HashMap<i64, String> = fantasy_teams
         .into_iter()
         .map(|team| (team.id, team.name))
         .collect();
 
-    // Process sleepers with stats
     let mut sleeper_stats = Vec::new();
     for sleeper in sleepers {
-        // Find player in NHL stats
-        let mut goals = 0;
-        let mut assists = 0;
-        let mut plus_minus = None;
+        let row = totals_by_id.get(&sleeper.nhl_id);
+        let goals = row.map(|r| r.goals as i32).unwrap_or(0);
+        let assists = row.map(|r| r.assists as i32).unwrap_or(0);
+        let total_points = row.map(|r| r.points as i32).unwrap_or(0);
 
-        // Look for goals
-        if let Some(player) = stats.goals.iter().find(|p| p.id as i64 == sleeper.nhl_id) {
-            goals = player.value as i32;
-        }
-
-        // Look for assists
-        if let Some(player) = stats.assists.iter().find(|p| p.id as i64 == sleeper.nhl_id) {
-            assists = player.value as i32;
-        }
-
-        // Look for plus/minus
-        if let Some(player) = stats
-            .plus_minus
-            .iter()
-            .find(|p| p.id as i64 == sleeper.nhl_id)
-        {
-            plus_minus = Some(player.value as i32);
-        }
-
-        // Get TOI if available
-        let time_on_ice = stats
-            .toi
-            .iter()
-            .find(|p| p.id as i64 == sleeper.nhl_id)
-            .map(|p| p.value.to_string());
-
-        // Get fantasy team name
-        let fantasy_team = match sleeper.team_id {
-            Some(team_id) => team_name_map.get(&team_id).cloned(),
-            None => None,
-        };
+        let fantasy_team = sleeper
+            .team_id
+            .and_then(|tid| team_name_map.get(&tid).cloned());
 
         sleeper_stats.push(SleeperStatsResponse {
             id: sleeper.id,
@@ -80,17 +70,23 @@ pub async fn get_sleepers(
             fantasy_team_id: sleeper.team_id,
             goals,
             assists,
-            total_points: goals + assists,
-            plus_minus,
-            time_on_ice,
+            total_points,
+            // The boxscore mirror does not summarise plus/minus or TOI
+            // back up to the season level in a single read; both fields
+            // would require a second round-trip. Sleeper Pick has only
+            // ever displayed counting stats in the Pulse / dashboard
+            // surfaces, so we drop them rather than ship a half-correct
+            // number. If a future reader needs them, lift the values
+            // out of `nhl_player_game_stats` (cumulative SUM/AVG)
+            // alongside the goals/assists aggregate above.
+            plus_minus: None,
+            time_on_ice: None,
             image_url: state.nhl_client.get_player_image_url(sleeper.nhl_id),
             team_logo: state.nhl_client.get_team_logo_url(&sleeper.nhl_team),
         });
     }
 
-    // Sort by total points (descending)
     sleeper_stats.sort_by(|a, b| b.total_points.cmp(&a.total_points));
-
     Ok(json_success(sleeper_stats))
 }
 

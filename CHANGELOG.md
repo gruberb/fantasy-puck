@@ -4,6 +4,43 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.24.0 / v1.19.7 — 2026-04-29 (BE v1.24.0 / FE v1.19.7)
+
+### Fixed — Dashboard rankings disagreed with the team detail page
+
+Six surfaces in the league dashboard show fantasy points: Overall
+Rankings, Daily Fantasy Scores, Top 10 Rostered Players, NHL Teams We
+Roster, the team detail page's Total Points card, and the Sleeper Pick
+card. Four of them aggregated `nhl_player_game_stats` (the per-game
+mirror written by the live boxscore poller); the other two read NHL's
+cumulative skater leaderboard endpoint directly. The two paths
+disagreed by 1 to 3 points per team during the playoffs because the
+live poller stops re-polling a game once its state flips to
+FINAL/OFF — any post-buzzer adjustments NHL applies (empty-net assist
+credit, scoring corrections, OT/shootout settlement that lands after
+the last LIVE tick) never made it back into the mirror, while the
+leaderboard endpoint kept reflecting NHL's authoritative number.
+
+`nhl_games` now carries a `stats_finalized_at` timestamp. The live
+poller does one final boxscore fetch on every game that has been in
+FINAL/OFF for at least 15 minutes (a grace window for post-buzzer
+corrections), then stamps the column. Every aggregated surface
+filters on `stats_finalized_at IS NOT NULL`, so a row only contributes
+to a team's ranking total once its final boxscore is sealed. The team
+detail page and Sleeper Pick now read the same `nhl_player_game_stats`
+aggregate the dashboard uses instead of the leaderboard endpoint, so
+their numbers cannot drift apart from the dashboard by construction.
+
+`/api/admin/rehydrate` also stamps `stats_finalized_at` on every
+FINAL/OFF game whose boxscore it refetches, so a one-shot rehydrate
+against the playoff date range repairs any historical drift carried
+forward from before the migration.
+
+The migration backfills `stats_finalized_at = updated_at` on every
+existing FINAL/OFF row so the dashboard renders the existing (slightly
+drifted) data immediately after deploy rather than blanking until the
+poller works through the historical games one by one.
+
 ## v1.23.6 / v1.19.7 — 2026-04-25 (BE v1.23.6 / FE v1.19.7)
 
 ### Fixed — Insights streak reflected regular-season standings during the playoffs

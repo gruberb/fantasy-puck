@@ -221,6 +221,19 @@ pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>) -> RehydrateSummary {
                     }
                     Err(e) => warn!(game_id = gid, "rehydrate: upsert boxscore failed: {}", e),
                 }
+                // Rehydrate is the explicit "I want the canonical box"
+                // pathway, so a successful boxscore upsert seals the
+                // game for aggregated reads. Live-poll runs that
+                // happen to coincide with rehydrate are still
+                // idempotent — both paths just write NOW().
+                if matches!(state.as_str(), "FINAL" | "OFF") {
+                    if let Err(e) = nhl_mirror::mark_game_stats_finalized(pool, *gid).await {
+                        warn!(
+                            game_id = gid,
+                            "rehydrate: mark_game_stats_finalized failed: {}", e
+                        );
+                    }
+                }
             }
             Err(e) => warn!(game_id = gid, "rehydrate: fetch boxscore failed: {}", e),
         }

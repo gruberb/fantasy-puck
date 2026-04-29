@@ -57,9 +57,9 @@ pub async fn list_nhl_team_roster_counts(
 }
 
 /// Total playoff fantasy points per NHL team — every skater on that
-/// team, not only those rostered in the league. Completed games only
-/// (`game_state IN ('OFF','FINAL')`) so in-progress games don't inflate
-/// totals mid-period.
+/// team, not only those rostered in the league. Sealed games only
+/// (`stats_finalized_at IS NOT NULL`) so a row hasn't been included in
+/// the total before its final boxscore re-sync has landed.
 pub async fn list_nhl_team_playoff_points(
     pool: &PgPool,
     season: i32,
@@ -72,7 +72,7 @@ pub async fn list_nhl_team_playoff_points(
           JOIN nhl_games g ON g.game_id = pgs.game_id
          WHERE g.season = $1
            AND g.game_type = 3
-           AND g.game_state IN ('OFF', 'FINAL')
+           AND g.stats_finalized_at IS NOT NULL
          GROUP BY pgs.team_abbrev
         "#,
     )
@@ -100,7 +100,7 @@ pub async fn list_nhl_team_top_skaters(
               JOIN nhl_games g ON g.game_id = pgs.game_id
              WHERE g.season = $1
                AND g.game_type = 3
-               AND g.game_state IN ('OFF', 'FINAL')
+               AND g.stats_finalized_at IS NOT NULL
              GROUP BY pgs.team_abbrev, pgs.player_id
         ),
         ranked AS (
@@ -152,7 +152,7 @@ pub async fn list_top_rostered_skaters(
                 JOIN nhl_games g ON g.game_id = pgs.game_id
                WHERE g.season = $1
                  AND g.game_type = 3
-                 AND g.game_state IN ('OFF', 'FINAL')
+                 AND g.stats_finalized_at IS NOT NULL
                GROUP BY pgs.player_id
           ) totals ON totals.player_id = fp.nhl_id
          WHERE ft.league_id = $2::uuid

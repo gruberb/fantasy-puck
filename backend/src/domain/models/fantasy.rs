@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use serde::Serialize;
 
-use crate::domain::models::db::FantasyTeamWithPlayers;
-use crate::domain::models::nhl::StatsLeaders;
-
-/// Player stats with calculated fantasy points
+/// Per-player counting-stat accumulator used by the team-breakdown
+/// composition path to roll a list of `nhl_player_game_stats` rows up
+/// into a single team total. Pure data; the aggregate logic itself
+/// lives in `infra::db::nhl_mirror` (the SQL doing the SUMs) and the
+/// handler that calls it.
 #[derive(Debug, Default, Clone)]
 pub struct PlayerStats {
     pub goals: i32,
@@ -14,33 +14,9 @@ pub struct PlayerStats {
     pub total_points: i32,
 }
 
-impl PlayerStats {
-    pub fn calculate_player_points(
-        &mut self,
-        player_nhl_id: i64,
-        stats: &StatsLeaders,
-    ) -> PlayerStats {
-        let mut goals = 0;
-        let mut assists = 0;
-        // Calculate points for goals
-        if let Some(player) = stats.goals.iter().find(|p| p.id as i64 == player_nhl_id) {
-            goals = player.value as i32;
-        }
-
-        // Calculate points for assists
-        if let Some(player) = stats.assists.iter().find(|p| p.id as i64 == player_nhl_id) {
-            assists = player.value as i32;
-        }
-
-        Self {
-            goals,
-            assists,
-            total_points: goals + assists,
-        }
-    }
-}
-
-/// Team ranking with points
+/// Per-team ranking row rendered on the dashboard's overall rankings
+/// table. Built directly from `LeagueTeamSeasonTotalsRow`; the handler
+/// owns the rank assignment so this struct stays a transport shape.
 #[derive(Debug, Serialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamRanking {
@@ -50,61 +26,6 @@ pub struct TeamRanking {
     pub goals: i32,
     pub assists: i32,
     pub total_points: i32,
-}
-
-impl TeamRanking {
-    /// Calculate rankings for all teams
-    pub fn calculate_rankings(
-        fantasy_teams: Vec<FantasyTeamWithPlayers>,
-        top_skaters: StatsLeaders,
-    ) -> Vec<TeamRanking> {
-        // Calculate points for each team
-        let mut rankings = Vec::new();
-
-        for team in fantasy_teams {
-            // Use a HashSet to track unique players by ID to avoid duplicates
-            let mut seen_players = HashSet::new();
-
-            // Calculate team totals
-            let mut team_stats = PlayerStats::default();
-
-            // Calculate points for each player and add to team totals
-            for player in &team.players {
-                // Skip if we've already processed this player
-                if !seen_players.insert(player.nhl_id) {
-                    continue;
-                }
-
-                let player_stats =
-                    PlayerStats::default().calculate_player_points(player.nhl_id, &top_skaters);
-
-                // Add to team totals
-                team_stats.goals += player_stats.goals;
-                team_stats.assists += player_stats.assists;
-                team_stats.total_points += player_stats.total_points;
-            }
-
-            // Add team to rankings
-            rankings.push(TeamRanking {
-                rank: 0, // Will be set after sorting
-                team_id: team.id,
-                team_name: team.name,
-                goals: team_stats.goals,
-                assists: team_stats.assists,
-                total_points: team_stats.total_points,
-            });
-        }
-
-        // Sort by total points (descending)
-        rankings.sort_by(|a, b| b.total_points.cmp(&a.total_points));
-
-        // Assign ranks
-        for (i, ranking) in rankings.iter_mut().enumerate() {
-            ranking.rank = i + 1;
-        }
-
-        rankings
-    }
 }
 #[derive(Debug, Clone)]
 pub struct PlayerGamePerformance {

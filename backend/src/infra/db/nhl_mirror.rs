@@ -268,6 +268,51 @@ pub async fn get_game_state(pool: &PgPool, game_id: i64) -> Result<Option<String
     Ok(state)
 }
 
+/// Game IDs in `FINAL`/`OFF` whose boxscore has not yet been sealed and
+/// whose last meta-poll write is older than `grace`. Used by the live
+/// poller's final-sync pass to give NHL post-buzzer scoring corrections
+/// time to land before the row becomes immutable.
+///
+/// `nhl_games.updated_at` is bumped by `update_game_live_state` on every
+/// poll, so a game that flipped to FINAL N minutes ago and hasn't been
+/// touched since is exactly what we want here. A wall-clock check
+/// (`start_time_utc + duration`) would be cheaper but unreliable —
+/// double-OT and intermission lengths skew it badly.
+pub async fn list_games_needing_final_sync(
+    pool: &PgPool,
+    grace: chrono::Duration,
+) -> Result<Vec<i64>> {
+    let rows: Vec<i64> = sqlx::query_scalar(
+        r#"
+        SELECT game_id FROM nhl_games
+         WHERE game_state IN ('FINAL', 'OFF')
+           AND stats_finalized_at IS NULL
+           AND updated_at < NOW() - ($1 || ' seconds')::interval
+        "#,
+    )
+    .bind(grace.num_seconds().to_string())
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// Stamp `stats_finalized_at = NOW()` on a game. Idempotent: a second
+/// call within the same second is a no-op semantically and the SQL
+/// merely overwrites the timestamp. Callers should only invoke this
+/// after a successful `upsert_boxscore_players` for the game so the
+/// "sealed" promise holds.
+pub async fn mark_game_stats_finalized(pool: &PgPool, game_id: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE nhl_games SET stats_finalized_at = NOW() WHERE game_id = $1",
+    )
+    .bind(game_id)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------
 // nhl_player_game_stats
 // ---------------------------------------------------------------------
@@ -1452,7 +1497,7 @@ pub async fn list_player_playoff_rollup(
          WHERE pgs.player_id = ANY($1)
            AND g.season      = $2
            AND g.game_type   = 3
-           AND g.game_state IN ('OFF', 'FINAL')
+           AND g.stats_finalized_at IS NOT NULL
            AND ($3::text IS NULL OR g.game_date::text >= $3)
            AND ($4::text IS NULL OR g.game_date::text <= $4)
          GROUP BY pgs.player_id
@@ -1511,7 +1556,7 @@ pub async fn list_player_recent_games(
              WHERE pgs.player_id = ANY($1)
                AND g.season      = $2
                AND g.game_type   = 3
-               AND g.game_state IN ('OFF', 'FINAL')
+               AND g.stats_finalized_at IS NOT NULL
         )
         SELECT player_id, game_date, opponent,
                toi_seconds, goals, assists, points, sog, plus_minus
@@ -1564,7 +1609,7 @@ pub async fn list_player_form(
               FROM nhl_player_game_stats pgs
               JOIN nhl_games g ON g.game_id = pgs.game_id
              WHERE pgs.player_id = ANY($1)
-               AND g.game_state IN ('OFF', 'FINAL')
+               AND g.stats_finalized_at IS NOT NULL
         )
         SELECT player_id,
                COUNT(*)::bigint                                AS games,
@@ -1617,7 +1662,7 @@ pub async fn list_player_playoff_totals(
          WHERE pgs.player_id = ANY($1)
            AND g.season      = $2
            AND g.game_type   = 3
-           AND g.game_state IN ('OFF', 'FINAL')
+           AND g.stats_finalized_at IS NOT NULL
          GROUP BY pgs.player_id
         "#,
     )
@@ -1664,6 +1709,12 @@ pub async fn list_league_team_season_totals(
     // would null out `g` but still leave `pgs.points` in scope, so a
     // plain SUM(pgs.points) would include stats from other game types
     // or seasons. Same reasoning for the optional date window.
+    //
+    // `g.stats_finalized_at IS NOT NULL` excludes games that ended but
+    // whose boxscore has not been post-buzzer-synced yet; without it the
+    // dashboard would show a "FINAL but slightly stale" total that the
+    // live poller's final-sync pass is about to correct, and reload
+    // a few minutes later with a different number.
     let rows = sqlx::query_as::<_, LeagueTeamSeasonTotalsRow>(
         r#"
         SELECT
@@ -1671,16 +1722,19 @@ pub async fn list_league_team_season_totals(
             ft.name AS team_name,
             COALESCE(SUM(CASE WHEN g.season = $2
                               AND g.game_type = $3
+                              AND g.stats_finalized_at IS NOT NULL
                               AND ($4::text IS NULL OR g.game_date::text >= $4)
                               AND ($5::text IS NULL OR g.game_date::text <= $5)
                               THEN pgs.goals   ELSE 0 END), 0)::bigint AS goals,
             COALESCE(SUM(CASE WHEN g.season = $2
                               AND g.game_type = $3
+                              AND g.stats_finalized_at IS NOT NULL
                               AND ($4::text IS NULL OR g.game_date::text >= $4)
                               AND ($5::text IS NULL OR g.game_date::text <= $5)
                               THEN pgs.assists ELSE 0 END), 0)::bigint AS assists,
             COALESCE(SUM(CASE WHEN g.season = $2
                               AND g.game_type = $3
+                              AND g.stats_finalized_at IS NOT NULL
                               AND ($4::text IS NULL OR g.game_date::text >= $4)
                               AND ($5::text IS NULL OR g.game_date::text <= $5)
                               THEN pgs.points  ELSE 0 END), 0)::bigint AS points
@@ -1697,6 +1751,120 @@ pub async fn list_league_team_season_totals(
         "#,
     )
     .bind(league_id)
+    .bind(season)
+    .bind(game_type)
+    .bind(window.min_date)
+    .bind(window.max_date)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// Per-rostered-player counting-stat aggregate for a single fantasy
+/// team. Same finalisation + season/game_type/date-window rules as
+/// [`list_league_team_season_totals`] so the team detail page's
+/// `Total Points` is a strict refinement of the dashboard row, never a
+/// disagreement.
+///
+/// Returns one row per `(player_nhl_id)` actually rostered on the team,
+/// even if they have no finalised games yet (LEFT JOIN), so the caller
+/// can render a stable roster list with zeros instead of a shorter list
+/// that mysteriously gains a player on first scoring contribution.
+#[derive(Debug, FromRow)]
+pub struct TeamPlayerSeasonTotalsRow {
+    pub nhl_id: i64,
+    pub goals: i64,
+    pub assists: i64,
+    pub points: i64,
+}
+
+pub async fn list_team_player_season_totals(
+    pool: &PgPool,
+    team_id: i64,
+    season: i32,
+    game_type: i16,
+    window: crate::infra::db::DateWindow<'_>,
+) -> Result<Vec<TeamPlayerSeasonTotalsRow>> {
+    let rows = sqlx::query_as::<_, TeamPlayerSeasonTotalsRow>(
+        r#"
+        SELECT
+            fp.nhl_id AS nhl_id,
+            COALESCE(SUM(CASE WHEN g.season = $2
+                              AND g.game_type = $3
+                              AND g.stats_finalized_at IS NOT NULL
+                              AND ($4::text IS NULL OR g.game_date::text >= $4)
+                              AND ($5::text IS NULL OR g.game_date::text <= $5)
+                              THEN pgs.goals   ELSE 0 END), 0)::bigint AS goals,
+            COALESCE(SUM(CASE WHEN g.season = $2
+                              AND g.game_type = $3
+                              AND g.stats_finalized_at IS NOT NULL
+                              AND ($4::text IS NULL OR g.game_date::text >= $4)
+                              AND ($5::text IS NULL OR g.game_date::text <= $5)
+                              THEN pgs.assists ELSE 0 END), 0)::bigint AS assists,
+            COALESCE(SUM(CASE WHEN g.season = $2
+                              AND g.game_type = $3
+                              AND g.stats_finalized_at IS NOT NULL
+                              AND ($4::text IS NULL OR g.game_date::text >= $4)
+                              AND ($5::text IS NULL OR g.game_date::text <= $5)
+                              THEN pgs.points  ELSE 0 END), 0)::bigint AS points
+        FROM fantasy_players fp
+        LEFT JOIN nhl_player_game_stats pgs
+               ON pgs.player_id = fp.nhl_id
+        LEFT JOIN nhl_games g
+               ON g.game_id = pgs.game_id
+        WHERE fp.team_id = $1
+        GROUP BY fp.nhl_id
+        "#,
+    )
+    .bind(team_id)
+    .bind(season)
+    .bind(game_type)
+    .bind(window.min_date)
+    .bind(window.max_date)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows)
+}
+
+/// Counting-stat aggregate for an arbitrary set of NHL players. Same
+/// finalisation rules as [`list_league_team_season_totals`]. Used by
+/// the sleeper-pick handler, which needs totals for a sparse set of
+/// players that don't all live on the same fantasy team.
+///
+/// Players in `nhl_ids` with no finalised games are omitted from the
+/// result; the caller is expected to default them to zero, which is
+/// the existing behaviour of the leaderboard-based path.
+pub async fn list_player_season_totals(
+    pool: &PgPool,
+    nhl_ids: &[i64],
+    season: i32,
+    game_type: i16,
+    window: crate::infra::db::DateWindow<'_>,
+) -> Result<Vec<TeamPlayerSeasonTotalsRow>> {
+    if nhl_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, TeamPlayerSeasonTotalsRow>(
+        r#"
+        SELECT
+            pgs.player_id                       AS nhl_id,
+            COALESCE(SUM(pgs.goals), 0)::bigint AS goals,
+            COALESCE(SUM(pgs.assists), 0)::bigint AS assists,
+            COALESCE(SUM(pgs.points), 0)::bigint AS points
+        FROM nhl_player_game_stats pgs
+        JOIN nhl_games g ON g.game_id = pgs.game_id
+        WHERE pgs.player_id = ANY($1)
+          AND g.season = $2
+          AND g.game_type = $3
+          AND g.stats_finalized_at IS NOT NULL
+          AND ($4::text IS NULL OR g.game_date::text >= $4)
+          AND ($5::text IS NULL OR g.game_date::text <= $5)
+        GROUP BY pgs.player_id
+        "#,
+    )
+    .bind(nhl_ids)
     .bind(season)
     .bind(game_type)
     .bind(window.min_date)
@@ -1888,45 +2056,6 @@ pub async fn sum_player_points(
     Ok(rows.into_iter().map(|(id, p)| (id, p as i32)).collect())
 }
 
-/// Per-player goals/assists/points aggregate over the playoff (or
-/// regular-season) `nhl_player_game_stats` rows. Returns a map
-/// keyed by `player_id`; missing players (no boxscore appearances
-/// yet) are simply absent — callers default to `(0, 0, 0)`.
-pub async fn aggregate_skater_totals(
-    pool: &PgPool,
-    player_ids: &[i64],
-    season: i32,
-    game_type: i16,
-) -> Result<std::collections::HashMap<i64, (i32, i32, i32)>> {
-    if player_ids.is_empty() {
-        return Ok(std::collections::HashMap::new());
-    }
-    let rows: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
-        r#"
-        SELECT pgs.player_id,
-               COALESCE(SUM(pgs.goals), 0)::bigint   AS goals,
-               COALESCE(SUM(pgs.assists), 0)::bigint AS assists,
-               COALESCE(SUM(pgs.points), 0)::bigint  AS points
-          FROM nhl_player_game_stats pgs
-          JOIN nhl_games g ON g.game_id = pgs.game_id
-         WHERE pgs.player_id = ANY($1)
-           AND g.season      = $2
-           AND g.game_type   = $3
-         GROUP BY pgs.player_id
-        "#,
-    )
-    .bind(player_ids)
-    .bind(season)
-    .bind(game_type)
-    .fetch_all(pool)
-    .await
-    .map_err(Error::Database)?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, g, a, p)| (id, (g as i32, a as i32, p as i32)))
-        .collect())
-}
-
 /// One leaderboard row for every skater who has appeared in the current
 /// `(season, game_type)`, with totals summed across their boxscore rows
 /// and TOI expressed as seconds per game. Metadata comes from the most
@@ -1968,6 +2097,7 @@ pub async fn list_top_skaters(
               JOIN nhl_games g ON g.game_id = pgs.game_id
              WHERE g.season    = $1
                AND g.game_type = $2
+               AND g.stats_finalized_at IS NOT NULL
              GROUP BY pgs.player_id
         )
         SELECT
