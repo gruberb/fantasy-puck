@@ -132,7 +132,7 @@ Defined in [`frontend/src/App.tsx`](../frontend/src/App.tsx). Everything except 
 
 Five routes are auth-gated via `<ProtectedRoute>`: `/my-leagues`, `/admin`, `/settings`, `/league/:id/draft`, `/league/:id/settings`. `/admin` additionally redirects non-admins (`profile.isAdmin !== true`) to `/my-leagues` — the route is admin-only and surfaces every `/api/admin/*` endpoint as a one-click action card. The rest are viewable without signing in; pages that need auth-specific data simply return a placeholder when `user` is null.
 
-`InsightsPage` is used in both the global `/insights` route and the league-scoped `/league/:id/insights` route. The component decides which variant it is showing by reading `activeLeagueId` from `LeagueContext` - the hook `useInsights` passes `league_id` to the backend when it's set.
+`InsightsPage` is used in both the global `/insights` route and the league-scoped `/league/:id/insights` route. The component decides which variant it is showing by reading `activeLeagueId` from `LeagueContext` - the hook `useInsights` passes `league_id` to the backend when it's set. Its playoff bracket groups `seriesProjections[]` by round so split-round days can show, for example, an unfinished Round 1 series alongside already-seeded Round 2 matchups. The Stanley Cup Odds table still reads the full Monte Carlo NHL-team list, but fades teams with no active series context and zero Cup probability.
 
 ## Global providers
 

@@ -116,7 +116,7 @@ Ownership of each mirror table:
 | `nhl_skater_season_stats` | `meta_poller` (every 6 ticks) | Stats leaderboard, Edge refresher input |
 | `nhl_goalie_season_stats` | `meta_poller` (every 6 ticks) | Pulse matchup block, goalie Elo bonus |
 | `nhl_standings` | `meta_poller` (every 6 ticks) | Insights, race-odds rating input |
-| `nhl_playoff_bracket` | `meta_poller` (every 6 ticks, playoffs only) | Playoffs page, race-odds bracket input |
+| `nhl_playoff_bracket` | `meta_poller` (every 6 ticks, playoffs only) | Playoffs page, Insights active-round bracket, race-odds bracket input |
 | `nhl_team_rosters` | `meta_poller` (every 288 ticks), 10:00 UTC prewarm | Draft pool fallback, NHL rosters page |
 | `nhl_game_landing` | `meta_poller` (write-once for FUT games) | Insights game card |
 | `nhl_skater_edge` | `edge_refresher` (nightly + admin force) | Insights hot card |
@@ -151,11 +151,11 @@ File: [`backend/src/infra/jobs/meta_poller.rs`](../backend/src/infra/jobs/meta_p
 
 The poller maintains a `counter: u32` and uses it to gate work at coarser cadences:
 
-- **Every tick** - Today's schedule → `nhl_games`. Pre-game landing captures for FUT/PRE games → `nhl_game_landing` (write-once). "Today" is the Eastern Time date, not the UTC date, because NHL's `/schedule/{date}` is keyed by ET. The implementation uses `chrono_tz::America::New_York` ([`meta_poller.rs:148`](../backend/src/infra/jobs/meta_poller.rs)).
+- **Every tick** - Yesterday's and today's schedules → `nhl_games`. Pre-game landing captures for today's FUT/PRE games → `nhl_game_landing` (write-once). "Today" is the Eastern Time date, not the UTC date, because NHL's `/schedule/{date}` is keyed by ET. The implementation uses `chrono_tz::America::New_York` ([`meta_poller.rs:148`](../backend/src/infra/jobs/meta_poller.rs)).
 - **Every 6 ticks (≈30 min)** - Tomorrow's schedule, skater leaderboard, goalie leaderboard, standings, playoff carousel (if `game_type == 3`).
 - **Every 288 ticks (≈24 h)** - Walk all 32 team rosters with a 250 ms delay between fetches (`ROSTER_FETCH_DELAY`).
 
-The schedule mirror tolerates NHL's playoff placeholders: `TBD` teams can arrive with `team.id = -1`, and if-necessary series records can carry `-1` counters before the opponent is known. Scores are read from `homeTeam.score` / `awayTeam.score` when the older `gameScore` block is absent. After every successful schedule fetch, unresolved `FUT` / `PRE` rows for that same date, season, and game type that no longer appear upstream are marked `CANCELLED`; user-facing game reads and landing capture skip those rows so dropped if-necessary games do not keep 404ing through gamecenter.
+The schedule mirror tolerates NHL's playoff placeholders: `TBD` teams can arrive with `team.id = -1`, and if-necessary series records can carry `-1` counters before the opponent is known. Scores are read from `homeTeam.score` / `awayTeam.score` when the older `gameScore` block is absent. After every successful schedule fetch, unresolved `FUT` / `PRE` rows for that same date, season, and game type that no longer appear upstream are marked `CANCELLED`; user-facing game reads and landing capture skip those rows so dropped if-necessary games do not keep 404ing through gamecenter. The regular poller also refreshes yesterday's schedule so late upstream cancellations and completed-game corrections self-heal on historical Games pages without route handlers calling NHL live.
 
 Each step has a freshness gate that reads the mirror's `updated_at` and skips the fetch if the row was touched more recently than the step's TTL. This keeps a server restart from re-fetching everything on the first tick just because `counter` reset to 1 ([`meta_poller.rs:128-136`](../backend/src/infra/jobs/meta_poller.rs)).
 

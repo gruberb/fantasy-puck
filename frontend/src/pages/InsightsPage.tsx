@@ -128,11 +128,11 @@ const InsightsPage = () => {
       )}
 
 
-      {/* Bracket — matchup-focused view of the active round. */}
+      {/* Bracket — matchup-focused view of every active round. */}
       {signals.seriesProjections.length > 0 && (
         <InsightCard accent="#1A1A1A" title="Bracket">
           <p className="text-[11px] text-[var(--color-ink-muted)] mb-3">
-            Score + historical odds · team strength from regular-season
+            Active rounds · historical odds · team strength from regular-season
             standings · fantasy-team ownership on each side.
           </p>
           <PlayoffBracketTree projections={signals.seriesProjections} />

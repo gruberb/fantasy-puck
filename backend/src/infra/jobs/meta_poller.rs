@@ -4,7 +4,7 @@
 //! production), fetches slow-moving NHL data and mirrors it into the
 //! Postgres tables:
 //!
-//! - Today + tomorrow's schedule → `nhl_games`
+//! - Yesterday + today + tomorrow's schedule → `nhl_games`
 //! - Skater season leaderboard → `nhl_skater_season_stats`
 //! - Goalie season leaderboard → `nhl_goalie_season_stats`
 //! - League standings → `nhl_standings`
@@ -131,8 +131,8 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>, work: TickWork) -> anyh
     let roster_ttl =
         live_mirror::META_POLL_INTERVAL * (live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS);
 
-    // ---- Today's schedule — every tick, unless the mirror was
-    // touched in the last 5 minutes.
+    // ---- Nearby schedules — every tick for yesterday/today, unless
+    // the mirror was touched in the last 5 minutes.
     //
     // "Today" is the *Eastern Time* date, not the UTC date. NHL's
     // `/schedule/{date}` keys games by ET local date — a 9 pm ET
@@ -142,49 +142,27 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>, work: TickWork) -> anyh
     // would skip every late-evening eastern slate during the
     // ~4-hour window between midnight UTC and midnight ET.
     let today: NaiveDate = Utc::now().with_timezone(&New_York).date_naive();
+    let yesterday = today - ChronoDuration::days(1);
+    let yesterday_str = yesterday.format("%Y-%m-%d").to_string();
     let today_str = today.format("%Y-%m-%d").to_string();
-    let today_last = nhl_mirror::last_update_nhl_games_for_date(pool, &today_str)
-        .await
-        .unwrap_or(None);
-    if nhl_mirror::is_stale(today_last, today_ttl) {
-        match nhl.get_schedule_by_date(&today_str).await {
-            Ok(schedule) => {
-                let games = schedule.games_for_date(&today_str);
-                for g in &games {
-                    if let Err(e) = nhl_mirror::upsert_game(pool, g, &today_str).await {
-                        warn!(date = %today_str, game_id = g.id, "meta_poller: upsert_game failed: {}", e);
-                    }
-                }
-                match nhl_mirror::reconcile_schedule_for_date(
-                    pool,
-                    &today_str,
-                    season as i32,
-                    game_type as i16,
-                    &games,
-                )
-                .await
-                {
-                    Ok(cancelled) if cancelled > 0 => debug!(
-                        date = %today_str,
-                        cancelled,
-                        "meta_poller: stale schedule rows cancelled"
-                    ),
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!(date = %today_str, "meta_poller: schedule reconcile failed: {}", e)
-                    }
-                }
-                let insights_pattern = format!("insights:%:{}:{}:{}", season, game_type, today_str);
-                if let Err(e) = db.cache().invalidate_by_like(&insights_pattern).await {
-                    warn!(date = %today_str, "meta_poller: insights cache invalidation failed: {}", e);
-                }
-                debug!(date = %today_str, count = games.len(), "meta_poller: today's schedule mirrored");
-            }
-            Err(e) => warn!(date = %today_str, "meta_poller: today's schedule fetch failed: {}", e),
-        }
-    } else {
-        debug!(date = %today_str, "meta_poller: today's schedule fresh, skipping");
-    }
+    mirror_schedule_date(
+        db,
+        nhl,
+        &yesterday_str,
+        today_ttl,
+        Some(&today_str),
+        "yesterday's schedule",
+    )
+    .await;
+    mirror_schedule_date(
+        db,
+        nhl,
+        &today_str,
+        today_ttl,
+        Some(&today_str),
+        "today's schedule",
+    )
+    .await;
 
     // ---- Landing capture for today's new FUT/PRE games ----
     //
@@ -236,44 +214,7 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>, work: TickWork) -> anyh
     // ---- Schedule: tomorrow ----
     let tomorrow = today + ChronoDuration::days(1);
     let tomorrow_str = tomorrow.format("%Y-%m-%d").to_string();
-    let tomorrow_last = nhl_mirror::last_update_nhl_games_for_date(pool, &tomorrow_str)
-        .await
-        .unwrap_or(None);
-    if nhl_mirror::is_stale(tomorrow_last, agg_ttl) {
-        match nhl.get_schedule_by_date(&tomorrow_str).await {
-            Ok(schedule) => {
-                let games = schedule.games_for_date(&tomorrow_str);
-                for g in &games {
-                    if let Err(e) = nhl_mirror::upsert_game(pool, g, &tomorrow_str).await {
-                        warn!(date = %tomorrow_str, game_id = g.id, "meta_poller: upsert_game failed: {}", e);
-                    }
-                }
-                match nhl_mirror::reconcile_schedule_for_date(
-                    pool,
-                    &tomorrow_str,
-                    season as i32,
-                    game_type as i16,
-                    &games,
-                )
-                .await
-                {
-                    Ok(cancelled) if cancelled > 0 => debug!(
-                        date = %tomorrow_str,
-                        cancelled,
-                        "meta_poller: stale schedule rows cancelled"
-                    ),
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!(date = %tomorrow_str, "meta_poller: schedule reconcile failed: {}", e)
-                    }
-                }
-                debug!(date = %tomorrow_str, count = games.len(), "meta_poller: schedule mirrored");
-            }
-            Err(e) => warn!(date = %tomorrow_str, "meta_poller: schedule fetch failed: {}", e),
-        }
-    } else {
-        debug!(date = %tomorrow_str, "meta_poller: tomorrow's schedule fresh, skipping");
-    }
+    mirror_schedule_date(db, nhl, &tomorrow_str, agg_ttl, None, "tomorrow's schedule").await;
 
     // ---- Skater leaderboard ----
     let skater_last =
@@ -447,4 +388,66 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>, work: TickWork) -> anyh
     }
 
     Ok(())
+}
+
+async fn mirror_schedule_date(
+    db: &FantasyDb,
+    nhl: &Arc<NhlClient>,
+    date: &str,
+    ttl: std::time::Duration,
+    insights_date_to_invalidate: Option<&str>,
+    label: &'static str,
+) {
+    let season = cfg_season();
+    let game_type = cfg_game_type();
+    let pool = db.pool();
+
+    let last_update = nhl_mirror::last_update_nhl_games_for_date(pool, date)
+        .await
+        .unwrap_or(None);
+    if !nhl_mirror::is_stale(last_update, ttl) {
+        debug!(date = %date, "meta_poller: {} fresh, skipping", label);
+        return;
+    }
+
+    match nhl.get_schedule_by_date(date).await {
+        Ok(schedule) => {
+            let games = schedule.games_for_date(date);
+            for g in &games {
+                if let Err(e) = nhl_mirror::upsert_game(pool, g, date).await {
+                    warn!(date = %date, game_id = g.id, "meta_poller: upsert_game failed: {}", e);
+                }
+            }
+            match nhl_mirror::reconcile_schedule_for_date(
+                pool,
+                date,
+                season as i32,
+                game_type as i16,
+                &games,
+            )
+            .await
+            {
+                Ok(cancelled) if cancelled > 0 => debug!(
+                    date = %date,
+                    cancelled,
+                    "meta_poller: stale schedule rows cancelled"
+                ),
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(date = %date, "meta_poller: schedule reconcile failed: {}", e)
+                }
+            }
+
+            if let Some(insights_date) = insights_date_to_invalidate {
+                let insights_pattern =
+                    format!("insights:%:{}:{}:{}", season, game_type, insights_date);
+                if let Err(e) = db.cache().invalidate_by_like(&insights_pattern).await {
+                    warn!(date = %date, "meta_poller: insights cache invalidation failed: {}", e);
+                }
+            }
+
+            debug!(date = %date, count = games.len(), "meta_poller: {} mirrored", label);
+        }
+        Err(e) => warn!(date = %date, "meta_poller: {} fetch failed: {}", label, e),
+    }
 }

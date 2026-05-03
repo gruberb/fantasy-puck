@@ -8,7 +8,7 @@ import type { TeamSeriesProjection } from "@/features/insights";
 
 interface StanleyCupOddsProps {
   /**
-   * Current-round series context keyed by NHL abbrev, used to annotate each
+   * Active-round series context keyed by NHL abbrev, used to annotate each
    * row with "vs OPP · 2-1". Passed from Insights which already fetches it.
    */
   projections: TeamSeriesProjection[];
@@ -66,21 +66,38 @@ export function StanleyCupOdds({ projections }: StanleyCupOddsProps) {
         <ol>
           {data.nhlTeams.map((team) => {
             const series = seriesByAbbrev.get(team.abbrev);
+            const isInactive = !series && team.cupWinProb <= 0;
             return (
               <li
                 key={team.abbrev}
-                className="grid grid-cols-[minmax(0,1fr)_4.5rem_3.5rem_3.5rem_3rem] md:grid-cols-[minmax(0,1fr)_6rem_4rem_4rem_4rem_4rem] items-center gap-2 px-3 py-3 sm:py-4 border-b border-[var(--color-divider)] last:border-b-0"
+                className={`grid grid-cols-[minmax(0,1fr)_4.5rem_3.5rem_3.5rem_3rem] md:grid-cols-[minmax(0,1fr)_6rem_4rem_4rem_4rem_4rem] items-center gap-2 px-3 py-3 sm:py-4 border-b border-[var(--color-divider)] last:border-b-0 ${
+                  isInactive ? "bg-[#F3F4F6] opacity-60" : ""
+                }`}
               >
-                <TeamCell abbrev={team.abbrev} />
-                <span className="text-right text-xs text-[var(--color-ink-muted)] tabular-nums">
-                  {series
-                    ? `${series.wins}-${series.opponentWins} vs ${series.opponentAbbrev}`
-                    : "—"}
+                <TeamCell abbrev={team.abbrev} inactive={isInactive} />
+                <span
+                  className={`text-right text-xs tabular-nums ${
+                    isInactive
+                      ? "text-[var(--color-ink-muted)] font-bold uppercase tracking-wider"
+                      : "text-[var(--color-ink-muted)]"
+                  }`}
+                >
+                  {series ? seriesLabel(series) : isInactive ? "Out" : "Awaiting"}
                 </span>
-                <OddsCell value={team.advanceRound1Prob} />
-                <OddsCell value={team.cupFinalsProb} hiddenOnMobile />
-                <OddsCell value={team.cupWinProb} emphasis />
-                <span className="text-right text-xs text-[var(--color-ink-muted)] tabular-nums">
+                <OddsCell value={team.advanceRound1Prob} inactive={isInactive} />
+                <OddsCell
+                  value={team.cupFinalsProb}
+                  hiddenOnMobile
+                  inactive={isInactive}
+                />
+                <OddsCell value={team.cupWinProb} emphasis inactive={isInactive} />
+                <span
+                  className={`text-right text-xs tabular-nums ${
+                    isInactive
+                      ? "text-[var(--color-ink-muted)]"
+                      : "text-[var(--color-ink-muted)]"
+                  }`}
+                >
                   {team.expectedGames.toFixed(1)}
                 </span>
               </li>
@@ -92,16 +109,32 @@ export function StanleyCupOdds({ projections }: StanleyCupOddsProps) {
   );
 }
 
-function TeamCell({ abbrev }: { abbrev: string }) {
+function seriesLabel(series: TeamSeriesProjection): string {
+  return `${series.wins}-${series.opponentWins} vs ${series.opponentAbbrev}`;
+}
+
+function TeamCell({
+  abbrev,
+  inactive,
+}: {
+  abbrev: string;
+  inactive?: boolean;
+}) {
   return (
     <div className="flex items-center gap-3 min-w-0">
       <img
         src={getNHLTeamLogoUrl(abbrev)}
         alt={abbrev}
-        className="w-10 h-10 sm:w-12 sm:h-12 flex-shrink-0"
+        className={`w-10 h-10 sm:w-12 sm:h-12 flex-shrink-0 ${
+          inactive ? "grayscale" : ""
+        }`}
       />
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-bold uppercase tracking-wider truncate text-[#1A1A1A]">
+        <p
+          className={`text-sm font-bold uppercase tracking-wider truncate ${
+            inactive ? "text-[var(--color-ink-muted)]" : "text-[#1A1A1A]"
+          }`}
+        >
           <span className="md:hidden">{abbrev}</span>
           <span className="hidden md:inline">{getNHLTeamShortName(abbrev)}</span>
         </p>
@@ -114,16 +147,20 @@ function OddsCell({
   value,
   emphasis,
   hiddenOnMobile,
+  inactive,
 }: {
   value: number;
   emphasis?: boolean;
   hiddenOnMobile?: boolean;
+  inactive?: boolean;
 }) {
   const pct = Math.round(value * 100);
   return (
     <span
       className={`text-right tabular-nums ${
-        emphasis
+        inactive
+          ? "text-xs text-[var(--color-ink-muted)]"
+          : emphasis
           ? "text-sm font-extrabold text-[#1A1A1A]"
           : "text-xs text-[var(--color-ink-muted)]"
       } ${hiddenOnMobile ? "hidden md:inline" : ""}`}
@@ -132,4 +169,3 @@ function OddsCell({
     </span>
   );
 }
-

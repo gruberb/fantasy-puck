@@ -4,6 +4,22 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.24.2 / v1.19.9 — 2026-05-03 (BE v1.24.2 / FE v1.19.9)
+
+### Fixed — Insights bracket hides split-round playoff state
+
+The Insights bracket now supports multiple active playoff rounds at the
+same time. When the NHL has already published concrete Round 2 matchups
+but one Round 1 series is still tied or live, the backend returns both
+rounds in `seriesProjections[]`; completed series and unresolved `TBD`
+future slots stay hidden. The frontend groups the bracket by round so
+Montreal-Tampa can remain visible without losing the valid Round 2
+matchups, and the Stanley Cup Odds table fades teams whose simulator
+Cup probability has dropped to zero. The meta poller now refreshes
+yesterday's schedule every tick too, so dropped if-necessary games
+from the previous slate are marked `CANCELLED` and disappear from
+historical Games pages.
+
 ## v1.24.1 / v1.19.8 — 2026-05-03 (BE v1.24.1 / FE v1.19.8)
 
 ### Fixed — Live playoff slate and round labels got stuck behind stale schedule rows

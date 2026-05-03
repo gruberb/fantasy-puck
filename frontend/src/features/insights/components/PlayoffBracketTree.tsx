@@ -27,13 +27,14 @@ const STATE_STYLES: Record<SeriesStateCode, string> = {
 };
 
 /**
- * Bracket view of the active playoff round. Shows score, state color, who's
+ * Bracket view of the active playoff rounds. Shows score, state color, who's
  * favored by regular-season strength, and which fantasy teams own players
  * on each side. Replaces the old per-team "Series Projections" grid, which
  * was a lookup-table rephrasing of information already on the scoreboard.
  */
 export function PlayoffBracketTree({ projections }: PlayoffBracketTreeProps) {
   const matchups = pairMatchups(projections);
+  const roundGroups = groupMatchupsByRound(matchups);
   const [openStrengthAbbrev, setOpenStrengthAbbrev] = useState<string | null>(
     null,
   );
@@ -46,7 +47,7 @@ export function PlayoffBracketTree({ projections }: PlayoffBracketTreeProps) {
   }
   return (
     <BracketList
-      matchups={matchups}
+      roundGroups={roundGroups}
       openStrengthAbbrev={openStrengthAbbrev}
       onToggleStrength={(abbrev) =>
         setOpenStrengthAbbrev((prev) => (prev === abbrev ? null : abbrev))
@@ -66,44 +67,59 @@ interface Matchup {
   bottom: TeamSeriesProjection;
 }
 
-interface BracketListProps {
+interface RoundGroup {
+  round: number;
+  roundLabel: string;
   matchups: Matchup[];
+}
+
+interface BracketListProps {
+  roundGroups: RoundGroup[];
   openStrengthAbbrev: string | null;
   onToggleStrength: (abbrev: string) => void;
   onCloseStrength: () => void;
 }
 
 function BracketList({
-  matchups,
+  roundGroups,
   openStrengthAbbrev,
   onToggleStrength,
   onCloseStrength,
 }: BracketListProps) {
   return (
-    <ol className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-      {matchups.map((m) => (
-        <li
-          key={`${m.top.teamAbbrev}-${m.bottom.teamAbbrev}`}
-          className="border-2 border-[#1A1A1A] bg-white"
-        >
-          <MatchupRow
-            projection={m.top}
-            opponent={m.bottom}
-            isStrengthOpen={openStrengthAbbrev === m.top.teamAbbrev}
-            onToggleStrength={onToggleStrength}
-            onCloseStrength={onCloseStrength}
-          />
-          <div className="h-px bg-[#1A1A1A]" />
-          <MatchupRow
-            projection={m.bottom}
-            opponent={m.top}
-            isStrengthOpen={openStrengthAbbrev === m.bottom.teamAbbrev}
-            onToggleStrength={onToggleStrength}
-            onCloseStrength={onCloseStrength}
-          />
-        </li>
+    <div className="space-y-5">
+      {roundGroups.map((group) => (
+        <section key={group.round} className="space-y-2">
+          <h3 className="text-[10px] uppercase tracking-widest font-extrabold text-[#1A1A1A]">
+            {group.roundLabel}
+          </h3>
+          <ol className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {group.matchups.map((m) => (
+              <li
+                key={`${m.top.round}:${m.top.teamAbbrev}-${m.bottom.teamAbbrev}`}
+                className="border-2 border-[#1A1A1A] bg-white"
+              >
+                <MatchupRow
+                  projection={m.top}
+                  opponent={m.bottom}
+                  isStrengthOpen={openStrengthAbbrev === m.top.teamAbbrev}
+                  onToggleStrength={onToggleStrength}
+                  onCloseStrength={onCloseStrength}
+                />
+                <div className="h-px bg-[#1A1A1A]" />
+                <MatchupRow
+                  projection={m.bottom}
+                  opponent={m.top}
+                  isStrengthOpen={openStrengthAbbrev === m.bottom.teamAbbrev}
+                  onToggleStrength={onToggleStrength}
+                  onCloseStrength={onCloseStrength}
+                />
+              </li>
+            ))}
+          </ol>
+        </section>
       ))}
-    </ol>
+    </div>
   );
 }
 
@@ -116,18 +132,44 @@ function BracketList({
 function pairMatchups(projections: TeamSeriesProjection[]): Matchup[] {
   const seen = new Set<string>();
   const out: Matchup[] = [];
-  const byAbbrev = new Map(projections.map((p) => [p.teamAbbrev, p]));
+  const byRoundAndAbbrev = new Map(
+    projections.map((p) => [projectionKey(p.round, p.teamAbbrev), p]),
+  );
   for (const p of projections) {
-    if (seen.has(p.teamAbbrev)) continue;
-    const opponent = byAbbrev.get(p.opponentAbbrev);
+    const key = projectionKey(p.round, p.teamAbbrev);
+    if (seen.has(key)) continue;
+
+    const opponentKey = projectionKey(p.round, p.opponentAbbrev);
+    const opponent = byRoundAndAbbrev.get(opponentKey);
     if (!opponent) continue;
-    seen.add(p.teamAbbrev);
-    seen.add(opponent.teamAbbrev);
+    seen.add(key);
+    seen.add(opponentKey);
 
     const [top, bottom] = orderMatchup(p, opponent);
     out.push({ top, bottom });
   }
   return out;
+}
+
+function projectionKey(round: number, abbrev: string): string {
+  return `${round}:${abbrev}`;
+}
+
+function groupMatchupsByRound(matchups: Matchup[]): RoundGroup[] {
+  const byRound = new Map<number, RoundGroup>();
+  for (const matchup of matchups) {
+    const round = matchup.top.round;
+    if (!byRound.has(round)) {
+      byRound.set(round, {
+        round,
+        roundLabel: matchup.top.roundLabel || `Round ${round}`,
+        matchups: [],
+      });
+    }
+    byRound.get(round)?.matchups.push(matchup);
+  }
+
+  return Array.from(byRound.values()).sort((a, b) => a.round - b.round);
 }
 
 function orderMatchup(

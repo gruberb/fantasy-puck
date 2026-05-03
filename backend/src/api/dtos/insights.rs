@@ -61,6 +61,7 @@ pub struct TeamSeriesProjection {
     pub opponent_abbrev: String,
     pub opponent_name: String,
     pub round: u32,
+    pub round_label: String,
     pub wins: u32,
     pub opponent_wins: u32,
     pub series_state: SeriesStateCode,

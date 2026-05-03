@@ -1284,13 +1284,10 @@ async fn compute_cold_hands(
 }
 
 // ---------------------------------------------------------------------------
-// Series projections — every team in the current round with heuristic odds
+// Series projections — every team in active playoff rounds with heuristic odds
 // ---------------------------------------------------------------------------
 
 async fn compute_series_projections(state: &Arc<AppState>) -> Result<Vec<TeamSeriesProjection>> {
-    use crate::domain::prediction::series_projection as sp;
-    use crate::infra::nhl::constants::team_names;
-
     // Bracket comes straight from the mirror. Meta poller refreshes
     // nhl_playoff_bracket every aggregate cadence (~30 min), so this
     // is a single SELECT + deserialize rather than a live NHL call.
@@ -1302,65 +1299,197 @@ async fn compute_series_projections(state: &Arc<AppState>) -> Result<Vec<TeamSer
             None => return Ok(Vec::new()),
         };
 
-    let current_round = carousel.current_round as u32;
-    let round = match carousel
-        .rounds
-        .iter()
-        .find(|r| r.round_number == current_round as i64)
-    {
-        Some(r) => r,
-        None => return Ok(Vec::new()),
-    };
+    Ok(active_round_projections(&carousel))
+}
 
+fn active_round_projections(
+    carousel: &crate::domain::models::nhl::PlayoffCarousel,
+) -> Vec<TeamSeriesProjection> {
+    use crate::domain::prediction::series_projection as sp;
+    use crate::infra::nhl::constants::team_names;
+
+    let current_round = carousel.current_round;
     let mut out = Vec::new();
-    for series in &round.series {
-        let top_wins = series.top_seed.wins as u32;
-        let bot_wins = series.bottom_seed.wins as u32;
-        for (abbrev, wins, opp_abbrev, opp_wins) in [
-            (
-                &series.top_seed.abbrev,
-                top_wins,
-                &series.bottom_seed.abbrev,
-                bot_wins,
-            ),
-            (
-                &series.bottom_seed.abbrev,
-                bot_wins,
-                &series.top_seed.abbrev,
-                top_wins,
-            ),
-        ] {
-            let state_code = sp::classify(wins, opp_wins);
-            out.push(TeamSeriesProjection {
-                team_abbrev: abbrev.clone(),
-                team_name: team_names::get_team_name(abbrev).to_string(),
-                opponent_abbrev: opp_abbrev.clone(),
-                opponent_name: team_names::get_team_name(opp_abbrev).to_string(),
-                round: current_round,
-                wins,
-                opponent_wins: opp_wins,
-                series_state: state_code,
-                series_label: state_code.label(wins, opp_wins),
-                odds_to_advance: sp::probability_to_advance(wins, opp_wins),
-                games_remaining: sp::games_remaining(wins, opp_wins),
-                team_rating: None,     // populated by enrich_projections
-                opponent_rating: None, // populated by enrich_projections
-                rostered_tags: Vec::new(),
-            });
+
+    for round in &carousel.rounds {
+        if round.round_number > current_round {
+            continue;
+        }
+
+        for series in &round.series {
+            if !series_has_two_known_teams(series) || series_is_complete(series) {
+                continue;
+            }
+
+            let round_number = round.round_number.max(0) as u32;
+            let round_label = display_round_label(&round.round_label, round_number);
+            let top_wins = series.top_seed.wins.max(0) as u32;
+            let bot_wins = series.bottom_seed.wins.max(0) as u32;
+
+            for (abbrev, wins, opp_abbrev, opp_wins) in [
+                (
+                    &series.top_seed.abbrev,
+                    top_wins,
+                    &series.bottom_seed.abbrev,
+                    bot_wins,
+                ),
+                (
+                    &series.bottom_seed.abbrev,
+                    bot_wins,
+                    &series.top_seed.abbrev,
+                    top_wins,
+                ),
+            ] {
+                let state_code = sp::classify(wins, opp_wins);
+                out.push(TeamSeriesProjection {
+                    team_abbrev: abbrev.clone(),
+                    team_name: team_names::get_team_name(abbrev).to_string(),
+                    opponent_abbrev: opp_abbrev.clone(),
+                    opponent_name: team_names::get_team_name(opp_abbrev).to_string(),
+                    round: round_number,
+                    round_label: round_label.clone(),
+                    wins,
+                    opponent_wins: opp_wins,
+                    series_state: state_code,
+                    series_label: state_code.label(wins, opp_wins),
+                    odds_to_advance: sp::probability_to_advance(wins, opp_wins),
+                    games_remaining: sp::games_remaining(wins, opp_wins),
+                    team_rating: None,
+                    opponent_rating: None,
+                    rostered_tags: Vec::new(),
+                });
+            }
         }
     }
 
-    // Leaders first — sort by wins desc, then by odds desc, then abbrev asc.
-    out.sort_by(|a, b| {
-        b.wins
-            .cmp(&a.wins)
+    sort_series_projections(&mut out);
+    out
+}
+
+fn sort_series_projections(projections: &mut [TeamSeriesProjection]) {
+    projections.sort_by(|a, b| {
+        a.round
+            .cmp(&b.round)
             .then(
                 b.odds_to_advance
                     .partial_cmp(&a.odds_to_advance)
                     .unwrap_or(std::cmp::Ordering::Equal),
             )
+            .then(b.wins.cmp(&a.wins))
             .then(a.team_abbrev.cmp(&b.team_abbrev))
     });
-    let _ = state;
-    Ok(out)
+}
+
+fn series_has_two_known_teams(series: &crate::domain::models::nhl::Series) -> bool {
+    seed_is_known(series.top_seed.id, &series.top_seed.abbrev)
+        && seed_is_known(series.bottom_seed.id, &series.bottom_seed.abbrev)
+}
+
+fn seed_is_known(id: i64, abbrev: &str) -> bool {
+    id > 0 && !abbrev.trim().is_empty() && abbrev != "TBD"
+}
+
+fn series_is_complete(series: &crate::domain::models::nhl::Series) -> bool {
+    let needed = series.needed_to_win.max(1);
+    series.top_seed.wins >= needed || series.bottom_seed.wins >= needed
+}
+
+fn display_round_label(label: &str, round_number: u32) -> String {
+    if label.trim().is_empty() {
+        return format!("Round {}", round_number);
+    }
+
+    label.replace('-', " ")
+}
+
+#[cfg(test)]
+mod series_projection_tests {
+    use super::*;
+    use crate::domain::models::nhl::{BottomSeed, PlayoffCarousel, Round, Series, TopSeed};
+    use crate::domain::prediction::series_projection::SeriesStateCode;
+
+    fn seed_top(id: i64, abbrev: &str, wins: i64) -> TopSeed {
+        TopSeed {
+            id,
+            abbrev: abbrev.to_string(),
+            wins,
+            logo: String::new(),
+            dark_logo: String::new(),
+        }
+    }
+
+    fn seed_bottom(id: i64, abbrev: &str, wins: i64) -> BottomSeed {
+        BottomSeed {
+            id,
+            abbrev: abbrev.to_string(),
+            wins,
+            logo: String::new(),
+            dark_logo: String::new(),
+        }
+    }
+
+    fn series(round: i64, top: (&str, i64, i64), bottom: (&str, i64, i64)) -> Series {
+        Series {
+            series_letter: String::new(),
+            round_number: round,
+            series_label: String::new(),
+            series_link: String::new(),
+            top_seed: seed_top(top.1, top.0, top.2),
+            bottom_seed: seed_bottom(bottom.1, bottom.0, bottom.2),
+            needed_to_win: 4,
+        }
+    }
+
+    #[test]
+    fn active_round_projections_include_split_rounds_without_tbd_slots() {
+        let carousel = PlayoffCarousel {
+            season_id: 20252026,
+            current_round: 2,
+            rounds: vec![
+                Round {
+                    round_number: 1,
+                    round_label: "1st-round".to_string(),
+                    round_abbrev: "R1".to_string(),
+                    series: vec![
+                        series(1, ("BUF", 7, 4), ("BOS", 6, 2)),
+                        series(1, ("TBL", 14, 3), ("MTL", 8, 3)),
+                    ],
+                },
+                Round {
+                    round_number: 2,
+                    round_label: "2nd-round".to_string(),
+                    round_abbrev: "R2".to_string(),
+                    series: vec![
+                        series(2, ("CAR", 12, 1), ("PHI", 4, 0)),
+                        series(2, ("BUF", 7, 0), ("TBD", -1, 0)),
+                    ],
+                },
+            ],
+        };
+
+        let projections = active_round_projections(&carousel);
+        let teams: Vec<_> = projections
+            .iter()
+            .map(|p| (p.round, p.round_label.as_str(), p.team_abbrev.as_str()))
+            .collect();
+
+        assert_eq!(
+            teams,
+            vec![
+                (1, "1st round", "MTL"),
+                (1, "1st round", "TBL"),
+                (2, "2nd round", "CAR"),
+                (2, "2nd round", "PHI"),
+            ]
+        );
+        assert!(projections.iter().all(|p| p.team_abbrev != "TBD"));
+
+        let tampa = projections
+            .iter()
+            .find(|p| p.team_abbrev == "TBL")
+            .expect("TBL-MTL should remain visible while tied in round 1");
+        assert_eq!(tampa.series_state, SeriesStateCode::Tied);
+        assert_eq!(tampa.wins, 3);
+        assert_eq!(tampa.opponent_wins, 3);
+    }
 }

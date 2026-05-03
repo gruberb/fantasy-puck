@@ -33,6 +33,7 @@ export interface TeamSeriesProjection {
   opponentAbbrev: string;
   opponentName: string;
   round: number;
+  roundLabel: string;
   wins: number;
   opponentWins: number;
   seriesState: SeriesStateCode;
