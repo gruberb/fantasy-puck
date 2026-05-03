@@ -17,7 +17,10 @@ use crate::error::Result;
 /// Calculate the current NHL "hockey date" in Eastern Time (proper DST handling)
 pub fn hockey_today() -> String {
     use chrono_tz::America::New_York;
-    Utc::now().with_timezone(&New_York).format("%Y-%m-%d").to_string()
+    Utc::now()
+        .with_timezone(&New_York)
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 /// Generate and cache insights for a given league. Used by both the API handler and the cron job.
@@ -26,7 +29,13 @@ pub async fn generate_and_cache_insights(
     league_id: &str,
 ) -> Result<InsightsResponse> {
     let today = hockey_today();
-    let cache_key = format!("insights:{}:{}:{}:{}", league_id, season(), game_type(), today);
+    let cache_key = format!(
+        "insights:{}:{}:{}:{}",
+        league_id,
+        season(),
+        game_type(),
+        today
+    );
 
     // Check cache. Self-heal only on off-day responses: if the cached
     // payload has no games (e.g. 10am UTC prewarm ran before NHL
@@ -199,25 +208,7 @@ async fn compute_last_night(
             let series_after = g.series_status.as_ref().and_then(|v| {
                 let s: Option<crate::domain::models::nhl::SeriesStatus> =
                     serde_json::from_value(v.clone()).ok();
-                s.map(|s| {
-                    if s.top_seed_wins == s.bottom_seed_wins {
-                        format!("Series tied {}-{}", s.top_seed_wins, s.bottom_seed_wins)
-                    } else if s.top_seed_wins > s.bottom_seed_wins {
-                        format!(
-                            "{} leads series {}-{}",
-                            s.top_seed_team_abbrev,
-                            s.top_seed_wins,
-                            s.bottom_seed_wins
-                        )
-                    } else {
-                        format!(
-                            "{} leads series {}-{}",
-                            s.bottom_seed_team_abbrev,
-                            s.bottom_seed_wins,
-                            s.top_seed_wins
-                        )
-                    }
-                })
+                s.as_ref().and_then(crate::api::dtos::series_context_label)
             });
 
             LastNightGame {
@@ -284,7 +275,8 @@ async fn enrich_projections(
         if league_id.is_empty() {
             HashMap::new()
         } else {
-            let abbrevs: HashSet<&str> = projections.iter().map(|p| p.team_abbrev.as_str()).collect();
+            let abbrevs: HashSet<&str> =
+                projections.iter().map(|p| p.team_abbrev.as_str()).collect();
             let abbrev_vec: Vec<&str> = abbrevs.into_iter().collect();
             match state
                 .db
@@ -310,15 +302,13 @@ async fn enrich_projections(
                         .map(|(abbrev, counts)| {
                             let mut tags: Vec<_> = counts
                                 .into_iter()
-                                .map(
-                                    |((fantasy_team_id, fantasy_team_name), count)| {
-                                        crate::api::dtos::insights::RosteredPlayerTag {
-                                            fantasy_team_id,
-                                            fantasy_team_name,
-                                            count,
-                                        }
-                                    },
-                                )
+                                .map(|((fantasy_team_id, fantasy_team_name), count)| {
+                                    crate::api::dtos::insights::RosteredPlayerTag {
+                                        fantasy_team_id,
+                                        fantasy_team_name,
+                                        count,
+                                    }
+                                })
                                 .collect();
                             tags.sort_by(|a, b| b.count.cmp(&a.count));
                             (abbrev, tags)
@@ -473,13 +463,15 @@ async fn compute_todays_games(
         .unwrap_or_default();
 
     let yesterday = {
-        let date = chrono::NaiveDate::parse_from_str(hockey_today, "%Y-%m-%d")
-            .unwrap_or_else(|_| {
+        let date =
+            chrono::NaiveDate::parse_from_str(hockey_today, "%Y-%m-%d").unwrap_or_else(|_| {
                 Utc::now()
                     .with_timezone(&chrono_tz::America::New_York)
                     .date_naive()
             });
-        (date - chrono::Duration::days(1)).format("%Y-%m-%d").to_string()
+        (date - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string()
     };
 
     // Standings context per team. In playoff mode the streak is
@@ -550,12 +542,11 @@ async fn compute_todays_games(
         // write-once `nhl_game_landing` mirror row. Venue comes
         // directly from the game row so an empty matchup still
         // yields a correct address in the header.
-        let landing_matchup = crate::infra::db::nhl_mirror::get_game_landing_matchup(
-            pool, game.game_id,
-        )
-        .await
-        .ok()
-        .flatten();
+        let landing_matchup =
+            crate::infra::db::nhl_mirror::get_game_landing_matchup(pool, game.game_id)
+                .await
+                .ok()
+                .flatten();
         let landing = landing_matchup
             .as_ref()
             .map(build_landing_from_matchup)
@@ -651,20 +642,9 @@ fn series_context_from_row(
         Ok(v) => v,
         Err(_) => return (None, false),
     };
-    let leader = if ss.top_seed_wins >= ss.bottom_seed_wins {
-        &ss.top_seed_team_abbrev
-    } else {
-        &ss.bottom_seed_team_abbrev
-    };
-    let context = format!(
-        "{} - {} leads {}-{}",
-        ss.series_title,
-        leader,
-        ss.top_seed_wins.max(ss.bottom_seed_wins),
-        ss.top_seed_wins.min(ss.bottom_seed_wins),
-    );
-    let elim = ss.top_seed_wins == 3 || ss.bottom_seed_wins == 3;
-    (Some(context), elim)
+    let context = crate::api::dtos::series_context_label(&ss);
+    let elim = crate::api::dtos::series_is_elimination_game(&ss);
+    (context, elim)
 }
 
 /// Enrich each `TodaysGameSignal` with "your team has N players in this game"
@@ -758,7 +738,10 @@ fn build_landing_from_matchup(matchup: &serde_json::Value) -> LandingCached {
         .and_then(|l| l.as_array())
     {
         for leader in leaders {
-            let cat = leader.get("category").and_then(|c| c.as_str()).unwrap_or("");
+            let cat = leader
+                .get("category")
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
             let al = extract_player_leader(leader, "awayLeader");
             let hl = extract_player_leader(leader, "homeLeader");
             if let (Some(a), Some(h)) = (al, hl) {
@@ -798,20 +781,44 @@ fn extract_player_leader(leader: &serde_json::Value, side: &str) -> Option<Playe
     let p = leader.get(side)?;
     Some(PlayerLeader {
         player_id: p.get("playerId").and_then(|v| v.as_i64()),
-        name: p.get("name").and_then(|n| n.get("default")).and_then(|n| n.as_str()).unwrap_or("").to_string(),
-        position: p.get("positionCode").and_then(|p| p.as_str()).unwrap_or("").to_string(),
+        name: p
+            .get("name")
+            .and_then(|n| n.get("default"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string(),
+        position: p
+            .get("positionCode")
+            .and_then(|p| p.as_str())
+            .unwrap_or("")
+            .to_string(),
         value: p.get("value").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-        headshot: p.get("headshot").and_then(|h| h.as_str()).unwrap_or("").to_string(),
+        headshot: p
+            .get("headshot")
+            .and_then(|h| h.as_str())
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
 fn extract_goalie_stats(gc: &serde_json::Value, side: &str) -> Option<GoalieStats> {
     let team = gc.get(side)?;
     let leaders = team.get("leaders").and_then(|l| l.as_array())?;
-    let best = leaders.iter().max_by_key(|g| g.get("gamesPlayed").and_then(|v| v.as_i64()).unwrap_or(0))?;
+    let best = leaders
+        .iter()
+        .max_by_key(|g| g.get("gamesPlayed").and_then(|v| v.as_i64()).unwrap_or(0))?;
     Some(GoalieStats {
-        name: best.get("name").and_then(|n| n.get("default")).and_then(|n| n.as_str()).unwrap_or("").to_string(),
-        record: best.get("record").and_then(|r| r.as_str()).unwrap_or("").to_string(),
+        name: best
+            .get("name")
+            .and_then(|n| n.get("default"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string(),
+        record: best
+            .get("record")
+            .and_then(|r| r.as_str())
+            .unwrap_or("")
+            .to_string(),
         gaa: best.get("gaa").and_then(|v| v.as_f64()).unwrap_or(0.0),
         save_pctg: best.get("savePctg").and_then(|v| v.as_f64()).unwrap_or(0.0),
         shutouts: best.get("shutouts").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
@@ -833,23 +840,40 @@ async fn scrape_headlines() -> Result<Vec<String>> {
     // 1. Scrape player news headlines
     if let Ok(resp) = client
         .get("https://www.dailyfaceoff.com/hockey-player-news")
-        .header("User-Agent", "Mozilla/5.0 (compatible; FantasyHockeyBot/1.0)")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (compatible; FantasyHockeyBot/1.0)",
+        )
         .send()
         .await
     {
         if let Ok(html) = resp.text().await {
             let document = scraper::Html::parse_document(&html);
-            let selectors = ["h3 a", ".news-item h3", ".news-item__title", "article h3", ".post-title a", "h2 a"];
+            let selectors = [
+                "h3 a",
+                ".news-item h3",
+                ".news-item__title",
+                "article h3",
+                ".post-title a",
+                "h2 a",
+            ];
             for sel_str in &selectors {
                 if let Ok(selector) = scraper::Selector::parse(sel_str) {
                     for element in document.select(&selector) {
-                        let text: String = element.text().collect::<Vec<_>>().join(" ").trim().to_string();
+                        let text: String = element
+                            .text()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .trim()
+                            .to_string();
                         if !text.is_empty() && text.len() > 10 && !all_headlines.contains(&text) {
                             all_headlines.push(text);
                         }
                     }
                 }
-                if all_headlines.len() >= 8 { break; }
+                if all_headlines.len() >= 8 {
+                    break;
+                }
             }
         }
     }
@@ -902,9 +926,11 @@ fn fallback_narratives() -> InsightsNarratives {
     }
 }
 
-async fn call_claude_api(signals: &InsightsSignals) -> std::result::Result<InsightsNarratives, String> {
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
+async fn call_claude_api(
+    signals: &InsightsSignals,
+) -> std::result::Result<InsightsNarratives, String> {
+    let api_key =
+        std::env::var("ANTHROPIC_API_KEY").map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
 
     let signals_json = serde_json::to_string(signals)
         .map_err(|e| format!("Failed to serialize signals: {}", e))?;
@@ -912,23 +938,70 @@ async fn call_claude_api(signals: &InsightsSignals) -> std::result::Result<Insig
     // Build human-readable game summaries for Claude
     let mut game_summaries = String::new();
     for g in &signals.todays_games {
-        game_summaries.push_str(&format!("\n--- {} ({}) @ {} ({}) at {} ---\n", g.away_team, g.away_record, g.home_team, g.home_record, g.venue));
-        if let Some(ctx) = &g.series_context { game_summaries.push_str(&format!("  Series: {}{}\n", ctx, if g.is_elimination { " [ELIMINATION GAME]" } else { "" })); }
+        game_summaries.push_str(&format!(
+            "\n--- {} ({}) @ {} ({}) at {} ---\n",
+            g.away_team, g.away_record, g.home_team, g.home_record, g.venue
+        ));
+        if let Some(ctx) = &g.series_context {
+            game_summaries.push_str(&format!(
+                "  Series: {}{}\n",
+                ctx,
+                if g.is_elimination {
+                    " [ELIMINATION GAME]"
+                } else {
+                    ""
+                }
+            ));
+        }
         // Standings context
-        if let Some(ref streak) = g.home_streak { game_summaries.push_str(&format!("  {} streak: {}", g.home_team, streak)); }
-        if let Some(ref l10) = g.home_l10 { game_summaries.push_str(&format!(", L10: {}", l10)); }
-        if g.home_streak.is_some() { game_summaries.push('\n'); }
-        if let Some(ref streak) = g.away_streak { game_summaries.push_str(&format!("  {} streak: {}", g.away_team, streak)); }
-        if let Some(ref l10) = g.away_l10 { game_summaries.push_str(&format!(", L10: {}", l10)); }
-        if g.away_streak.is_some() { game_summaries.push('\n'); }
+        if let Some(ref streak) = g.home_streak {
+            game_summaries.push_str(&format!("  {} streak: {}", g.home_team, streak));
+        }
+        if let Some(ref l10) = g.home_l10 {
+            game_summaries.push_str(&format!(", L10: {}", l10));
+        }
+        if g.home_streak.is_some() {
+            game_summaries.push('\n');
+        }
+        if let Some(ref streak) = g.away_streak {
+            game_summaries.push_str(&format!("  {} streak: {}", g.away_team, streak));
+        }
+        if let Some(ref l10) = g.away_l10 {
+            game_summaries.push_str(&format!(", L10: {}", l10));
+        }
+        if g.away_streak.is_some() {
+            game_summaries.push('\n');
+        }
         // Last game results
-        if let Some(ref res) = g.home_last_result { game_summaries.push_str(&format!("  {} last game: {}\n", g.home_team, res)); }
-        if let Some(ref res) = g.away_last_result { game_summaries.push_str(&format!("  {} last game: {}\n", g.away_team, res)); }
-        if let Some((ref a, ref h)) = g.points_leaders { game_summaries.push_str(&format!("  Points (L5): {} {} ({}) vs {} {} ({})\n", a.name, a.position, a.value, h.name, h.position, h.value)); }
-        if let Some((ref a, ref h)) = g.goals_leaders { game_summaries.push_str(&format!("  Goals (L5): {} ({}) vs {} ({})\n", a.name, a.value, h.name, h.value)); }
-        if let Some((ref a, ref h)) = g.assists_leaders { game_summaries.push_str(&format!("  Assists (L5): {} ({}) vs {} ({})\n", a.name, a.value, h.name, h.value)); }
+        if let Some(ref res) = g.home_last_result {
+            game_summaries.push_str(&format!("  {} last game: {}\n", g.home_team, res));
+        }
+        if let Some(ref res) = g.away_last_result {
+            game_summaries.push_str(&format!("  {} last game: {}\n", g.away_team, res));
+        }
+        if let Some((ref a, ref h)) = g.points_leaders {
+            game_summaries.push_str(&format!(
+                "  Points (L5): {} {} ({}) vs {} {} ({})\n",
+                a.name, a.position, a.value, h.name, h.position, h.value
+            ));
+        }
+        if let Some((ref a, ref h)) = g.goals_leaders {
+            game_summaries.push_str(&format!(
+                "  Goals (L5): {} ({}) vs {} ({})\n",
+                a.name, a.value, h.name, h.value
+            ));
+        }
+        if let Some((ref a, ref h)) = g.assists_leaders {
+            game_summaries.push_str(&format!(
+                "  Assists (L5): {} ({}) vs {} ({})\n",
+                a.name, a.value, h.name, h.value
+            ));
+        }
         if let (Some(ref ag), Some(ref hg)) = (&g.away_goalie, &g.home_goalie) {
-            game_summaries.push_str(&format!("  Goalies: {} ({}, {:.2} GAA, {:.3} SV%) vs {} ({}, {:.2} GAA, {:.3} SV%)\n", ag.name, ag.record, ag.gaa, ag.save_pctg, hg.name, hg.record, hg.gaa, hg.save_pctg));
+            game_summaries.push_str(&format!(
+                "  Goalies: {} ({}, {:.2} GAA, {:.3} SV%) vs {} ({}, {:.2} GAA, {:.3} SV%)\n",
+                ag.name, ag.record, ag.gaa, ag.save_pctg, hg.name, hg.record, hg.gaa, hg.save_pctg
+            ));
         }
     }
     // Hot player edge data for Claude context
@@ -936,8 +1009,12 @@ async fn call_claude_api(signals: &InsightsSignals) -> std::result::Result<Insig
     for p in &signals.hot_players {
         if p.top_speed.is_some() || p.top_shot_speed.is_some() {
             edge_summary.push_str(&format!("  {} -", p.name));
-            if let Some(spd) = p.top_speed { edge_summary.push_str(&format!(" top skating speed: {:.1} mph", spd)); }
-            if let Some(shot) = p.top_shot_speed { edge_summary.push_str(&format!(" top shot speed: {:.1} mph", shot)); }
+            if let Some(spd) = p.top_speed {
+                edge_summary.push_str(&format!(" top skating speed: {:.1} mph", spd));
+            }
+            if let Some(shot) = p.top_shot_speed {
+                edge_summary.push_str(&format!(" top shot speed: {:.1} mph", shot));
+            }
             edge_summary.push('\n');
         }
     }
@@ -949,7 +1026,13 @@ async fn call_claude_api(signals: &InsightsSignals) -> std::result::Result<Insig
     for g in &signals.last_night {
         last_night_summary.push_str(&format!(
             "\n--- {} @ {} · Final {} {} – {} {} · {} ---\n",
-            g.away_team, g.home_team, g.away_team, g.away_score, g.home_team, g.home_score, g.headline
+            g.away_team,
+            g.home_team,
+            g.away_team,
+            g.away_score,
+            g.home_team,
+            g.home_score,
+            g.headline
         ));
         if let Some(s) = &g.series_after {
             last_night_summary.push_str(&format!("  Series: {}\n", s));
@@ -1039,8 +1122,12 @@ Return JSON with exactly these fields:
     // Try to extract JSON from the response (it may be wrapped in markdown code blocks)
     let json_str = extract_json_from_text(text);
 
-    let parsed: serde_json::Value = serde_json::from_str(&json_str)
-        .map_err(|e| format!("Failed to parse Claude response as JSON: {} — raw: {}", e, text))?;
+    let parsed: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
+        format!(
+            "Failed to parse Claude response as JSON: {} — raw: {}",
+            e, text
+        )
+    })?;
 
     let game_narratives: Vec<String> = parsed
         .get("game_narratives")
@@ -1123,7 +1210,11 @@ async fn compute_cold_hands(
     }
 
     // Rostered players in this league.
-    let groups = state.db.get_nhl_teams_and_players(league_id).await.unwrap_or_default();
+    let groups = state
+        .db
+        .get_nhl_teams_and_players(league_id)
+        .await
+        .unwrap_or_default();
     let mut rostered: Vec<(i64, String, String, String, String)> = Vec::new();
     for g in groups {
         for p in g.players {
@@ -1183,7 +1274,11 @@ async fn compute_cold_hands(
         });
     }
     // Coldest (lowest points) first; ties broken by larger sample (more games).
-    cold.sort_by(|a, b| a.form_points.cmp(&b.form_points).then(b.form_games.cmp(&a.form_games)));
+    cold.sort_by(|a, b| {
+        a.form_points
+            .cmp(&b.form_points)
+            .then(b.form_games.cmp(&a.form_games))
+    });
     cold.truncate(8);
     Ok(cold)
 }
@@ -1192,24 +1287,20 @@ async fn compute_cold_hands(
 // Series projections — every team in the current round with heuristic odds
 // ---------------------------------------------------------------------------
 
-async fn compute_series_projections(
-    state: &Arc<AppState>,
-) -> Result<Vec<TeamSeriesProjection>> {
-    use crate::infra::nhl::constants::team_names;
+async fn compute_series_projections(state: &Arc<AppState>) -> Result<Vec<TeamSeriesProjection>> {
     use crate::domain::prediction::series_projection as sp;
+    use crate::infra::nhl::constants::team_names;
 
     // Bracket comes straight from the mirror. Meta poller refreshes
     // nhl_playoff_bracket every aggregate cadence (~30 min), so this
     // is a single SELECT + deserialize rather than a live NHL call.
-    let carousel = match crate::infra::db::nhl_mirror::get_playoff_carousel(
-        state.db.pool(),
-        season() as i32,
-    )
-    .await?
-    {
-        Some(c) => c,
-        None => return Ok(Vec::new()),
-    };
+    let carousel =
+        match crate::infra::db::nhl_mirror::get_playoff_carousel(state.db.pool(), season() as i32)
+            .await?
+        {
+            Some(c) => c,
+            None => return Ok(Vec::new()),
+        };
 
     let current_round = carousel.current_round as u32;
     let round = match carousel
@@ -1226,8 +1317,18 @@ async fn compute_series_projections(
         let top_wins = series.top_seed.wins as u32;
         let bot_wins = series.bottom_seed.wins as u32;
         for (abbrev, wins, opp_abbrev, opp_wins) in [
-            (&series.top_seed.abbrev, top_wins, &series.bottom_seed.abbrev, bot_wins),
-            (&series.bottom_seed.abbrev, bot_wins, &series.top_seed.abbrev, top_wins),
+            (
+                &series.top_seed.abbrev,
+                top_wins,
+                &series.bottom_seed.abbrev,
+                bot_wins,
+            ),
+            (
+                &series.bottom_seed.abbrev,
+                bot_wins,
+                &series.top_seed.abbrev,
+                top_wins,
+            ),
         ] {
             let state_code = sp::classify(wins, opp_wins);
             out.push(TeamSeriesProjection {
@@ -1263,4 +1364,3 @@ async fn compute_series_projections(
     let _ = state;
     Ok(out)
 }
-

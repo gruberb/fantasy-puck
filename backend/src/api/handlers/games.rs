@@ -86,7 +86,13 @@ pub async fn get_match_day(
     // Early-morning carry-over: if a west-coast game from yesterday
     // is still LIVE, include it in today's response. Rare on playoff
     // nights but legitimate for long OT games.
-    let include_yesterday = now_et.time().format("%H").to_string().parse::<u32>().unwrap_or(12) < 12;
+    let include_yesterday = now_et
+        .time()
+        .format("%H")
+        .to_string()
+        .parse::<u32>()
+        .unwrap_or(12)
+        < 12;
     let hockey_yesterday = (now_et - chrono::Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
@@ -95,7 +101,10 @@ pub async fn get_match_day(
         nhl_mirror::list_games_for_date(state.db.pool(), &hockey_today).await?;
     if include_yesterday {
         let yest = nhl_mirror::list_games_for_date(state.db.pool(), &hockey_yesterday).await?;
-        games.extend(yest.into_iter().filter(|g| state_str_is_live(&g.game_state)));
+        games.extend(
+            yest.into_iter()
+                .filter(|g| state_str_is_live(&g.game_state)),
+        );
     }
 
     if games.is_empty() {
@@ -111,8 +120,11 @@ pub async fn get_match_day(
         }));
     }
 
-    let MatchDayBundle { game_responses, fantasy_teams, summary } =
-        assemble_match_day(&state, &games, league_id).await?;
+    let MatchDayBundle {
+        game_responses,
+        fantasy_teams,
+        summary,
+    } = assemble_match_day(&state, &games, league_id).await?;
 
     Ok(json_success(MatchDayResponse {
         date: hockey_today,
@@ -217,12 +229,23 @@ async fn process_extended(
     let now_et = chrono::Utc::now().with_timezone(&chrono_tz::America::New_York);
     let hockey_today = now_et.format("%Y-%m-%d").to_string();
     let is_today = date == hockey_today;
-    if is_today && now_et.time().format("%H").to_string().parse::<u32>().unwrap_or(12) < 12 {
+    if is_today
+        && now_et
+            .time()
+            .format("%H")
+            .to_string()
+            .parse::<u32>()
+            .unwrap_or(12)
+            < 12
+    {
         let hockey_yesterday = (now_et - chrono::Duration::days(1))
             .format("%Y-%m-%d")
             .to_string();
         let yest = nhl_mirror::list_games_for_date(state.db.pool(), &hockey_yesterday).await?;
-        games.extend(yest.into_iter().filter(|g| state_str_is_live(&g.game_state)));
+        games.extend(
+            yest.into_iter()
+                .filter(|g| state_str_is_live(&g.game_state)),
+        );
     }
 
     if games.is_empty() {
@@ -460,11 +483,10 @@ fn build_basic_players(
             .map(|t| t.team_id)
             .unwrap_or(0);
         for player in fantasy_players {
-            let (goals, assists, points) =
-                stats_by_player_id
-                    .get(&player.nhl_id)
-                    .map(|r| (r.goals, r.assists, r.points))
-                    .unwrap_or((0, 0, 0));
+            let (goals, assists, points) = stats_by_player_id
+                .get(&player.nhl_id)
+                .map(|r| (r.goals, r.assists, r.points))
+                .unwrap_or((0, 0, 0));
             out.push(FantasyPlayerResponse {
                 fantasy_team: fantasy_team_name.clone(),
                 fantasy_team_id,
@@ -534,13 +556,18 @@ fn push_extended_for_team(
 
             let (playoff_goals, playoff_assists, playoff_points, playoff_games) = playoff_by_player
                 .get(&player.nhl_id)
-                .map(|r| (r.goals as i32, r.assists as i32, r.points as i32, r.games as i32))
+                .map(|r| {
+                    (
+                        r.goals as i32,
+                        r.assists as i32,
+                        r.points as i32,
+                        r.games as i32,
+                    )
+                })
                 .unwrap_or((0, 0, 0, 0));
 
-            by_fantasy_team
-                .entry(fantasy_team_id)
-                .or_default()
-                .push(FantasyPlayerExtendedResponse {
+            by_fantasy_team.entry(fantasy_team_id).or_default().push(
+                FantasyPlayerExtendedResponse {
                     fantasy_team: fantasy_team_name.clone(),
                     fantasy_team_id,
                     player_name: player.player_name.clone(),
@@ -558,7 +585,8 @@ fn push_extended_for_team(
                     playoff_games,
                     form,
                     time_on_ice,
-                });
+                },
+            );
         }
     }
 }
@@ -569,6 +597,7 @@ fn game_response_from_row(
     home_team_players: Vec<FantasyPlayerResponse>,
     away_team_players: Vec<FantasyPlayerResponse>,
 ) -> GameResponse {
+    let series = deser_series_status_model(&row.series_status);
     GameResponse {
         id: row.game_id as u32,
         home_team: row.home_team.clone(),
@@ -583,11 +612,15 @@ fn game_response_from_row(
         away_score: row.away_score,
         game_state: game_state_from_str(&row.game_state),
         period: format_period(row.period_number, row.period_type.as_deref()),
-        series_status: deser_series_status(&row.series_status),
+        series_status: series.clone().map(Into::into),
+        series_context: series
+            .as_ref()
+            .and_then(crate::api::dtos::series_context_label),
     }
 }
 
 fn match_day_game_response(nhl_client: &NhlClient, row: &NhlGameRow) -> MatchDayGameResponse {
+    let series = deser_series_status_model(&row.series_status);
     MatchDayGameResponse {
         id: row.game_id as u32,
         home_team: row.home_team.clone(),
@@ -600,7 +633,10 @@ fn match_day_game_response(nhl_client: &NhlClient, row: &NhlGameRow) -> MatchDay
         away_score: row.away_score,
         game_state: game_state_from_str(&row.game_state),
         period: format_period(row.period_number, row.period_type.as_deref()),
-        series_status: deser_series_status(&row.series_status),
+        series_status: series.clone().map(Into::into),
+        series_context: series
+            .as_ref()
+            .and_then(crate::api::dtos::series_context_label),
     }
 }
 
@@ -671,10 +707,7 @@ fn state_str_is_live_or_done(s: &str) -> bool {
     matches!(s, "LIVE" | "CRIT" | "OFF" | "FINAL")
 }
 
-fn deser_series_status(
-    raw: &Option<serde_json::Value>,
-) -> Option<crate::api::dtos::SeriesStatusResponse> {
+fn deser_series_status_model(raw: &Option<serde_json::Value>) -> Option<SeriesStatus> {
     let v = raw.as_ref()?;
-    let series: SeriesStatus = serde_json::from_value(v.clone()).ok()?;
-    Some(series.into())
+    serde_json::from_value(v.clone()).ok()
 }

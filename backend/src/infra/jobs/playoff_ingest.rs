@@ -17,9 +17,9 @@ use std::sync::Arc;
 use chrono::NaiveDate;
 use tracing::{debug, info, warn};
 
-use crate::infra::db::FantasyDb;
-use crate::error::Result;
 use crate::domain::models::nhl::{GameState, TodayGame, TodaySchedule};
+use crate::error::Result;
+use crate::infra::db::FantasyDb;
 use crate::NhlClient;
 
 /// Ingest every completed playoff game on `date` (YYYY-MM-DD). Returns the
@@ -143,9 +143,9 @@ pub async fn rebackfill_playoff_season_via_carousel(
     let carousel = nhl
         .get_playoff_carousel(season.to_string())
         .await?
-        .ok_or_else(|| crate::error::Error::Validation(format!(
-            "No playoff carousel for season {season}"
-        )))?;
+        .ok_or_else(|| {
+            crate::error::Error::Validation(format!("No playoff carousel for season {season}"))
+        })?;
 
     let mut total: usize = 0;
     let mut per_series_log: Vec<String> = Vec::new();
@@ -271,9 +271,15 @@ async fn ingest_single_game(
     // boxscore's player goals if the score is missing.
     let (home_score, away_score) = match &game.game_score {
         Some(s) => (s.home, s.away),
+        None if game.home_team.score.is_some() || game.away_team.score.is_some() => (
+            game.home_team.score.unwrap_or(0),
+            game.away_team.score.unwrap_or(0),
+        ),
         None => {
             let sum_goals = |team: &crate::domain::models::nhl::TeamGameStats| -> i32 {
-                team.forwards.iter().chain(team.defense.iter())
+                team.forwards
+                    .iter()
+                    .chain(team.defense.iter())
                     .map(|p| p.goals.unwrap_or(0))
                     .sum()
             };

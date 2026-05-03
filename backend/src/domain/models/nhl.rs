@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Player data from NHL API
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -123,10 +123,12 @@ pub struct GameData {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamInfo {
-    pub id: u32,
+    pub id: i32,
     pub abbrev: String,
     pub common_name: Option<HashMap<String, String>>,
     pub place_name: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub score: Option<i32>,
 }
 
 /// Today's schedule from NHL API
@@ -202,13 +204,25 @@ pub struct TodayGame {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SeriesStatus {
+    #[serde(default, deserialize_with = "non_negative_u32_or_zero")]
     pub round: u32,
     pub series_title: String,
     pub top_seed_team_abbrev: String,
+    #[serde(default, deserialize_with = "non_negative_u32_or_zero")]
     pub top_seed_wins: u32,
     pub bottom_seed_team_abbrev: String,
+    #[serde(default, deserialize_with = "non_negative_u32_or_zero")]
     pub bottom_seed_wins: u32,
+    #[serde(default, deserialize_with = "non_negative_u32_or_zero")]
     pub game_number_of_series: u32,
+}
+
+fn non_negative_u32_or_zero<'de, D>(deserializer: D) -> std::result::Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = i64::deserialize(deserializer)?;
+    Ok(u32::try_from(value).unwrap_or(0))
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -523,3 +537,86 @@ impl FromStr for GameState {
 }
 
 // Player matching and stat calculation utilities are in utils/nhl.rs
+
+#[cfg(test)]
+mod schedule_payload_tests {
+    use super::TodaySchedule;
+
+    #[test]
+    fn schedule_accepts_tbd_placeholders_scores_and_late_rounds() {
+        let payload = r#"{
+            "gameWeek": [{
+                "date": "2026-05-03",
+                "games": [{
+                    "id": 2025030127,
+                    "season": 20252026,
+                    "gameType": 3,
+                    "startTimeUTC": "2026-05-03T22:00:00Z",
+                    "venue": { "default": "Benchmark International Arena" },
+                    "awayTeam": { "id": 8, "abbrev": "MTL", "score": 1 },
+                    "homeTeam": { "id": 14, "abbrev": "TBL", "score": 0 },
+                    "gameState": "LIVE",
+                    "seriesStatus": {
+                        "round": 1,
+                        "seriesTitle": "1st Round",
+                        "topSeedTeamAbbrev": "TBL",
+                        "topSeedWins": 3,
+                        "bottomSeedTeamAbbrev": "MTL",
+                        "bottomSeedWins": 3,
+                        "gameNumberOfSeries": 7
+                    }
+                }, {
+                    "id": 2025030211,
+                    "season": 20252026,
+                    "gameType": 3,
+                    "startTimeUTC": "2026-05-06T23:00:00Z",
+                    "venue": { "default": "KeyBank Center" },
+                    "awayTeam": { "id": -1, "abbrev": "TBD" },
+                    "homeTeam": { "id": 7, "abbrev": "BUF" },
+                    "gameState": "FUT",
+                    "seriesStatus": {
+                        "round": 2,
+                        "seriesTitle": "2nd Round",
+                        "topSeedTeamAbbrev": "BUF",
+                        "topSeedWins": -1,
+                        "bottomSeedTeamAbbrev": "TBD",
+                        "bottomSeedWins": -1,
+                        "gameNumberOfSeries": -1
+                    }
+                }, {
+                    "id": 2025030241,
+                    "season": 20252026,
+                    "gameType": 3,
+                    "startTimeUTC": "2026-05-05T01:30:00Z",
+                    "venue": { "default": "T-Mobile Arena" },
+                    "awayTeam": { "id": 24, "abbrev": "ANA" },
+                    "homeTeam": { "id": 54, "abbrev": "VGK" },
+                    "gameState": "FUT",
+                    "seriesStatus": {
+                        "round": 2,
+                        "seriesTitle": "2nd Round",
+                        "topSeedTeamAbbrev": "VGK",
+                        "topSeedWins": 0,
+                        "bottomSeedTeamAbbrev": "ANA",
+                        "bottomSeedWins": 0,
+                        "gameNumberOfSeries": 1
+                    }
+                }]
+            }]
+        }"#;
+
+        let schedule: TodaySchedule = serde_json::from_str(payload).unwrap();
+        let games = schedule.games_for_date("2026-05-03");
+
+        assert_eq!(games.len(), 3);
+        assert_eq!(games[0].away_team.score, Some(1));
+        assert_eq!(games[0].home_team.score, Some(0));
+        assert_eq!(games[1].away_team.id, -1);
+        let tbd_series = games[1].series_status.as_ref().unwrap();
+        assert_eq!(tbd_series.top_seed_wins, 0);
+        assert_eq!(tbd_series.bottom_seed_wins, 0);
+        assert_eq!(tbd_series.game_number_of_series, 0);
+        assert_eq!(games[2].home_team.abbrev, "VGK");
+        assert_eq!(games[2].series_status.as_ref().unwrap().round, 2);
+    }
+}

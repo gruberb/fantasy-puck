@@ -159,6 +159,8 @@ Session flow:
 3. `login()` / `register()` POST to the backend, store the returned session, notify listeners.
 4. A `window.addEventListener("storage", ...)` handler syncs sessions across open tabs ([`auth-service.ts:19-27`](../frontend/src/features/auth/api/auth-service.ts)).
 
+Backend-issued JWTs expire after 90 days. There is no refresh-token exchange; the frontend stores the returned bearer token and validates it on startup.
+
 `AuthContext` exposes `user`, `profile`, `loading`, `signIn`, `signUp`, `signOut`. All listeners are triggered when `authService.session` changes.
 
 ### LeagueContext

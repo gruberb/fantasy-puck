@@ -113,7 +113,7 @@ pub async fn upsert_game(pool: &PgPool, game: &TodayGame, game_date: &str) -> Re
         .map(|s| serde_json::to_value(s).unwrap_or(Value::Null));
     let (home_score, away_score) = match game.game_score.as_ref() {
         Some(s) => (Some(s.home), Some(s.away)),
-        None => (None, None),
+        None => (game.home_team.score, game.away_team.score),
     };
     // GameState has a Display impl via serde; round-trip through
     // serde_json to get the canonical upstream spelling.
@@ -168,6 +168,51 @@ pub async fn upsert_game(pool: &PgPool, game: &TodayGame, game_date: &str) -> Re
     Ok(())
 }
 
+/// Mark unresolved schedule rows as cancelled when they disappeared
+/// from the latest authoritative schedule payload for the same date.
+pub async fn reconcile_schedule_for_date(
+    pool: &PgPool,
+    date: &str,
+    season: i32,
+    game_type: i16,
+    games: &[TodayGame],
+) -> Result<u64> {
+    let fetched_ids: Vec<i64> = games.iter().map(|g| g.id as i64).collect();
+    let result = sqlx::query(
+        r#"
+        UPDATE nhl_games
+           SET game_state = 'CANCELLED',
+               updated_at = NOW()
+         WHERE game_date = $1::date
+           AND season = $2
+           AND game_type = $3
+           AND game_state IN ('FUT', 'PRE')
+           AND NOT (game_id = ANY($4::bigint[]))
+        "#,
+    )
+    .bind(date)
+    .bind(season)
+    .bind(game_type)
+    .bind(fetched_ids)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(result.rows_affected())
+}
+
+#[cfg(test)]
+fn stale_unresolved_game_ids(existing: &[(i64, &str)], fetched_ids: &[i64]) -> Vec<i64> {
+    let fetched: std::collections::HashSet<i64> = fetched_ids.iter().copied().collect();
+    existing
+        .iter()
+        .filter_map(|(id, state)| {
+            matches!(*state, "FUT" | "PRE")
+                .then_some(*id)
+                .filter(|id| !fetched.contains(id))
+        })
+        .collect()
+}
+
 /// Update the live-state columns of an existing `nhl_games` row.
 /// Does not touch schedule fields; the meta poller owns those.
 pub async fn update_game_live_state(
@@ -212,6 +257,7 @@ pub async fn list_live_game_ids_for_date(pool: &PgPool, date: &str) -> Result<Ve
         SELECT game_id FROM nhl_games
          WHERE game_date = $1::date
            AND game_state IN ('LIVE', 'CRIT', 'PRE')
+           AND game_state <> 'CANCELLED'
         "#,
     )
     .bind(date)
@@ -233,8 +279,9 @@ pub async fn list_games_needing_poll(pool: &PgPool, today: &str) -> Result<Vec<i
     let rows: Vec<i64> = sqlx::query_scalar(
         r#"
         SELECT game_id FROM nhl_games
-         WHERE game_state IN ('LIVE', 'CRIT')
-            OR (game_state = 'PRE' AND game_date = $1::date)
+         WHERE (game_state IN ('LIVE', 'CRIT')
+            OR (game_state = 'PRE' AND game_date = $1::date))
+           AND game_state <> 'CANCELLED'
         "#,
     )
     .bind(today)
@@ -248,7 +295,7 @@ pub async fn list_games_needing_poll(pool: &PgPool, today: &str) -> Result<Vec<i
 /// rebuild `nhl_player_game_stats` from completed games.
 pub async fn list_all_game_ids_for_date(pool: &PgPool, date: &str) -> Result<Vec<i64>> {
     let rows: Vec<i64> = sqlx::query_scalar(
-        "SELECT game_id FROM nhl_games WHERE game_date = $1::date",
+        "SELECT game_id FROM nhl_games WHERE game_date = $1::date AND game_state <> 'CANCELLED'",
     )
     .bind(date)
     .fetch_all(pool)
@@ -303,13 +350,11 @@ pub async fn list_games_needing_final_sync(
 /// after a successful `upsert_boxscore_players` for the game so the
 /// "sealed" promise holds.
 pub async fn mark_game_stats_finalized(pool: &PgPool, game_id: i64) -> Result<()> {
-    sqlx::query(
-        "UPDATE nhl_games SET stats_finalized_at = NOW() WHERE game_id = $1",
-    )
-    .bind(game_id)
-    .execute(pool)
-    .await
-    .map_err(Error::Database)?;
+    sqlx::query("UPDATE nhl_games SET stats_finalized_at = NOW() WHERE game_id = $1")
+        .bind(game_id)
+        .execute(pool)
+        .await
+        .map_err(Error::Database)?;
     Ok(())
 }
 
@@ -528,16 +573,8 @@ pub async fn upsert_skater_leaderboard(
 
     let seed = |map: &mut HashMap<i64, Row>, p: &Player| {
         map.entry(p.id as i64).or_insert_with(|| Row {
-            first_name: p
-                .first_name
-                .get("default")
-                .cloned()
-                .unwrap_or_default(),
-            last_name: p
-                .last_name
-                .get("default")
-                .cloned()
-                .unwrap_or_default(),
+            first_name: p.first_name.get("default").cloned().unwrap_or_default(),
+            last_name: p.last_name.get("default").cloned().unwrap_or_default(),
             team: p.team_abbrev.clone(),
             position: p.position.clone(),
             goals: 0,
@@ -591,9 +628,10 @@ pub async fn upsert_skater_leaderboard(
     let mut tx = pool.begin().await.map_err(Error::Database)?;
     let mut count = 0;
     for (player_id, row) in &map {
-        let headshot_url =
-            format!("https://assets.nhle.com/mugs/nhl/{}/{}/{}.png",
-                season, row.team, player_id);
+        let headshot_url = format!(
+            "https://assets.nhle.com/mugs/nhl/{}/{}/{}.png",
+            season, row.team, player_id
+        );
         sqlx::query(
             r#"
             INSERT INTO nhl_skater_season_stats (
@@ -884,12 +922,27 @@ pub async fn upsert_standings(pool: &PgPool, season: i32, payload: &Value) -> Re
         let wins = row.get("wins").and_then(Value::as_i64).unwrap_or(0) as i32;
         let losses = row.get("losses").and_then(Value::as_i64).unwrap_or(0) as i32;
         let otl = row.get("otLosses").and_then(Value::as_i64).unwrap_or(0) as i32;
-        let pct = row.get("pointPctg").and_then(Value::as_f64).map(|v| v as f32);
-        let streak_code = row.get("streakCode").and_then(Value::as_str).map(String::from);
-        let streak_count = row.get("streakCount").and_then(Value::as_i64).map(|v| v as i32);
+        let pct = row
+            .get("pointPctg")
+            .and_then(Value::as_f64)
+            .map(|v| v as f32);
+        let streak_code = row
+            .get("streakCode")
+            .and_then(Value::as_str)
+            .map(String::from);
+        let streak_count = row
+            .get("streakCount")
+            .and_then(Value::as_i64)
+            .map(|v| v as i32);
         let l10_w = row.get("l10Wins").and_then(Value::as_i64).map(|v| v as i32);
-        let l10_l = row.get("l10Losses").and_then(Value::as_i64).map(|v| v as i32);
-        let l10_otl = row.get("l10OtLosses").and_then(Value::as_i64).map(|v| v as i32);
+        let l10_l = row
+            .get("l10Losses")
+            .and_then(Value::as_i64)
+            .map(|v| v as i32);
+        let l10_otl = row
+            .get("l10OtLosses")
+            .and_then(Value::as_i64)
+            .map(|v| v as i32);
 
         sqlx::query(
             r#"
@@ -997,11 +1050,7 @@ pub async fn upsert_playoff_bracket(pool: &PgPool, season: i32, carousel: &Value
 /// would overwrite the pre-game data we want to surface on Insights
 /// all day — so we insert with `ON CONFLICT DO NOTHING` and skip
 /// captures whose `matchup` looks empty.
-pub async fn capture_game_landing(
-    pool: &PgPool,
-    game_id: i64,
-    matchup: &Value,
-) -> Result<bool> {
+pub async fn capture_game_landing(pool: &PgPool, game_id: i64, matchup: &Value) -> Result<bool> {
     if matchup.is_null() || matchup.as_object().map(|o| o.is_empty()).unwrap_or(true) {
         return Ok(false);
     }
@@ -1054,7 +1103,9 @@ pub async fn upsert_skater_edge(
 /// Timestamp of the most recent Edge refresh, across all players.
 /// The refresher uses this to skip a run when yesterday's data is
 /// still within the freshness window.
-pub async fn last_update_nhl_skater_edge(pool: &PgPool) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+pub async fn last_update_nhl_skater_edge(
+    pool: &PgPool,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
     let ts: Option<chrono::DateTime<chrono::Utc>> =
         sqlx::query_scalar("SELECT MAX(updated_at) FROM nhl_skater_edge")
             .fetch_one(pool)
@@ -1192,7 +1243,14 @@ pub async fn list_team_playoff_streaks(
     pool: &PgPool,
     season: i32,
 ) -> Result<std::collections::HashMap<String, String>> {
-    let rows: Vec<(i64, String, String, Option<i32>, Option<i32>, Option<String>)> = sqlx::query_as(
+    let rows: Vec<(
+        i64,
+        String,
+        String,
+        Option<i32>,
+        Option<i32>,
+        Option<String>,
+    )> = sqlx::query_as(
         r#"
         SELECT game_id, home_team, away_team, home_score, away_score, period_type
           FROM nhl_games
@@ -1231,7 +1289,9 @@ pub async fn list_team_playoff_streaks(
 
     let mut out = std::collections::HashMap::with_capacity(by_team.len());
     for (team, kinds) in by_team {
-        let Some(&first) = kinds.first() else { continue };
+        let Some(&first) = kinds.first() else {
+            continue;
+        };
         let count = kinds.iter().take_while(|&&k| k == first).count();
         out.insert(team, format!("{}{}", first, count));
     }
@@ -1267,17 +1327,13 @@ pub async fn load_standings_payload(pool: &PgPool, season: i32) -> Result<Value>
 /// `matchup` block is the live-response shape's NHL calls the
 /// landing handler consumed — we store it whole so the handler
 /// can re-parse via its existing `build_landing_from_raw`.
-pub async fn get_game_landing_matchup(
-    pool: &PgPool,
-    game_id: i64,
-) -> Result<Option<Value>> {
-    let row: Option<Value> = sqlx::query_scalar(
-        "SELECT matchup FROM nhl_game_landing WHERE game_id = $1",
-    )
-    .bind(game_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(Error::Database)?;
+pub async fn get_game_landing_matchup(pool: &PgPool, game_id: i64) -> Result<Option<Value>> {
+    let row: Option<Value> =
+        sqlx::query_scalar("SELECT matchup FROM nhl_game_landing WHERE game_id = $1")
+            .bind(game_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(Error::Database)?;
     Ok(row)
 }
 
@@ -1286,10 +1342,7 @@ pub async fn get_game_landing_matchup(
 /// pre-game matchup data exactly once per game — after puck drop the
 /// NHL response replaces `matchup` with live-recap data, so a
 /// second capture would clobber the pre-game payload.
-pub async fn list_games_without_landing_for_date(
-    pool: &PgPool,
-    date: &str,
-) -> Result<Vec<i64>> {
+pub async fn list_games_without_landing_for_date(pool: &PgPool, date: &str) -> Result<Vec<i64>> {
     let rows: Vec<i64> = sqlx::query_scalar(
         r#"
         SELECT g.game_id
@@ -1297,6 +1350,7 @@ pub async fn list_games_without_landing_for_date(
      LEFT JOIN nhl_game_landing l ON l.game_id = g.game_id
          WHERE g.game_date = $1::date
            AND g.game_state IN ('FUT', 'PRE')
+           AND g.game_state <> 'CANCELLED'
            AND l.game_id IS NULL
         "#,
     )
@@ -1320,10 +1374,7 @@ pub struct SkaterEdgeRow {
 /// don't appear in the result — the handler falls back to blank
 /// speed tiles, which is the correct UX when the nightly refresher
 /// hasn't covered a particular player (e.g. a recent call-up).
-pub async fn list_skater_edge(
-    pool: &PgPool,
-    player_ids: &[i64],
-) -> Result<Vec<SkaterEdgeRow>> {
+pub async fn list_skater_edge(pool: &PgPool, player_ids: &[i64]) -> Result<Vec<SkaterEdgeRow>> {
     if player_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -1339,6 +1390,27 @@ pub async fn list_skater_edge(
     .await
     .map_err(Error::Database)?;
     Ok(rows)
+}
+
+#[cfg(test)]
+mod schedule_reconcile_tests {
+    use super::stale_unresolved_game_ids;
+
+    #[test]
+    fn only_missing_unresolved_games_are_cancel_candidates() {
+        let existing = vec![
+            (2025030177, "FUT"),
+            (2025030127, "LIVE"),
+            (2025030241, "PRE"),
+            (2025030116, "OFF"),
+        ];
+        let fetched = vec![2025030127, 2025030241];
+
+        assert_eq!(
+            stale_unresolved_game_ids(&existing, &fetched),
+            vec![2025030177]
+        );
+    }
 }
 
 /// All skaters on the season leaderboard for `(season, game_type)`,
@@ -1398,6 +1470,7 @@ pub async fn list_games_for_date(pool: &PgPool, date: &str) -> Result<Vec<NhlGam
             period_number, period_type, series_status, venue
         FROM nhl_games
         WHERE game_date = $1::date
+          AND game_state <> 'CANCELLED'
         ORDER BY start_time_utc
         "#,
     )
@@ -1882,13 +1955,12 @@ pub async fn get_playoff_carousel(
     pool: &PgPool,
     season: i32,
 ) -> Result<Option<crate::domain::models::nhl::PlayoffCarousel>> {
-    let raw: Option<Value> = sqlx::query_scalar(
-        "SELECT carousel FROM nhl_playoff_bracket WHERE season = $1",
-    )
-    .bind(season)
-    .fetch_optional(pool)
-    .await
-    .map_err(Error::Database)?;
+    let raw: Option<Value> =
+        sqlx::query_scalar("SELECT carousel FROM nhl_playoff_bracket WHERE season = $1")
+            .bind(season)
+            .fetch_optional(pool)
+            .await
+            .map_err(Error::Database)?;
     let Some(v) = raw else { return Ok(None) };
     let c: crate::domain::models::nhl::PlayoffCarousel =
         serde_json::from_value(v).map_err(|e| Error::Internal(format!("carousel decode: {e}")))?;
@@ -1898,10 +1970,7 @@ pub async fn get_playoff_carousel(
 /// League IDs whose rostered players appear in `game_id`. Used by
 /// the live poller to target narrative-cache invalidation at just
 /// the leagues whose Pulse would change when this game ends.
-pub async fn list_leagues_with_player_in_game(
-    pool: &PgPool,
-    game_id: i64,
-) -> Result<Vec<String>> {
+pub async fn list_leagues_with_player_in_game(pool: &PgPool, game_id: i64) -> Result<Vec<String>> {
     let rows: Vec<String> = sqlx::query_scalar(
         r#"
         SELECT DISTINCT ft.league_id::text
@@ -2007,10 +2076,7 @@ pub async fn last_update_nhl_team_rosters(
 }
 
 /// True if `last` is `None` (no data at all) or older than `max_age`.
-pub fn is_stale(
-    last: Option<chrono::DateTime<chrono::Utc>>,
-    max_age: std::time::Duration,
-) -> bool {
+pub fn is_stale(last: Option<chrono::DateTime<chrono::Utc>>, max_age: std::time::Duration) -> bool {
     match last {
         None => true,
         Some(t) => {

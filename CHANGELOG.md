@@ -4,6 +4,24 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.24.1 / v1.19.8 — 2026-05-03 (BE v1.24.1 / FE v1.19.8)
+
+### Fixed — Live playoff slate and round labels got stuck behind stale schedule rows
+
+The NHL schedule payload can publish unresolved playoff matchups with
+`TBD` teams and placeholder `-1` values. The schedule mirror rejected
+those rows, which froze `nhl_games` at the last successful refresh:
+live games stayed pre-game, dropped if-necessary games kept trying
+their gamecenter landing URL, and later-round matchups did not appear
+consistently across Games, Pulse, and Insights.
+
+The mirror now accepts those placeholder values, reads embedded team
+scores when `gameScore` is absent, and marks missing unresolved
+schedule rows as `CANCELLED` instead of showing them or polling their
+landing endpoint. Games, Pulse, and Insights now share the same series
+label formatter, so tied series render as tied rather than assigning a
+fake leader. Backend JWTs now expire after 90 days instead of seven.
+
 ## v1.24.0 / v1.19.7 — 2026-04-29 (BE v1.24.0 / FE v1.19.7)
 
 ### Fixed — Dashboard rankings disagreed with the team detail page

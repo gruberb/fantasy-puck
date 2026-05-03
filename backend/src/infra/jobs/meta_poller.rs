@@ -116,11 +116,7 @@ async fn run_one_tick(db: &FantasyDb, nhl: &Arc<NhlClient>, work: TickWork) {
     }
 }
 
-async fn tick_body(
-    db: &FantasyDb,
-    nhl: &Arc<NhlClient>,
-    work: TickWork,
-) -> anyhow::Result<()> {
+async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>, work: TickWork) -> anyhow::Result<()> {
     let season = cfg_season();
     let game_type = cfg_game_type();
     let pool = db.pool();
@@ -130,10 +126,10 @@ async fn tick_body(
     // this prevents a server restart from re-running every source
     // on the first tick just because `counter` reset to 1.
     let today_ttl = live_mirror::META_POLL_INTERVAL;
-    let agg_ttl = live_mirror::META_POLL_INTERVAL
-        * (live_mirror::AGGREGATES_REFRESH_EVERY_N_META_TICKS);
-    let roster_ttl = live_mirror::META_POLL_INTERVAL
-        * (live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS);
+    let agg_ttl =
+        live_mirror::META_POLL_INTERVAL * (live_mirror::AGGREGATES_REFRESH_EVERY_N_META_TICKS);
+    let roster_ttl =
+        live_mirror::META_POLL_INTERVAL * (live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS);
 
     // ---- Today's schedule — every tick, unless the mirror was
     // touched in the last 5 minutes.
@@ -158,6 +154,29 @@ async fn tick_body(
                     if let Err(e) = nhl_mirror::upsert_game(pool, g, &today_str).await {
                         warn!(date = %today_str, game_id = g.id, "meta_poller: upsert_game failed: {}", e);
                     }
+                }
+                match nhl_mirror::reconcile_schedule_for_date(
+                    pool,
+                    &today_str,
+                    season as i32,
+                    game_type as i16,
+                    &games,
+                )
+                .await
+                {
+                    Ok(cancelled) if cancelled > 0 => debug!(
+                        date = %today_str,
+                        cancelled,
+                        "meta_poller: stale schedule rows cancelled"
+                    ),
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!(date = %today_str, "meta_poller: schedule reconcile failed: {}", e)
+                    }
+                }
+                let insights_pattern = format!("insights:%:{}:{}:{}", season, game_type, today_str);
+                if let Err(e) = db.cache().invalidate_by_like(&insights_pattern).await {
+                    warn!(date = %today_str, "meta_poller: insights cache invalidation failed: {}", e);
                 }
                 debug!(date = %today_str, count = games.len(), "meta_poller: today's schedule mirrored");
             }
@@ -191,18 +210,12 @@ async fn tick_body(
                             Ok(false) => {
                                 debug!(game_id = gid, "meta_poller: landing payload empty, skipped")
                             }
-                            Err(e) => warn!(
-                                game_id = gid,
-                                "meta_poller: landing upsert failed: {}",
-                                e
-                            ),
+                            Err(e) => {
+                                warn!(game_id = gid, "meta_poller: landing upsert failed: {}", e)
+                            }
                         }
                     }
-                    Err(e) => warn!(
-                        game_id = gid,
-                        "meta_poller: landing fetch failed: {}",
-                        e
-                    ),
+                    Err(e) => warn!(game_id = gid, "meta_poller: landing fetch failed: {}", e),
                 }
             }
         }
@@ -235,6 +248,25 @@ async fn tick_body(
                         warn!(date = %tomorrow_str, game_id = g.id, "meta_poller: upsert_game failed: {}", e);
                     }
                 }
+                match nhl_mirror::reconcile_schedule_for_date(
+                    pool,
+                    &tomorrow_str,
+                    season as i32,
+                    game_type as i16,
+                    &games,
+                )
+                .await
+                {
+                    Ok(cancelled) if cancelled > 0 => debug!(
+                        date = %tomorrow_str,
+                        cancelled,
+                        "meta_poller: stale schedule rows cancelled"
+                    ),
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!(date = %tomorrow_str, "meta_poller: schedule reconcile failed: {}", e)
+                    }
+                }
                 debug!(date = %tomorrow_str, count = games.len(), "meta_poller: schedule mirrored");
             }
             Err(e) => warn!(date = %tomorrow_str, "meta_poller: schedule fetch failed: {}", e),
@@ -251,7 +283,14 @@ async fn tick_body(
     if nhl_mirror::is_stale(skater_last, agg_ttl) {
         match nhl.get_skater_stats(&season, game_type).await {
             Ok(leaders) => {
-                match nhl_mirror::upsert_skater_leaderboard(pool, season as i32, game_type as i16, &leaders).await {
+                match nhl_mirror::upsert_skater_leaderboard(
+                    pool,
+                    season as i32,
+                    game_type as i16,
+                    &leaders,
+                )
+                .await
+                {
                     Ok(n) => debug!(count = n, "meta_poller: skater leaderboard mirrored"),
                     Err(e) => warn!("meta_poller: skater upsert failed: {}", e),
                 }
@@ -271,7 +310,14 @@ async fn tick_body(
         match nhl.get_goalie_stats(&season, game_type).await {
             Ok(payload) => {
                 let json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
-                match nhl_mirror::upsert_goalie_leaderboard(pool, season as i32, game_type as i16, &json).await {
+                match nhl_mirror::upsert_goalie_leaderboard(
+                    pool,
+                    season as i32,
+                    game_type as i16,
+                    &json,
+                )
+                .await
+                {
                     Ok(n) => debug!(count = n, "meta_poller: goalie leaderboard mirrored"),
                     Err(e) => warn!("meta_poller: goalie upsert failed: {}", e),
                 }
@@ -288,10 +334,12 @@ async fn tick_body(
         .unwrap_or(None);
     if nhl_mirror::is_stale(standings_last, agg_ttl) {
         match nhl.get_standings_raw().await {
-            Ok(payload) => match nhl_mirror::upsert_standings(pool, season as i32, &payload).await {
-                Ok(n) => debug!(count = n, "meta_poller: standings mirrored"),
-                Err(e) => warn!("meta_poller: standings upsert failed: {}", e),
-            },
+            Ok(payload) => {
+                match nhl_mirror::upsert_standings(pool, season as i32, &payload).await {
+                    Ok(n) => debug!(count = n, "meta_poller: standings mirrored"),
+                    Err(e) => warn!("meta_poller: standings upsert failed: {}", e),
+                }
+            }
             Err(e) => warn!("meta_poller: standings fetch failed: {}", e),
         }
     } else {
@@ -307,7 +355,9 @@ async fn tick_body(
             match nhl.get_playoff_carousel(season.to_string()).await {
                 Ok(Some(carousel)) => {
                     let json = serde_json::to_value(&carousel).unwrap_or(serde_json::Value::Null);
-                    if let Err(e) = nhl_mirror::upsert_playoff_bracket(pool, season as i32, &json).await {
+                    if let Err(e) =
+                        nhl_mirror::upsert_playoff_bracket(pool, season as i32, &json).await
+                    {
                         warn!("meta_poller: bracket upsert failed: {}", e);
                     } else {
                         debug!("meta_poller: playoff carousel mirrored");

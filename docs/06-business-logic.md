@@ -136,7 +136,7 @@ From [`handlers/pulse.rs`](../backend/src/api/handlers/pulse.rs):
 | --- | --- | --- |
 | `db.get_all_teams_with_players(league_id)` | Fantasy rosters | No |
 | `nhl_mirror::get_playoff_carousel(pool, season)` | Playoff bracket shape | No (mirror is itself a cache) |
-| `nhl_mirror::list_games_for_date(pool, today)` | Today's games (also surfaced as `PulseResponse.games_today` for the dashboard's Live Rankings section) | No |
+| `nhl_mirror::list_games_for_date(pool, today)` | Today's non-cancelled games (also surfaced as `PulseResponse.games_today` for the dashboard's Live Rankings section) | No |
 | `nhl_mirror::list_games_for_date(pool, yesterday)` + `list_league_player_stats_for_date(pool, league_id, yesterday)` | Previous hockey-date recap for the caller's roster and league top performers | No |
 | `nhl_mirror::list_team_daily_totals(pool, league_id, today)` | `v_daily_fantasy_totals` sum per team | No |
 | `nhl_mirror::list_league_team_season_totals(..., current_date_window())` | Season-to-date totals, clamped to `[playoff_start, season_end]` in playoff mode | No |

@@ -28,6 +28,8 @@ pub struct MatchDayGameResponse {
     pub game_state: GameState,
     pub period: Option<String>,
     pub series_status: Option<SeriesStatusResponse>,
+    #[serde(default)]
+    pub series_context: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

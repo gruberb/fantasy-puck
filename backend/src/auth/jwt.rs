@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+const TOKEN_TTL_DAYS: usize = 90;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     /// User ID (UUID string)
@@ -18,7 +20,7 @@ pub struct Claims {
     pub iat: usize,
 }
 
-/// Issue a JWT with a 7-day expiry.
+/// Issue a JWT with a 90-day expiry.
 pub fn issue_token(
     user_id: &str,
     email: &str,
@@ -30,7 +32,7 @@ pub fn issue_token(
         sub: user_id.to_string(),
         email: email.to_string(),
         is_admin,
-        exp: now + 7 * 24 * 60 * 60, // 7 days
+        exp: now + TOKEN_TTL_DAYS * 24 * 60 * 60,
         iat: now,
     };
 

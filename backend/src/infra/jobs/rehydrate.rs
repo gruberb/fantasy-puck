@@ -22,6 +22,7 @@ use crate::tuning::live_mirror;
 #[derive(Debug, Default, Serialize)]
 pub struct RehydrateSummary {
     pub games_upserted: usize,
+    pub games_cancelled: u64,
     pub skater_rows: usize,
     pub goalie_rows: usize,
     pub standings_rows: usize,
@@ -47,10 +48,10 @@ pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>) -> RehydrateSummary {
     // fan-out. These can still be overridden by a cold-start boot
     // where the tables are genuinely empty.
     let schedule_ttl = live_mirror::META_POLL_INTERVAL;
-    let agg_ttl = live_mirror::META_POLL_INTERVAL
-        * live_mirror::AGGREGATES_REFRESH_EVERY_N_META_TICKS;
-    let roster_ttl = live_mirror::META_POLL_INTERVAL
-        * live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS;
+    let agg_ttl =
+        live_mirror::META_POLL_INTERVAL * live_mirror::AGGREGATES_REFRESH_EVERY_N_META_TICKS;
+    let roster_ttl =
+        live_mirror::META_POLL_INTERVAL * live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS;
 
     // ---- Schedule: playoff start → today (+1). Per-date freshness
     // gate so a repeat rehydrate skips dates the meta poller just
@@ -63,9 +64,12 @@ pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>) -> RehydrateSummary {
         .date_naive();
     let mut dates: Vec<String> = Vec::new();
     let playoff_start = crate::api::playoff_start();
-    let start_naive = chrono::NaiveDate::parse_from_str(playoff_start, "%Y-%m-%d")
-        .unwrap_or(today);
-    let mut cursor = if start_naive <= today { start_naive } else { today };
+    let start_naive = chrono::NaiveDate::parse_from_str(playoff_start, "%Y-%m-%d").unwrap_or(today);
+    let mut cursor = if start_naive <= today {
+        start_naive
+    } else {
+        today
+    };
     while cursor <= today + chrono::Duration::days(1) {
         dates.push(cursor.format("%Y-%m-%d").to_string());
         cursor += chrono::Duration::days(1);
@@ -87,10 +91,30 @@ pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>) -> RehydrateSummary {
                         summary.games_upserted += 1;
                     }
                 }
+                match nhl_mirror::reconcile_schedule_for_date(
+                    pool,
+                    date,
+                    season as i32,
+                    game_type as i16,
+                    &games,
+                )
+                .await
+                {
+                    Ok(n) => summary.games_cancelled += n,
+                    Err(e) => summary
+                        .errors
+                        .push(format!("schedule reconcile {}: {}", date, e)),
+                }
+                if date == &today.format("%Y-%m-%d").to_string() {
+                    let insights_pattern = format!("insights:%:{}:{}:{}", season, game_type, date);
+                    if let Err(e) = db.cache().invalidate_by_like(&insights_pattern).await {
+                        summary
+                            .errors
+                            .push(format!("insights cache invalidate {}: {}", date, e));
+                    }
+                }
             }
-            Err(e) => summary
-                .errors
-                .push(format!("schedule {}: {}", date, e)),
+            Err(e) => summary.errors.push(format!("schedule {}: {}", date, e)),
         }
     }
 
@@ -188,7 +212,7 @@ pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>) -> RehydrateSummary {
     //     itself — that's what backfills scores for games that
     //     finalized before the live poller ever saw them.
     let game_rows: Vec<(i64, String, String, String)> = sqlx::query_as(
-        "SELECT game_id, home_team, away_team, game_state FROM nhl_games",
+        "SELECT game_id, home_team, away_team, game_state FROM nhl_games WHERE game_state <> 'CANCELLED'",
     )
     .fetch_all(pool)
     .await
@@ -241,6 +265,7 @@ pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>) -> RehydrateSummary {
 
     info!(
         games = summary.games_upserted,
+        cancelled = summary.games_cancelled,
         skaters = summary.skater_rows,
         goalies = summary.goalie_rows,
         standings = summary.standings_rows,

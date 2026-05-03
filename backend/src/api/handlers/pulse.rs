@@ -81,8 +81,7 @@ pub async fn get_pulse(
     // Your League block — leader, distribution, and top-3 projected
     // finishers from the cached race-odds payload. Best-effort: if
     // the cache is cold, this returns None and the UI hides the block.
-    response.league_outlook =
-        build_league_outlook(&state, &league_id, &today, my_team_id).await;
+    response.league_outlook = build_league_outlook(&state, &league_id, &today, my_team_id).await;
 
     Ok(json_success(response))
 }
@@ -130,11 +129,7 @@ pub(crate) async fn resolve_my_team_diagnosis(
     let team = state.db.get_team(team_id, league_id).await?;
     let players = state.db.get_team_players(team_id).await?;
     let bundle = crate::api::handlers::team_breakdown::compose_team_breakdown(
-        state,
-        league_id,
-        team_id,
-        &team.name,
-        &players,
+        state, league_id, team_id, &team.name, &players,
     )
     .await?;
     let diagnosis = crate::api::dtos::pulse::MyTeamDiagnosis {
@@ -202,8 +197,7 @@ async fn build_league_outlook(
     }
 
     let leader = league_totals.first()?;
-    let mut points_distribution: Vec<i32> =
-        league_totals.iter().map(|r| r.points as i32).collect();
+    let mut points_distribution: Vec<i32> = league_totals.iter().map(|r| r.points as i32).collect();
     points_distribution.sort_unstable_by(|a, b| b.cmp(a));
     let median_points = {
         let n = points_distribution.len();
@@ -317,9 +311,14 @@ async fn generate_pulse(
     let games_today: Vec<NhlGameRow> = nhl_mirror::list_games_for_date(pool, today).await?;
 
     let series_forecast = build_series_forecast(&teams_with_players, carousel.as_ref());
-    let league_board =
-        build_league_board(state, league_id, &teams_with_players, my_team_id, &games_today)
-            .await?;
+    let league_board = build_league_board(
+        state,
+        league_id,
+        &teams_with_players,
+        my_team_id,
+        &games_today,
+    )
+    .await?;
     let my_team = my_team_id.and_then(|id| compose_my_team(&league_board, &teams_with_players, id));
     let my_games_tonight = if let Some(id) = my_team_id {
         compute_my_games_tonight(state, &teams_with_players, id, &games_today).await?
@@ -417,8 +416,14 @@ fn build_series_forecast(
         .iter()
         .map(|team| {
             let mut cells: Vec<PlayerForecastCell> = Vec::new();
-            let (mut eliminated, mut facing_elim, mut trailing, mut tied, mut leading, mut advanced) =
-                (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+            let (
+                mut eliminated,
+                mut facing_elim,
+                mut trailing,
+                mut tied,
+                mut leading,
+                mut advanced,
+            ) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
 
             for p in &team.players {
                 let (wins, opp_wins, opp_abbrev) = team_states
@@ -499,8 +504,10 @@ async fn build_league_board(
         current_date_window(),
     )
     .await?;
-    let totals_by_team: HashMap<i64, i32> =
-        totals.into_iter().map(|r| (r.team_id, r.points as i32)).collect();
+    let totals_by_team: HashMap<i64, i32> = totals
+        .into_iter()
+        .map(|r| (r.team_id, r.points as i32))
+        .collect();
 
     // Live-aware sparkline: UNIONs daily_rankings (finalized rollups)
     // with v_daily_fantasy_totals (today's running total from the
@@ -636,10 +643,7 @@ async fn compute_my_games_tonight(
                 name: p.player_name.clone(),
                 position: p.position.clone(),
                 nhl_team: p.nhl_team.clone(),
-                headshot_url: format!(
-                    "https://assets.nhle.com/mugs/nhl/latest/{}.png",
-                    p.nhl_id
-                ),
+                headshot_url: format!("https://assets.nhle.com/mugs/nhl/latest/{}.png", p.nhl_id),
                 goals,
                 assists,
                 points: goals + assists,
@@ -651,21 +655,10 @@ async fn compute_my_games_tonight(
             .as_ref()
             .and_then(|v| serde_json::from_value::<SeriesStatus>(v.clone()).ok());
         let (series_context, is_elimination) = match series {
-            Some(ss) => {
-                let label = format!(
-                    "{} - {} leads {}-{}",
-                    ss.series_title,
-                    if ss.top_seed_wins >= ss.bottom_seed_wins {
-                        &ss.top_seed_team_abbrev
-                    } else {
-                        &ss.bottom_seed_team_abbrev
-                    },
-                    ss.top_seed_wins.max(ss.bottom_seed_wins),
-                    ss.top_seed_wins.min(ss.bottom_seed_wins)
-                );
-                let elim = ss.top_seed_wins == 3 || ss.bottom_seed_wins == 3;
-                (Some(label), elim)
-            }
+            Some(ss) => (
+                crate::api::dtos::series_context_label(&ss),
+                crate::api::dtos::series_is_elimination_game(&ss),
+            ),
             None => (None, false),
         };
 
@@ -705,11 +698,7 @@ fn hockey_today() -> String {
         .to_string()
 }
 
-async fn resolve_my_team_id(
-    state: &Arc<AppState>,
-    league_id: &str,
-    user_id: &str,
-) -> Option<i64> {
+async fn resolve_my_team_id(state: &Arc<AppState>, league_id: &str, user_id: &str) -> Option<i64> {
     match state.db.get_league_members(league_id).await {
         Ok(members) => members
             .into_iter()

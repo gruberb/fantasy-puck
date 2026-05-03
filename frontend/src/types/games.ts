@@ -32,6 +32,7 @@ export interface Game {
   awayScore: number;
   gameState: string;
   period: string;
+  seriesContext?: string | null;
   seriesStatus: {
     round: number;
     seriesTitle: string;

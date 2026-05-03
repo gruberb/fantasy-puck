@@ -226,7 +226,7 @@ const NHLGameCard = ({
                   <div className="text-sm sm:text-2xl font-extrabold text-[#1A1A1A] leading-tight truncate">
                     {away.name}
                   </div>
-                  {game.seriesStatus && game.seriesStatus.round > 0 && (
+                  {game.seriesStatus && game.seriesStatus.round > 0 && !game.seriesContext && (
                     <div className="text-[10px] sm:text-xs text-gray-400 font-medium mt-0.5">
                       {getSeriesRecord(game, true)}
                     </div>
@@ -305,7 +305,7 @@ const NHLGameCard = ({
                   <div className="text-sm sm:text-2xl font-extrabold text-[#1A1A1A] leading-tight truncate">
                     {home.name}
                   </div>
-                  {game.seriesStatus && game.seriesStatus.round > 0 && (
+                  {game.seriesStatus && game.seriesStatus.round > 0 && !game.seriesContext && (
                     <div className="text-[10px] sm:text-xs text-gray-400 font-medium mt-0.5">
                       {getSeriesRecord(game, false)}
                     </div>
@@ -336,6 +336,12 @@ const NHLGameCard = ({
             {/* Venue */}
             {game.venue && (
               <div className="text-center mt-3 text-[10px] sm:text-xs text-gray-400 font-medium tracking-wide uppercase">
+                {game.seriesContext && (
+                  <span className="text-[#1A1A1A] font-bold">
+                    {game.seriesContext}
+                    <span className="mx-2 text-gray-300">/</span>
+                  </span>
+                )}
                 {game.venue}
               </div>
             )}
