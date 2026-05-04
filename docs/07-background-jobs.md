@@ -88,7 +88,7 @@ File: [`backend/src/infra/jobs/meta_poller.rs`](../backend/src/infra/jobs/meta_p
 | Interval | 5 min |
 | Startup delay | 15 s |
 | Leader election | Postgres advisory lock `884_471_193_001` |
-| Writes every tick | `nhl_games` for yesterday and today; `nhl_game_landing` for today's FUT games |
+| Writes every tick | `nhl_games` for the previous two ET dates and today; `nhl_game_landing` for today's FUT games |
 | Writes every 6 ticks (≈30 min) | Tomorrow's schedule, standings, skater leaderboard, goalie leaderboard, playoff carousel |
 | Writes every 288 ticks (≈24 h) | All 32 team rosters (sequential with 250 ms pacing) |
 

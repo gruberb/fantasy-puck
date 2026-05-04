@@ -4,6 +4,24 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.24.3 / v1.19.10 — 2026-05-03 (BE v1.24.3 / FE v1.19.10)
+
+### Fixed — Completed series could keep a pregame series record
+
+The meta poller now refreshes the previous two Eastern schedule dates
+every tick, not only yesterday and today. This lets historical Games
+cards self-heal when NHL publishes the final game score immediately
+but the postgame series record lands later, as with Vegas-Utah Game 6
+moving from `VGK leads 3-2` to `VGK wins 4-2`.
+
+### Changed — Series Rosters uses overview chips instead of danger copy
+
+Pulse's Series Rosters summary now shows roster status as compact
+chips instead of a red sentence, and eliminated players use a muted
+`Out` treatment rather than a high-danger red banner. The section
+still surfaces elimination state, but reads more like a roster
+overview than an alert.
+
 ## v1.24.2 / v1.19.9 — 2026-05-03 (BE v1.24.2 / FE v1.19.9)
 
 ### Fixed — Insights bracket hides split-round playoff state

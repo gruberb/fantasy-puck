@@ -11,8 +11,8 @@ interface SeriesForecastHeroProps {
 }
 
 const STATE_STYLES: Record<SeriesStateCode, string> = {
-  eliminated: "bg-[#7F1D1D] text-white",
-  facingElim: "bg-[#DC2626] text-white",
+  eliminated: "bg-[#E5E7EB] text-[#4B5563]",
+  facingElim: "bg-[#FEE2E2] text-[#991B1B]",
   trailing: "bg-[#FB923C] text-[#1A1A1A]",
   tied: "bg-[#E5E7EB] text-[#1A1A1A]",
   leading: "bg-[#86EFAC] text-[#1A1A1A]",
@@ -89,9 +89,7 @@ function TeamForecastRow({
   team: FantasyTeamForecast;
   isMine: boolean;
 }) {
-  const headline = composeHeadline(team);
-  const hasRisk =
-    team.playersFacingElimination > 0 || team.playersEliminated > 0;
+  const summaryItems = composeSummaryItems(team);
 
   // Off-day condensation: every player is tied 0-0 → grid of identical cells
   // carries no information. Group by NHL matchup and show avatar chips.
@@ -109,14 +107,7 @@ function TeamForecastRow({
           </span>
         )}
       </h3>
-      <p
-        className={`text-xs mt-1 ${
-          hasRisk ? "text-[var(--color-error)] font-bold" : "text-[var(--color-ink-muted)]"
-        }`}
-      >
-        {team.totalPlayers} player{team.totalPlayers !== 1 ? "s" : ""}
-        {headline && ` — ${headline}`}
-      </p>
+      <StatusSummary items={summaryItems} />
     </div>
   );
 
@@ -156,30 +147,70 @@ function TeamForecastRow({
 }
 
 /**
- * Build the "10 players — 3 facing elim, 4 tied, 2 leading" style headline,
- * only including groups that actually have members. A tied series is NOT
- * trailing, so it's listed under its own label.
+ * Build the roster overview chips. A tied series is not trailing, so it gets
+ * its own neutral bucket.
  */
-function composeHeadline(team: FantasyTeamForecast): string {
-  const parts: string[] = [];
+function composeSummaryItems(
+  team: FantasyTeamForecast,
+): { label: string; tone: "total" | SeriesStateCode }[] {
+  const items: { label: string; tone: "total" | SeriesStateCode }[] = [
+    {
+      label: `${team.totalPlayers} player${team.totalPlayers !== 1 ? "s" : ""}`,
+      tone: "total",
+    },
+  ];
+
   if (team.playersFacingElimination > 0)
-    parts.push(`${team.playersFacingElimination} facing elim`);
-  if (team.playersEliminated > 0) parts.push(`${team.playersEliminated} out`);
-  if (team.playersTrailing > 0) parts.push(`${team.playersTrailing} trailing`);
-  if (team.playersTied > 0) parts.push(`${team.playersTied} tied`);
-  if (team.playersLeading > 0) parts.push(`${team.playersLeading} leading`);
-  if (team.playersAdvanced > 0) parts.push(`${team.playersAdvanced} advanced`);
+    items.push({
+      label: `${team.playersFacingElimination} facing elim`,
+      tone: "facingElim",
+    });
+  if (team.playersEliminated > 0)
+    items.push({ label: `${team.playersEliminated} out`, tone: "eliminated" });
+  if (team.playersTrailing > 0)
+    items.push({ label: `${team.playersTrailing} trailing`, tone: "trailing" });
+  if (team.playersTied > 0)
+    items.push({ label: `${team.playersTied} tied`, tone: "tied" });
+  if (team.playersLeading > 0)
+    items.push({ label: `${team.playersLeading} leading`, tone: "leading" });
+  if (team.playersAdvanced > 0)
+    items.push({ label: `${team.playersAdvanced} advanced`, tone: "advanced" });
+
   // Pre-bracket edge case: totalPlayers known but all cells default to 0-0
-  // tied — headline reads "N tied" which is accurate but bland. Short-circuit
-  // to a friendlier awaiting-puck-drop copy when the whole roster is tied.
+  // tied, which is accurate but bland. Use a friendlier awaiting-puck-drop
+  // chip when the whole roster is tied.
   if (
     team.playersTied === team.totalPlayers &&
     team.totalPlayers > 0 &&
-    parts.length === 1
+    items.length === 2
   ) {
-    return "awaiting puck drop";
+    return [items[0], { label: "awaiting puck drop", tone: "tied" }];
   }
-  return parts.join(", ");
+
+  return items;
+}
+
+function StatusSummary({
+  items,
+}: {
+  items: { label: string; tone: "total" | SeriesStateCode }[];
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {items.map((item) => (
+        <span
+          key={`${item.tone}:${item.label}`}
+          className={`text-[10px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 border ${
+            item.tone === "total"
+              ? "bg-white text-[var(--color-ink-muted)] border-[var(--color-divider)]"
+              : `${STATE_STYLES[item.tone]} border-transparent`
+          }`}
+        >
+          {item.label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 /**

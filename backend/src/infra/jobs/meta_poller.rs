@@ -4,7 +4,7 @@
 //! production), fetches slow-moving NHL data and mirrors it into the
 //! Postgres tables:
 //!
-//! - Yesterday + today + tomorrow's schedule → `nhl_games`
+//! - Recent, today, and tomorrow schedules → `nhl_games`
 //! - Skater season leaderboard → `nhl_skater_season_stats`
 //! - Goalie season leaderboard → `nhl_goalie_season_stats`
 //! - League standings → `nhl_standings`
@@ -131,8 +131,9 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>, work: TickWork) -> anyh
     let roster_ttl =
         live_mirror::META_POLL_INTERVAL * (live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS);
 
-    // ---- Nearby schedules — every tick for yesterday/today, unless
-    // the mirror was touched in the last 5 minutes.
+    // ---- Nearby schedules — every tick for the previous two ET
+    // dates plus today, unless the mirror was touched in the last
+    // 5 minutes.
     //
     // "Today" is the *Eastern Time* date, not the UTC date. NHL's
     // `/schedule/{date}` keys games by ET local date — a 9 pm ET
@@ -142,27 +143,15 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>, work: TickWork) -> anyh
     // would skip every late-evening eastern slate during the
     // ~4-hour window between midnight UTC and midnight ET.
     let today: NaiveDate = Utc::now().with_timezone(&New_York).date_naive();
-    let yesterday = today - ChronoDuration::days(1);
-    let yesterday_str = yesterday.format("%Y-%m-%d").to_string();
     let today_str = today.format("%Y-%m-%d").to_string();
-    mirror_schedule_date(
-        db,
-        nhl,
-        &yesterday_str,
-        today_ttl,
-        Some(&today_str),
-        "yesterday's schedule",
-    )
-    .await;
-    mirror_schedule_date(
-        db,
-        nhl,
-        &today_str,
-        today_ttl,
-        Some(&today_str),
-        "today's schedule",
-    )
-    .await;
+    for (date, label) in [
+        (today - ChronoDuration::days(2), "two-day-old schedule"),
+        (today - ChronoDuration::days(1), "yesterday's schedule"),
+        (today, "today's schedule"),
+    ] {
+        let date_str = date.format("%Y-%m-%d").to_string();
+        mirror_schedule_date(db, nhl, &date_str, today_ttl, Some(&today_str), label).await;
+    }
 
     // ---- Landing capture for today's new FUT/PRE games ----
     //
