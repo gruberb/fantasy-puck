@@ -551,23 +551,22 @@ impl NhlClient {
             }
         }
 
-        // Cache miss — fetch from NHL API
+        self.fetch_and_cache_game_boxscore(&url).await
+    }
+
+    /// Fetch the boxscore from NHL even when the in-memory cache has a
+    /// non-expired entry. Used by finalisation paths that must observe
+    /// post-buzzer scoring corrections before sealing a game.
+    pub async fn get_game_boxscore_fresh(&self, game_id: u32) -> Result<GameBoxscore> {
+        let url = endpoints::games::game_boxscore(game_id);
+        self.fetch_and_cache_game_boxscore(&url).await
+    }
+
+    async fn fetch_and_cache_game_boxscore(&self, url: &str) -> Result<GameBoxscore> {
         let body = self.fetch_raw(&url).await?;
 
-        // Determine TTL by inspecting game state in the response
-        let cache_ttl = {
-            let json: Value = serde_json::from_str(&body).unwrap_or_default();
-            let game_state = json
-                .get("gameState")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            match game_state {
-                "FINAL" | "OFF" => ttl::BOXSCORE_FINAL,
-                _ => ttl::BOXSCORE_LIVE,
-            }
-        };
+        let cache_ttl = Self::boxscore_cache_ttl(&body);
 
-        // Store in cache
         {
             let mut cache = self.cache.write().await;
             cache.insert(
@@ -582,6 +581,18 @@ impl NhlClient {
 
         serde_json::from_str(&body)
             .map_err(|e| Error::NhlApi(format!("Failed to parse boxscore: {}", e)))
+    }
+
+    fn boxscore_cache_ttl(body: &str) -> Duration {
+        let json: Value = serde_json::from_str(body).unwrap_or_default();
+        let game_state = json
+            .get("gameState")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        match game_state {
+            "FINAL" | "OFF" => ttl::BOXSCORE_FINAL,
+            _ => ttl::BOXSCORE_LIVE,
+        }
     }
 
     /// Get full standings data (raw JSON) -- includes streak, L10, conference rank, etc.
@@ -695,6 +706,27 @@ impl NhlClient {
                 tracing::warn!("Error fetching game log for player {}: {}", player_id, e);
                 Ok((false, 0, 0, 0, 0))
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ttl, NhlClient};
+
+    #[test]
+    fn boxscore_cache_ttl_is_long_for_finished_games() {
+        for state in ["FINAL", "OFF"] {
+            let body = format!(r#"{{"gameState":"{}"}}"#, state);
+            assert_eq!(NhlClient::boxscore_cache_ttl(&body), ttl::BOXSCORE_FINAL);
+        }
+    }
+
+    #[test]
+    fn boxscore_cache_ttl_is_short_until_finished() {
+        for state in ["FUT", "PRE", "LIVE", "CRIT"] {
+            let body = format!(r#"{{"gameState":"{}"}}"#, state);
+            assert_eq!(NhlClient::boxscore_cache_ttl(&body), ttl::BOXSCORE_LIVE);
         }
     }
 }

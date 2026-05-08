@@ -235,7 +235,12 @@ pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>) -> RehydrateSummary {
         if state == "FUT" {
             continue;
         }
-        match nhl.get_game_boxscore(*gid as u32).await {
+        let boxscore_result = if matches!(state.as_str(), "FINAL" | "OFF") {
+            nhl.get_game_boxscore_fresh(*gid as u32).await
+        } else {
+            nhl.get_game_boxscore(*gid as u32).await
+        };
+        match boxscore_result {
             Ok(box_score) => {
                 match nhl_mirror::upsert_boxscore_players(pool, *gid, home, away, &box_score).await
                 {

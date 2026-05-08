@@ -121,16 +121,19 @@ pub async fn upsert_game(pool: &PgPool, game: &TodayGame, game_date: &str) -> Re
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "FUT".into());
+    let final_state_detected = matches!(game_state.as_str(), "FINAL" | "OFF");
 
     sqlx::query(
         r#"
         INSERT INTO nhl_games (
             game_id, season, game_type, game_date, start_time_utc, game_state,
             home_team, away_team, home_score, away_score,
-            period_number, period_type, series_status, venue, updated_at
+            period_number, period_type, series_status, venue,
+            final_state_detected_at, updated_at
         )
         VALUES ($1, $2, $3, $4::date, $5::timestamptz, $6,
-                $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+                $7, $8, $9, $10, $11, $12, $13, $14,
+                CASE WHEN $15::bool THEN NOW() ELSE NULL END, NOW())
         ON CONFLICT (game_id) DO UPDATE SET
             season = EXCLUDED.season,
             game_type = EXCLUDED.game_type,
@@ -145,6 +148,11 @@ pub async fn upsert_game(pool: &PgPool, game: &TodayGame, game_date: &str) -> Re
             period_type = COALESCE(EXCLUDED.period_type, nhl_games.period_type),
             series_status = COALESCE(EXCLUDED.series_status, nhl_games.series_status),
             venue = EXCLUDED.venue,
+            final_state_detected_at = CASE
+                WHEN EXCLUDED.game_state IN ('FINAL', 'OFF')
+                THEN COALESCE(nhl_games.final_state_detected_at, EXCLUDED.final_state_detected_at, NOW())
+                ELSE nhl_games.final_state_detected_at
+            END,
             updated_at = NOW()
         "#,
     )
@@ -162,6 +170,7 @@ pub async fn upsert_game(pool: &PgPool, game: &TodayGame, game_date: &str) -> Re
     .bind(period_type)
     .bind(series_status)
     .bind(&game.venue.default)
+    .bind(final_state_detected)
     .execute(pool)
     .await
     .map_err(Error::Database)?;
@@ -232,6 +241,10 @@ pub async fn update_game_live_state(
                away_score = COALESCE($4, away_score),
                period_number = COALESCE($5, period_number),
                period_type = COALESCE($6, period_type),
+               final_state_detected_at = CASE
+                   WHEN $2 IN ('FINAL', 'OFF') THEN COALESCE(final_state_detected_at, NOW())
+                   ELSE final_state_detected_at
+               END,
                updated_at = NOW()
          WHERE game_id = $1
         "#,
@@ -316,15 +329,13 @@ pub async fn get_game_state(pool: &PgPool, game_id: i64) -> Result<Option<String
 }
 
 /// Game IDs in `FINAL`/`OFF` whose boxscore has not yet been sealed and
-/// whose last meta-poll write is older than `grace`. Used by the live
-/// poller's final-sync pass to give NHL post-buzzer scoring corrections
-/// time to land before the row becomes immutable.
+/// whose first observed final-state timestamp is older than `grace`.
+/// Used by the live poller's final-sync pass to give NHL post-buzzer
+/// scoring corrections time to land before the row becomes immutable.
 ///
-/// `nhl_games.updated_at` is bumped by `update_game_live_state` on every
-/// poll, so a game that flipped to FINAL N minutes ago and hasn't been
-/// touched since is exactly what we want here. A wall-clock check
-/// (`start_time_utc + duration`) would be cheaper but unreliable —
-/// double-OT and intermission lengths skew it badly.
+/// `updated_at` is intentionally ignored here because the meta poller
+/// keeps refreshing completed schedule rows; using it would move the
+/// grace window forward forever on busy playoff days.
 pub async fn list_games_needing_final_sync(
     pool: &PgPool,
     grace: chrono::Duration,
@@ -334,7 +345,7 @@ pub async fn list_games_needing_final_sync(
         SELECT game_id FROM nhl_games
          WHERE game_state IN ('FINAL', 'OFF')
            AND stats_finalized_at IS NULL
-           AND updated_at < NOW() - ($1 || ' seconds')::interval
+           AND COALESCE(final_state_detected_at, updated_at) < NOW() - ($1 || ' seconds')::interval
         "#,
     )
     .bind(grace.num_seconds().to_string())

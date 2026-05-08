@@ -118,9 +118,9 @@ pub mod nhl_client {
     /// produce at most one NHL call per minute.
     pub const BOXSCORE_LIVE_TTL: Duration = Duration::from_secs(60);
 
-    /// Boxscore for a finished game. Effectively immutable; 24 h lets
-    /// the same boxscore power the insights narrative, the /games
-    /// page, and the rankings cron without re-fetching.
+    /// Boxscore for a finished game after it has been sealed. Final
+    /// sync and rehydrate bypass the cache before stamping aggregates
+    /// so late NHL scoring corrections still land.
     pub const BOXSCORE_FINAL_TTL: Duration = Duration::from_secs(86_400);
 
     /// Playoff carousel (bracket shape + series state). Only changes

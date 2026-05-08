@@ -68,7 +68,7 @@ Per-endpoint TTLs, all declared in [`tuning::nhl_client`](../backend/src/tuning.
 | `SCHEDULE_TTL` | 2 min | Game state flips are user-visible but not minute-to-minute |
 | `GAME_CENTER_TTL` | 2 min | Landing feed; governs the Games-page poll |
 | `BOXSCORE_LIVE_TTL` | 60 s | Boxscore for in-progress game; matches live-poller cadence |
-| `BOXSCORE_FINAL_TTL` | 24 h | Immutable once the game ends |
+| `BOXSCORE_FINAL_TTL` | 24 h | Reused after a game has been sealed; finalisation paths bypass the cache before stamping `stats_finalized_at` |
 | `PLAYOFF_CAROUSEL_TTL` | 15 min | Only changes on series clinch |
 | `PLAYER_GAME_LOG_TTL` | 10 min | Heavy Pulse/Insights fan-out amortizes here |
 | `PLAYER_DETAILS_TTL` | 30 min | Bio + season totals |
@@ -77,7 +77,7 @@ Per-endpoint TTLs, all declared in [`tuning::nhl_client`](../backend/src/tuning.
 | `EDGE_TTL` | 30 min | Season-aggregated telemetry |
 | `SCORES_TTL` | 2 min | For the last-game-result sidebar |
 
-`get_game_boxscore` ([`client.rs:520-566`](../backend/src/infra/nhl/client.rs)) is special: the TTL is chosen at call time based on the game state in the response, so live games cache for 60 s and final games cache for a day.
+`get_game_boxscore` ([`client.rs`](../backend/src/infra/nhl/client.rs)) is special: the TTL is chosen at call time based on the game state in the response, so live games cache for 60 s and final games cache for a day. `get_game_boxscore_fresh` uses the same parser and cache writer but skips the cache read; the final-sync, rehydrate, and playoff-ingest paths use it so late NHL scoring corrections are not hidden behind an earlier FINAL response.
 
 ### NHL endpoints the client can reach
 
@@ -95,7 +95,7 @@ Every `get_*` method on `NhlClient` is a thin wrapper around a URL builder in `c
 | `get_player_details(id)` | `/v1/player/{id}/landing` | `PLAYER_DETAILS_TTL` |
 | `get_player_game_log(id, season, gt)` | `/v1/player/{id}/game-log/{season}/{gt}` | `PLAYER_GAME_LOG_TTL` |
 | `get_game_scores`, `get_period_info`, `get_game_data`, `get_game_landing_raw` | `/v1/gamecenter/{game_id}/landing` | `GAME_CENTER_TTL` |
-| `get_game_boxscore(id)` | `/v1/gamecenter/{id}/boxscore` | Live or final TTL chosen dynamically |
+| `get_game_boxscore(id)` / `get_game_boxscore_fresh(id)` | `/v1/gamecenter/{id}/boxscore` | Live or final TTL chosen dynamically; fresh variant skips the cache read |
 | `get_scores_by_date(date)` | `/v1/score/{date}` | `SCORES_TTL` |
 | `get_playoff_carousel(season)` | `/v1/playoff-series/carousel/{season}` | `PLAYOFF_CAROUSEL_TTL` |
 | `get_playoff_series_games(season, letter)` | `/v1/schedule/playoff-series/{season}/{letter}` | `PLAYOFF_CAROUSEL_TTL` |
@@ -174,7 +174,7 @@ File: [`backend/src/infra/jobs/live_poller.rs`](../backend/src/infra/jobs/live_p
 The tick body ([`live_poller.rs:85-109`](../backend/src/infra/jobs/live_poller.rs)):
 
 1. Compute today's ET date.
-2. `nhl_mirror::list_live_game_ids_for_date(pool, today)` returns game_ids where state is `LIVE`, `CRIT`, or `PRE`. If empty, return - this is the off-night cost: one SELECT per minute per leader.
+2. `nhl_mirror::list_games_needing_poll(pool, today)` returns game_ids where state is `LIVE` or `CRIT` on any date, plus today's `PRE` games. If empty, continue to the final-sync sweep - this is the off-night cost: two small SELECTs per minute per leader.
 3. For each live game, call `poll_one_game`.
 
 `poll_one_game` ([`live_poller.rs:118-214`](../backend/src/infra/jobs/live_poller.rs)) does:
@@ -185,6 +185,8 @@ The tick body ([`live_poller.rs:85-109`](../backend/src/infra/jobs/live_poller.r
 4. If `(previous, new)` transitioned from `LIVE|CRIT` to `OFF|FINAL`, look up every league that had a rostered player in this game, and for each call `cache.invalidate_by_like(f"team_diagnosis:{league_id}:%:v2")`. Scores do not need invalidation — they live in the mirror. Only the narrative text, which refers to the in-progress game by name, needs regeneration. The sibling `:bundle:v1` payload is intentionally left in place: its projections, grades, and recent-games rollup are stable through the evening, and wiping it would stall the next Pulse load on a synchronous Claude rebuild.
 
 The invalidation runs exactly once per game because the state write in step 3 flips the mirror before the check in step 4 fires; the next tick sees the new state and skips the block.
+
+After the live pass, the poller runs a final-sync sweep for `FINAL` / `OFF` rows whose `stats_finalized_at` is still NULL and whose `final_state_detected_at` is older than the 15-minute grace window. That sweep calls `get_game_boxscore_fresh`, upserts the uncached boxscore, then stamps `stats_finalized_at`; aggregated playoff totals only count games after this stamp. The sweep intentionally ignores `updated_at` because the meta poller keeps refreshing completed schedule rows.
 
 ## Edge refresher
 
@@ -215,7 +217,7 @@ After startup, a background task sleeps 45 s (long enough for the meta poller to
 SELECT COUNT(*) FROM nhl_player_game_stats
 ```
 
-If the count is zero, it invokes [`infra/jobs/rehydrate::run`](../backend/src/infra/jobs/rehydrate.rs): iterate every game row in `nhl_games`, fetch its boxscore, upsert player stats. This recovers the "deploy in the middle of playoff day" case where every already-final game has no row in `nhl_player_game_stats` and would otherwise read as zero until the next live tick.
+If the count is zero, it invokes [`infra/jobs/rehydrate::run`](../backend/src/infra/jobs/rehydrate.rs): iterate every game row in `nhl_games`, fetch its boxscore, upsert player stats. Completed games use the fresh boxscore path so a manual rehydrate can repair stale sealed rows as well as missing rows. This recovers the "deploy in the middle of playoff day" case where every already-final game has no row in `nhl_player_game_stats` and would otherwise read as zero until the next live tick.
 
 The same function is exposed at `GET /api/admin/rehydrate` for explicit reseeds.
 

@@ -106,6 +106,7 @@ A walk through what happens between a goal being scored in an NHL arena and the 
    - Fetches the boxscore via `NhlClient::get_game_boxscore` (its 60-s TTL means one NHL call per minute even if multiple handlers want the same boxscore).
    - Calls `nhl_mirror::upsert_boxscore_players`, which writes one row per player into `nhl_player_game_stats`.
    - Fetches the `game_data` block for state + score + period, calls `update_game_live_state`.
+   - After a game has been observed as `FINAL` / `OFF` for the grace window, the final-sync sweep fetches an uncached boxscore, writes it, and stamps `stats_finalized_at` so season-long aggregates can count the game.
 3. **`t ≤ 60 s`** - the view `v_daily_fantasy_totals` recomputes on next read. It joins `nhl_player_game_stats` against `fantasy_players` and groups by `(league_id, team_id, date)`.
 4. **User refreshes Pulse or React Query's 60-s staleTime expires** - `GET /api/pulse?league_id=...`. The handler reads from the mirror (`list_games_for_date`, `get_playoff_carousel`, `v_daily_fantasy_totals`) and composes the payload. No NHL calls on the request path.
 5. **Total visible delay**: 0–120 s. Worst case: the poller just missed its tick (near 60 s), then the user just missed the React Query refetch window (another 60 s).

@@ -4,6 +4,25 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.24.4 / v1.19.10 — 2026-05-08 (BE v1.24.4 / FE v1.19.10)
+
+### Fixed — Final playoff games stopped counting in roster totals
+
+Completed game rows can keep receiving schedule refreshes after the
+per-player boxscore rows are already correct. The final-sync sweep was
+using the schedule row's generic `updated_at` as its 15-minute grace
+clock, so each refresh moved the window forward and left the game
+unsealed. Daily scoring and game pages showed the raw points, but
+season totals, team roster totals, and standings omitted those games
+because `stats_finalized_at` stayed NULL.
+
+The mirror now stores the first time a game is observed as `FINAL` or
+`OFF` and uses that stable timestamp for final-sync eligibility.
+Completed-game rehydrate and playoff-ingest paths also bypass the
+process-local boxscore cache before sealing, so the aggregate scoring
+pipeline counts the same final boxscore rows the game scoring view
+already displays.
+
 ## v1.24.3 / v1.19.10 — 2026-05-03 (BE v1.24.3 / FE v1.19.10)
 
 ### Fixed — Completed series could keep a pregame series record

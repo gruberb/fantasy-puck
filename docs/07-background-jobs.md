@@ -101,7 +101,7 @@ File: [`backend/src/infra/jobs/live_poller.rs`](../backend/src/infra/jobs/live_p
 | Interval | 60 s |
 | Startup delay | 45 s |
 | Leader election | Postgres advisory lock `884_471_193_002` |
-| Work | Via `nhl_mirror::list_games_needing_poll(today)`: every non-cancelled `LIVE` / `CRIT` row regardless of date, plus non-cancelled `PRE` rows on today. For each one: upsert boxscore, update state/score/period, and on `LIVE\|CRIT → OFF\|FINAL` transition invalidate only the `:v2` narrative tail of `team_diagnosis:{league}:*` (the `:bundle:v1` payload is left in place so the next Pulse load stays out of Claude). The any-date sweep is the self-heal pass — a process restart or rate-limit blip can leave a row stuck on `LIVE` after the real game finalised, and a today-only query would never re-check it. After the live pass, a final-sync sweep (`nhl_mirror::list_games_needing_final_sync`, 15-minute grace) re-fetches the boxscore one last time for every `FINAL` / `OFF` game whose `nhl_games.stats_finalized_at` is still NULL, then stamps the column. This is the only path that captures NHL's post-buzzer scoring corrections (empty-net assist credit, OT/shootout settlement, late official review) — without it, aggregated rankings drift permanently below the leaderboard. |
+| Work | Via `nhl_mirror::list_games_needing_poll(today)`: every non-cancelled `LIVE` / `CRIT` row regardless of date, plus non-cancelled `PRE` rows on today. For each one: upsert boxscore, update state/score/period, and on `LIVE\|CRIT → OFF\|FINAL` transition invalidate only the `:v2` narrative tail of `team_diagnosis:{league}:*` (the `:bundle:v1` payload is left in place so the next Pulse load stays out of Claude). The any-date sweep is the self-heal pass — a process restart or rate-limit blip can leave a row stuck on `LIVE` after the real game finalised, and a today-only query would never re-check it. After the live pass, a final-sync sweep (`nhl_mirror::list_games_needing_final_sync`, 15-minute grace from `final_state_detected_at`) re-fetches an uncached boxscore one last time for every `FINAL` / `OFF` game whose `nhl_games.stats_finalized_at` is still NULL, then stamps the column. This is the path that captures NHL's post-buzzer scoring corrections (empty-net assist credit, OT/shootout settlement, late official review) — without it, aggregated rankings drift permanently below the leaderboard. |
 
 ## Startup one-shots
 
@@ -139,7 +139,7 @@ The CSV is regenerated offline by `backend/scripts/parse_historical_playoff_skat
 
 - **Timer:** `tokio::time::sleep(45 s)` so the meta poller's first tick populates `nhl_games`.
 - **Guard:** `SELECT COUNT(*) FROM nhl_player_game_stats > 0` → skip.
-- **Work:** call `rehydrate::run` - for each known game row, fetch the boxscore and upsert per-player stats.
+- **Work:** call `rehydrate::run` - for each known game row, fetch the boxscore and upsert per-player stats. Completed games use the uncached boxscore path so rehydrate can repair stale final rows, not only missing rows.
 - **Motivation:** the live poller never re-fetches boxscores for games that finalized before it first saw them. After a deploy mid-day, every already-final game would otherwise read as zeros in rankings and fantasy totals.
 
 ## Admin-triggered work

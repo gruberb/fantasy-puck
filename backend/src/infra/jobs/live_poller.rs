@@ -164,7 +164,7 @@ async fn finalize_one_game(
 ) -> anyhow::Result<()> {
     let pool = db.pool();
 
-    let box_score = nhl.get_game_boxscore(game_id as u32).await?;
+    let box_score = nhl.get_game_boxscore_fresh(game_id as u32).await?;
     let (home, away): (String, String) = sqlx::query_as(
         "SELECT home_team, away_team FROM nhl_games WHERE game_id = $1",
     )

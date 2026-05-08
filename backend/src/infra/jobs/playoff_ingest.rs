@@ -252,7 +252,7 @@ async fn ingest_single_game(
     date: &str,
     game: &TodayGame,
 ) -> Result<usize> {
-    let box_score = nhl.get_game_boxscore(game.id).await?;
+    let box_score = nhl.get_game_boxscore_fresh(game.id).await?;
     let season_i32 = game.season as i32;
     let game_type_i16 = game.game_type as i16;
     let game_id_i64 = game.id as i64;

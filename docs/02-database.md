@@ -225,9 +225,10 @@ Schedule + live state + final score + series context, one row per game.
 | `series_status` | JSONB | Playoffs only |
 | `venue` | TEXT | |
 | `updated_at` | TIMESTAMPTZ | |
-| `stats_finalized_at` | TIMESTAMPTZ nullable | Stamped by the live poller after it does one final boxscore re-fetch following the FINAL/OFF transition + a 15-minute grace window. Aggregated surfaces (overall rankings, top-rostered, NHL-teams-we-roster, team-detail Total Points, sleeper pick) join on `IS NOT NULL` so a row only contributes once its post-buzzer adjustments have settled. |
+| `final_state_detected_at` | TIMESTAMPTZ nullable | First time the mirror observed `FINAL` / `OFF`. The final-sync grace window keys off this stable timestamp, not `updated_at`, because schedule refreshes keep touching completed game rows. |
+| `stats_finalized_at` | TIMESTAMPTZ nullable | Stamped by the live poller after it does one uncached boxscore re-fetch following `final_state_detected_at` + a 15-minute grace window. Aggregated surfaces (overall rankings, top-rostered, NHL-teams-we-roster, team-detail Total Points, sleeper pick) join on `IS NOT NULL` so a row only contributes once its post-buzzer adjustments have settled. |
 
-Indexes: `idx_nhl_games_date`, `idx_nhl_games_state`, `idx_nhl_games_needs_final_sync` (partial, on rows where `stats_finalized_at IS NULL`, used by the live poller's final-sync sweep).
+Indexes: `idx_nhl_games_date`, `idx_nhl_games_state`, `idx_nhl_games_needs_final_sync`, `idx_nhl_games_needs_final_sync_v2` (partial, on rows where `stats_finalized_at IS NULL`, used by the live poller's final-sync sweep).
 
 ### `nhl_player_game_stats`
 Per-player per-game box score. This is the table that `v_daily_fantasy_totals` joins against.
