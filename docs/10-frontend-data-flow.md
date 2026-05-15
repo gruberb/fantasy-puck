@@ -53,7 +53,7 @@ Each row: what the page calls, at what staleTime, and whether anything polls. "U
 | --- | --- | --- | --- | --- | --- |
 | `LoginPage` | `useAuth` (context) | POST `/api/auth/login`, `/api/auth/register` | n/a | - | - |
 | `LeaguePickerPage` | `LeagueContext` | GET `/api/leagues`, GET `/api/auth/memberships` | DEFAULT (5 min) | - | - |
-| `HomePage` | Uses several dashboards (rankings, top skaters, upcoming games) + `LiveRankingsTable` driven by its own `GET /api/games?date=today` query (decoupled from Pulse so a slow Pulse load can't hide live rankings) | Multiple + GET `/api/games?date=today&league_id=...` | `QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS` | Same interval while any game is `LIVE`/`CRIT`; off otherwise | - |
+| `HomePage` | Uses several dashboards (rankings, top skaters, upcoming games) + `LiveRankingsTable` driven by its own `GET /api/games?date=today` query (decoupled from Pulse so a slow Pulse load can't hide live rankings). Public visitors and logged-in non-members see the same current standings dashboard rather than the draft/member preview. | Multiple + GET `/api/games?date=today&league_id=...` | `QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS` | Same interval while any game is `LIVE`/`CRIT`; off otherwise | - |
 | `FantasyTeamsPage` | `useFantasyTeams` | GET `/api/fantasy/teams?league_id=...` | DEFAULT | - | - |
 | `FantasyTeamDetailPage` | `useTeamDetail` | GET `/api/fantasy/teams/{id}` | DEFAULT | - | - |
 | `RankingsPage` | `useRankingsData` | GET `/api/fantasy/rankings/daily`, GET `/api/fantasy/rankings/playoffs` | DEFAULT | 30 s when viewing today; off otherwise | - |
@@ -142,7 +142,7 @@ The client does not try to catch up missed messages on reconnect. It relies on R
 
 The session lives in `localStorage["auth_session"]` (see [`features/auth/api/auth-service.ts`](../frontend/src/features/auth/api/auth-service.ts)). Every `fetchApi` call reads `authService.getToken()` and attaches `Authorization: Bearer <token>` when present ([`api-client.ts:9-12`](../frontend/src/lib/api-client.ts)).
 
-The background `validateSession` on app boot calls `GET /api/auth/me` once:
+The background `validateSession` on app boot calls `GET /api/auth/me` once. Backend tokens do not carry an expiry, so this check is for malformed tokens, secret rotation, deleted users, and similar invalid-session cases:
 
 - Response OK → session stays.
 - Response 4xx → session is cleared and every subscriber is notified; UI re-renders as logged-out.

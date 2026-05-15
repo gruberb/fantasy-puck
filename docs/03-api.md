@@ -37,13 +37,13 @@ Mapping from internal `Error` variants to HTTP status codes:
 
 ## Authentication
 
-JWT-based. The token goes in the `Authorization` header: `Bearer <jwt>`. Tokens expire 90 days after login or registration.
+JWT-based. The token goes in the `Authorization` header: `Bearer <jwt>`. Tokens do not carry an expiry; they remain valid until explicit sign-out or `JWT_SECRET` rotation.
 
 - **`AuthUser` extractor** ([`auth/middleware.rs:21-46`](../backend/src/auth/middleware.rs)) - required on most endpoints. Validates the token, returns 401 if missing or invalid.
 - **`OptionalAuth` extractor** ([`auth/middleware.rs:49-79`](../backend/src/auth/middleware.rs)) - accepts a token but does not require one. Invalid tokens still 401.
 - **Admin endpoints** additionally check `auth.is_admin` inside the handler; 403 if unset.
 
-Claim shape: `{ sub: user_id, email, is_admin, iat, exp }`. The secret is `config.jwt_secret`.
+Claim shape: `{ sub: user_id, email, is_admin, iat }`. The secret is `config.jwt_secret`.
 
 ---
 

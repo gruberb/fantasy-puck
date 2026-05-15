@@ -75,7 +75,7 @@ class BackendAuthService implements AuthService {
       });
 
       if (!response.ok) {
-        // Token is invalid or expired — clear it
+        // Token is invalid — clear it
         this.session = null;
         this.writeToStorage(null);
         this.notifyListeners();

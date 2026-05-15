@@ -4,6 +4,22 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.24.5 / v1.19.11 — 2026-05-15 (BE v1.24.5 / FE v1.19.11)
+
+### Fixed — Public league dashboards show the standings
+
+Logged-out visitors and logged-in non-members now land on the same
+current standings dashboard as league members instead of the old join,
+members, and draft-status preview. The dashboard also avoids the
+signed-in-only draft-session request for public viewers.
+
+### Changed — Sign-in sessions no longer expire on a timer
+
+Backend-issued JWTs no longer carry an expiry claim, and validation
+accepts both new non-expiring tokens and already-issued legacy tokens
+with expired `exp` values. Sessions now remain valid until explicit
+sign-out, token invalidation, account removal, or `JWT_SECRET` rotation.
+
 ## v1.24.4 / v1.19.10 — 2026-05-08 (BE v1.24.4 / FE v1.19.10)
 
 ### Fixed — Final playoff games stopped counting in roster totals

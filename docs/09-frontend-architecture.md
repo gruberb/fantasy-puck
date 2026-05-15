@@ -130,7 +130,7 @@ Defined in [`frontend/src/App.tsx`](../frontend/src/App.tsx). Everything except 
    /settings                         LeagueSettingsPage      (ProtectedRoute)
 ```
 
-Five routes are auth-gated via `<ProtectedRoute>`: `/my-leagues`, `/admin`, `/settings`, `/league/:id/draft`, `/league/:id/settings`. `/admin` additionally redirects non-admins (`profile.isAdmin !== true`) to `/my-leagues` — the route is admin-only and surfaces every `/api/admin/*` endpoint as a one-click action card. The rest are viewable without signing in; pages that need auth-specific data simply return a placeholder when `user` is null.
+Five routes are auth-gated via `<ProtectedRoute>`: `/my-leagues`, `/admin`, `/settings`, `/league/:id/draft`, `/league/:id/settings`. `/admin` additionally redirects non-admins (`profile.isAdmin !== true`) to `/my-leagues` — the route is admin-only and surfaces every `/api/admin/*` endpoint as a one-click action card. The rest are viewable without signing in. The league index route renders the current rankings dashboard for public visitors and logged-in non-members; pages that need auth-specific data simply return a placeholder when `user` is null.
 
 `InsightsPage` is used in both the global `/insights` route and the league-scoped `/league/:id/insights` route. The component decides which variant it is showing by reading `activeLeagueId` from `LeagueContext` - the hook `useInsights` passes `league_id` to the backend when it's set. Its playoff bracket groups `seriesProjections[]` by round so split-round days can show, for example, an unfinished Round 1 series alongside already-seeded Round 2 matchups. The Stanley Cup Odds table still reads the full Monte Carlo NHL-team list, but fades teams with no active series context and zero Cup probability.
 
@@ -159,7 +159,7 @@ Session flow:
 3. `login()` / `register()` POST to the backend, store the returned session, notify listeners.
 4. A `window.addEventListener("storage", ...)` handler syncs sessions across open tabs ([`auth-service.ts:19-27`](../frontend/src/features/auth/api/auth-service.ts)).
 
-Backend-issued JWTs expire after 90 days. There is no refresh-token exchange; the frontend stores the returned bearer token and validates it on startup.
+Backend-issued JWTs do not expire on a timer. There is no refresh-token exchange; the frontend stores the returned bearer token and validates it on startup. Sessions end when the user signs out, the stored token is invalid, or the backend `JWT_SECRET` rotates.
 
 `AuthContext` exposes `user`, `profile`, `loading`, `signIn`, `signUp`, `signOut`. All listeners are triggered when `authService.session` changes.
 
@@ -178,7 +178,7 @@ Holds `activeLeagueId` (persisted to `localStorage["lastViewedLeagueId"]`), fetc
 | `leaguesLoading` | boolean | React Query loading flag |
 | `myMemberships` | `LeagueMembership[]` | `GET /api/auth/memberships` |
 | `myLeagues` | `League[]` | Derived: `allLeagues` filtered by membership |
-| `draftSession` | `DraftSession \| null` | `GET /api/leagues/{id}/draft` for active league |
+| `draftSession` | `DraftSession \| null` | `GET /api/leagues/{id}/draft` for active league when signed in |
 
 Persisting `activeLeagueId` to localStorage matters because global routes like `/games/:date` render outside `<LeagueShell />` but still need to know which league the user was last in for overlay features (rostered-player tags, etc.).
 

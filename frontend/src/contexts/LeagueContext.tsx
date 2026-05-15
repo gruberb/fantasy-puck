@@ -125,7 +125,7 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
       } | null;
       return data?.session ?? null;
     },
-    enabled: !!activeLeagueId,
+    enabled: !!activeLeagueId && !!user?.id,
   });
 
   // Derived

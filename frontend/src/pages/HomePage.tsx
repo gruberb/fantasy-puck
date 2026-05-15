@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import ActionButtons from "@/components/home/ActionButtons";
 import { LiveRankingsTable } from "@/components/home/LiveRankingsTable";
 import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
@@ -13,7 +12,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useLeague } from "@/contexts/LeagueContext";
 import { api } from "@/api/client";
 import { formatSeason } from "@/utils/format";
-import type { League } from "@/types/league";
 
 // ── League Members List (for pre-draft state) ─────────────────────────────
 
@@ -69,85 +67,6 @@ function LeagueMembersList({ leagueId }: { leagueId: string }) {
   );
 }
 
-// ── Join League Banner (for logged-in non-members) ────────────────────────
-
-function JoinLeagueBanner({ league }: { league: League }) {
-  const [teamName, setTeamName] = useState("");
-  const [joining, setJoining] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-
-  const handleJoin = async () => {
-    if (!teamName.trim()) {
-      setError("Please enter a fantasy team name.");
-      return;
-    }
-    setJoining(true);
-    setError(null);
-    try {
-      await api.joinLeague(league.id, teamName.trim());
-      queryClient.invalidateQueries();
-      navigate(0);
-    } catch (e: any) {
-      setError(e.message || "Failed to join league");
-    } finally {
-      setJoining(false);
-    }
-  };
-
-  if (league.visibility !== "public") return null;
-
-  return (
-    <div className="bg-[#2563EB]/5 rounded-none border-2 border-[#2563EB] p-5 mb-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-bold text-[#1A1A1A] uppercase tracking-wider">Join {league.name}</h2>
-          <p className="text-sm text-gray-500 mt-0.5">This league is open. Create a team to start playing.</p>
-        </div>
-        {!showForm && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="px-5 py-2 bg-[#2563EB] text-white font-bold uppercase text-sm border-2 border-[#1A1A1A] rounded-none shadow-[4px_4px_0px_0px_#1A1A1A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-all duration-100 cursor-pointer"
-          >
-            Join League
-          </button>
-        )}
-      </div>
-      {showForm && (
-        <div className="mt-4 space-y-3">
-          <input
-            type="text"
-            value={teamName}
-            onChange={(e) => setTeamName(e.target.value)}
-            placeholder="Your team name..."
-            className="w-full px-4 py-2 border-2 border-[#1A1A1A] rounded-none focus:ring-2 focus:ring-[#2563EB]/40 focus:border-[#2563EB] outline-none transition-all bg-white"
-            onKeyDown={(e) => e.key === "Enter" && handleJoin()}
-            autoFocus
-          />
-          <div className="flex gap-3">
-            <button
-              onClick={handleJoin}
-              disabled={joining || !teamName.trim()}
-              className="flex-1 px-5 py-2 bg-[#2563EB] text-white font-bold uppercase text-sm border-2 border-[#1A1A1A] rounded-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            >
-              {joining ? "Joining..." : "Confirm"}
-            </button>
-            <button
-              onClick={() => { setShowForm(false); setTeamName(""); setError(null); }}
-              className="px-3 py-2 text-sm text-gray-500 font-bold uppercase hover:text-[#1A1A1A] cursor-pointer"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-      {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
-    </div>
-  );
-}
-
 // ── Main HomePage ──────────────────────────────────────────────────────────
 
 const HomePage = () => {
@@ -178,81 +97,11 @@ const HomePage = () => {
   const hasSleepers = !sleepersError && sleepersData && sleepersData.length > 0;
   const hasAnyData = hasRankings || hasDailyRankings || hasSleepers;
   const isLoading = rankingsLoading || yesterdayRankingsLoading || sleepersLoading;
+  const isPublicLeagueView = Boolean(activeLeague && !isMember);
 
   // Waiting for league data
   if (leagueLoading) {
     return <LoadingSpinner message="Loading your league..." />;
-  }
-
-  // ── Non-member league preview (invite link destination) ────────────────
-
-  if (activeLeague && !isMember) {
-    const draftStatus = draftSession?.status;
-    const draftLabel = !draftSession ? "No draft yet" :
-      draftStatus === "completed" ? "Completed" :
-      draftStatus === "active" ? "In Progress" :
-      draftStatus === "paused" ? "Paused" :
-      draftStatus === "picks_done" ? "Picks Done" :
-      "Pending";
-    const draftColor = !draftSession ? "bg-gray-100 text-gray-600" :
-      draftStatus === "completed" ? "bg-blue-100 text-blue-700" :
-      draftStatus === "active" ? "bg-green-100 text-green-700" :
-      draftStatus === "paused" ? "bg-yellow-100 text-yellow-700" :
-      "bg-gray-100 text-gray-600";
-
-    return (
-      <div>
-        <PageHeader title={activeLeague.name} badge={formatSeason(activeLeague.season)} />
-
-        {/* Join CTA */}
-        {user ? (
-          <JoinLeagueBanner league={activeLeague} />
-        ) : (
-          <div className="bg-[#2563EB]/5 rounded-none border-2 border-[#2563EB] p-5 mb-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-bold text-[#1A1A1A] uppercase tracking-wider">Join {activeLeague.name}</h2>
-                <p className="text-sm text-gray-500 mt-0.5">Sign in to create a team and start playing.</p>
-              </div>
-              <Link
-                to={`/login?returnTo=/league/${activeLeague.id}`}
-                className="px-5 py-2 bg-[#2563EB] text-white font-bold uppercase text-sm border-2 border-[#1A1A1A] rounded-none shadow-[4px_4px_0px_0px_#1A1A1A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-all duration-100"
-              >
-                Sign In to Join
-              </Link>
-            </div>
-          </div>
-        )}
-
-        {/* League Info */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Members */}
-          <div className="bg-white rounded-none border-2 border-[#1A1A1A] p-6">
-            <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4">Members</h3>
-            <LeagueMembersList leagueId={activeLeague.id} />
-          </div>
-
-          {/* Draft Status */}
-          <div className="bg-white rounded-none border-2 border-[#1A1A1A] p-6">
-            <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4">Draft Status</h3>
-            <div className="space-y-3">
-              <span className={`inline-block text-xs font-bold uppercase px-3 py-1 border-2 border-[#1A1A1A] rounded-none ${draftColor}`}>
-                {draftLabel}
-              </span>
-              {draftSession && (
-                <div className="space-y-2 text-sm text-gray-600">
-                  <p>Rounds: <span className="font-bold text-[#1A1A1A]">{draftSession.currentRound} / {draftSession.totalRounds}</span></p>
-                  <p>Type: <span className="font-bold text-[#1A1A1A]">{draftSession.snakeDraft ? "Snake" : "Linear"}</span></p>
-                </div>
-              )}
-              {!draftSession && (
-                <p className="text-sm text-gray-500">The league admin hasn't set up the draft yet.</p>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
   }
 
   // ── Pre-draft states (logged-in members only) ──────────────────────────
@@ -360,15 +209,20 @@ const HomePage = () => {
           </p>
         </div>
 
-        <div className="mt-8">
-          <ActionButtons />
-        </div>
+        {!isPublicLeagueView && (
+          <div className="mt-8">
+            <ActionButtons />
+          </div>
+        )}
       </div>
     );
   }
 
   return (
     <div>
+      {isPublicLeagueView && activeLeague && (
+        <PageHeader title={activeLeague.name} badge={formatSeason(activeLeague.season)} />
+      )}
       <RankingsDashboard
         rankings={rankings}
         rankingsLoading={rankingsLoading}
@@ -381,6 +235,7 @@ const HomePage = () => {
         sleepersLoading={sleepersLoading}
         hasSleepers={hasSleepers}
         leaguePrefix={lp}
+        showActionButtons={!isPublicLeagueView}
       />
     </div>
   );
@@ -400,6 +255,7 @@ interface RankingsDashboardProps {
   sleepersLoading: boolean;
   hasSleepers: boolean;
   leaguePrefix: string;
+  showActionButtons?: boolean;
 }
 
 function RankingsDashboard({
@@ -414,6 +270,7 @@ function RankingsDashboard({
   sleepersLoading,
   hasSleepers,
   leaguePrefix,
+  showActionButtons = true,
 }: RankingsDashboardProps) {
   const seasonRankingsColumns = useSeasonRankingsColumns();
   const dailyRankingsColumns = useDailyRankingsColumns();
@@ -484,10 +341,11 @@ function RankingsDashboard({
         </div>
       )}
 
-      {/* Action buttons */}
-      <div className="mt-8">
-        <ActionButtons />
-      </div>
+      {showActionButtons && (
+        <div className="mt-8">
+          <ActionButtons />
+        </div>
+      )}
     </div>
   );
 }
