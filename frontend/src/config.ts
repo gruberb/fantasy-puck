@@ -35,7 +35,7 @@ const GAME_TYPE_LABEL = GAME_TYPE_LABELS[DEFAULT_GAME_TYPE] ?? "Playoffs";
 // to this window so the flip to playoffs doesn't expose regular-season
 // dates in the picker.
 const PLAYOFF_START = import.meta.env.VITE_NHL_PLAYOFF_START || "2026-04-18";
-const SEASON_END = import.meta.env.VITE_NHL_SEASON_END || "2026-06-15";
+const SEASON_END = import.meta.env.VITE_NHL_SEASON_END || "2026-06-14";
 
 function formatSeason(s: string): string {
   return s.length === 8 ? `${s.slice(0, 4)}/${s.slice(4)}` : s;
@@ -56,6 +56,17 @@ export const APP_CONFIG = {
   PLAYOFF_START,
   SEASON_END,
 };
+
+// Clamp a YYYY-MM-DD date into the active season window. Every surface that
+// derives "today"/"yesterday" (Games, Daily Rankings, the home page) routes
+// through this so the picker and the default ranking date can't roll past the
+// season's last game once the slate is over. YYYY-MM-DD compares
+// lexicographically, so the string bounds are safe without parsing.
+export function clampToSeasonWindow(date: string): string {
+  if (date < APP_CONFIG.PLAYOFF_START) return APP_CONFIG.PLAYOFF_START;
+  if (date > APP_CONFIG.SEASON_END) return APP_CONFIG.SEASON_END;
+  return date;
+}
 
 // React Query staleTime / refetch intervals, in milliseconds.
 //

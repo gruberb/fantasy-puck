@@ -198,4 +198,10 @@ pub struct InsightsNarratives {
     /// cover, followed by 2–3 sentence paragraphs. Empty on off-days.
     #[serde(default)]
     pub last_night: String,
+    /// Set only once the Cup is decided. A markdown wrap-up of the
+    /// playoffs (and, when league-scoped, the fantasy league). When
+    /// present the frontend renders this in place of the daily sections,
+    /// which are empty in recap mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub season_recap: Option<String>,
 }

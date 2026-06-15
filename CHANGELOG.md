@@ -4,6 +4,27 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.25.0 / v1.20.0 — 2026-06-15 (BE v1.25.0 / FE v1.20.0)
+
+### Changed — Date pickers and rankings stop at the season's last game
+
+The season-end date is now June 14. The Games and Daily Rankings pickers
+can no longer advance past it, and every "yesterday's rankings" surface —
+the home dashboard, the Daily Rankings default, and the live table — pins
+to the last game day instead of rolling forward into empty future dates.
+The bound is driven by the existing `NHL_SEASON_END` / `VITE_NHL_SEASON_END`
+env vars, and all date-deriving surfaces now clamp through a single shared
+helper.
+
+### Added — Season-aware Insights and Pulse narratives
+
+Both narrators now know where the playoffs stand. While the bracket is
+live they name the round, including the Stanley Cup Final. Once the Cup is
+decided they switch to a wrap-up: Insights gives a playoff recap plus, in a
+league, the league champion, final standings, and top fantasy scorers;
+Pulse recaps how your roster finished — where you placed, which picks
+carried you, and which fell short. The switch is triggered by the bracket
+showing a champion, not the calendar.
 ## v1.24.5 / v1.19.11 — 2026-05-15 (BE v1.24.5 / FE v1.19.11)
 
 ### Fixed — Public league dashboards show the standings

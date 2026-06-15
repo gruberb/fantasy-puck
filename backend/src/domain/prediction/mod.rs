@@ -12,5 +12,6 @@ pub mod grade;
 pub mod playoff_elo;
 pub mod player_projection;
 pub mod race_sim;
+pub mod season_phase;
 pub mod series_projection;
 pub mod team_ratings;
