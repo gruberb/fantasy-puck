@@ -46,6 +46,15 @@ const InsightsPage = () => {
   return (
     <div className="space-y-6">
 
+      {/* Season Recap — only present once the Cup is decided. The daily
+          sections below carry no data in recap mode, so they self-hide and
+          this wrap-up stands in for them. */}
+      {narratives.seasonRecap && (
+        <InsightCard accent="#1A1A1A" title="Season Recap">
+          <MarkdownNarrative text={narratives.seasonRecap} />
+        </InsightCard>
+      )}
+
       {/* Last Night — Daily Faceoff-style recap of the previous hockey-day's
           games. Rendered first so a morning visitor's first glance answers
           "what did I miss overnight" before being steered into the preview. */}

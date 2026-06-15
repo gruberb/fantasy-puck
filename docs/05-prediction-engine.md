@@ -448,6 +448,19 @@ Used purely for UI colour coding on the series cards, not by the Monte Carlo. Th
 
 The race simulator does not use the lookup table; it re-derives series probabilities from team strength per trial. The lookup is the right tool for UI because it does not need rating inputs and gives stable numbers a user can recognise ("3-0 up, 95% chance to advance").
 
+## 6b. Season phase - playoff state for the narrators
+
+File: [`backend/src/domain/prediction/season_phase.rs`](../backend/src/domain/prediction/season_phase.rs).
+
+`SeasonPhase::from_carousel(&PlayoffCarousel)` classifies where the playoffs stand into `InProgress { round_label, summary }` or `Over { champion, runner_up, series_label }`. It reads the **raw** carousel, not the projection list: `insights::active_round_projections` drops completed series, but the champion lives in a *finished* series, so phase detection cannot use that path.
+
+Detection is bracket-driven, not calendar-driven. The season is "over" only when the deepest round (highest `round_number`) has a series clinched (`wins >= needed_to_win`, defaulting to 4). A Game 7 that finishes past midnight Eastern therefore won't flip the app into recap mode a day early, and this trigger is independent of the `NHL_SEASON_END` date cap that bounds the pickers.
+
+Two consumers feed `prompt_line()` (or the over/label fields) into their Claude prompts:
+
+- **Insights** ([`handlers/insights.rs`](../backend/src/api/handlers/insights.rs)): while live, a `=== SEASON STATE ===` block lets narratives name the round ("Stanley Cup Final"). Once over, `call_claude_recap` replaces the daily preview with a markdown `season_recap` field — an NHL Cup wrap-up, plus a fantasy-league wrap-up (champion, final standings, top scorers from `list_league_team_season_totals` + `list_top_rostered_skaters`) on the league-scoped route. The global `/insights` recap stays NHL-only. Recap responses carry no `todaysGames`, so the cache self-heal that regenerates on empty-games is gated on `season_recap.is_some()` to avoid re-hitting Claude every request.
+- **Pulse** ([`handlers/team_breakdown.rs`](../backend/src/api/handlers/team_breakdown.rs) populates `TeamDiagnosis.season_over` / `season_phase_label`): the headline carries the phase line, and `ClaudeNarrator::team_diagnosis` swaps to `TEAM_DIAGNOSIS_RECAP_SYSTEM_PROMPT` when over — reframing the four sections into How It Ended / What Carried You / What Fell Short / The Verdict. No new data is fetched; the recap reads the rank, totals, and per-player lines already in the headline.
+
 ## 6a. Player grading
 
 File: [`backend/src/domain/prediction/grade.rs`](../backend/src/domain/prediction/grade.rs).

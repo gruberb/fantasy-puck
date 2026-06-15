@@ -79,6 +79,14 @@ pub struct TeamDiagnosis {
     pub gap_to_third: i32,
     pub yesterday: TeamYesterdaySummary,
     pub concentration_by_team: Vec<TeamConcentrationCell>,
+    /// Where the playoffs stand, fed to the narrator so it can name the
+    /// round (or switch to a season recap once the Cup is decided). This
+    /// is generation context, not a frontend surface — skipped from the
+    /// wire when empty/false and tolerant of older cached payloads.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub season_over: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub season_phase_label: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

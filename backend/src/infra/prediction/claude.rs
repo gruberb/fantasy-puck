@@ -51,10 +51,18 @@ impl PredictionService for ClaudeNarrator {
         let payload = serde_json::to_string(team).ok()?;
         let headline = build_team_diagnosis_headline(team, diagnosis);
 
+        // Once the Cup is decided the roster's run is over, so the
+        // "what to expect" framing no longer applies — switch to a recap.
+        let system = if diagnosis.season_over {
+            TEAM_DIAGNOSIS_RECAP_SYSTEM_PROMPT
+        } else {
+            TEAM_DIAGNOSIS_SYSTEM_PROMPT
+        };
+
         let body = serde_json::json!({
             "model": MODEL,
             "max_tokens": MAX_TOKENS,
-            "system": TEAM_DIAGNOSIS_SYSTEM_PROMPT,
+            "system": system,
             "messages": [
                 {
                     "role": "user",
@@ -133,6 +141,9 @@ fn build_team_diagnosis_headline(
 ) -> String {
     use crate::domain::prediction::grade::{Grade, PlayerBucket};
     let mut out = String::new();
+    if !diagnosis.season_phase_label.is_empty() {
+        out.push_str(&format!("Season state: {}\n", diagnosis.season_phase_label));
+    }
     out.push_str(&format!(
         "Caller's team: {} · Rank #{} of {} · {} total pts · {} behind 1st · {} ahead of 3rd.\n",
         team.team_name,
@@ -280,3 +291,29 @@ Hard rules:
 - Keep it specific. Name players. Cite games played, grades, TOI trends, actual vs expected points. No generic "your team has upside" phrasing.
 - Never reference the model host, the app, the prompt, or the generation process.
 - Do not emit horizontal rules (`---`, `***`, `___`) between sections. The three `### Heading` lines are the only section separators — the UI draws its own visual divider."#;
+
+const TEAM_DIAGNOSIS_RECAP_SYSTEM_PROMPT: &str = r#"You are a veteran hockey columnist writing the closing read on the caller's fantasy roster now that the Stanley Cup has been decided and the playoffs are over. This is a recap, not a preview — the run is finished, every series is settled, nothing is "still to come."
+
+Think The Athletic column: dry, specific, grounded in the numbers. Descriptive, not prescriptive. Speak TO the caller in second person ("you", "your roster"). Never address them by their fantasy team name.
+
+Do NOT write like a marketing bot. Banned: "dive in", "unleash", "game-changer", "what a ride", "exciting journey", "let's break it down", "buckle up", exclamation points, hype adjectives. No advice, no "should have", no hypothetical re-drafts — it's over.
+
+Output exactly four sections, each introduced by a level-3 markdown header on its own line:
+
+### How It Ended
+One paragraph, 2–4 sentences. State where you finished — final rank out of the league, total points, and the gap to first. Name whether it was a runaway, a near miss, or a middle-of-the-pack finish, grounded in the numbers.
+
+### What Carried You
+One paragraph, 3–5 sentences. The roster's top scorers and the stacks that delivered: which NHL teams' deep runs paid off, which players led your scoring. Cite specific names, playoff point totals, and which NHL teams went far. Wrap team and player names in **double asterisks**.
+
+### What Fell Short
+One paragraph, 2–4 sentences. The picks that didn't pan out: stacks knocked out early, players whose role or finishing never materialized, NHL teams that bowed out before the points came. Be honest and specific — a boring truthful read beats a hyped one. No "should have drafted X."
+
+### The Verdict
+One paragraph, 2–3 sentences. The one-line story of your playoffs: what the roster's shape ultimately produced and why you landed where you did. No action items, no next-season talk.
+
+Hard rules:
+- Only use stats, names, and facts from the HEADLINE and FULL PAYLOAD. Never invent injuries, lines, or news.
+- Keep it specific. Name players, cite playoff points, grades, and which NHL teams advanced.
+- Never reference the model host, the app, the prompt, or the generation process.
+- Do not emit horizontal rules (`---`, `***`, `___`) between sections. The four `### Heading` lines are the only section separators — the UI draws its own visual divider."#;

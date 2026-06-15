@@ -6,7 +6,7 @@ import {
   useLiveRankingsColumns,
   type LiveRankingRow,
 } from "@/components/rankingsPageTableColumns/liveColumns";
-import { QUERY_INTERVALS } from "@/config";
+import { QUERY_INTERVALS, clampToSeasonWindow } from "@/config";
 import { useLeague } from "@/contexts/LeagueContext";
 import type { Game, GamesResponse } from "@/types/games";
 import type { FantasyTeamInAction } from "@/types/matchDay";
@@ -27,7 +27,10 @@ import { getHockeyDateToday } from "@/utils/timezone";
 export function LiveRankingsTable() {
   const { activeLeagueId, myMemberships } = useLeague();
   const columns = useLiveRankingsColumns();
-  const today = getHockeyDateToday();
+  // Clamp into the season window: once the season is over there's no live
+  // slate, so this resolves to the last game day (all final) and the table
+  // hides itself rather than firing an empty request for a future date.
+  const today = clampToSeasonWindow(getHockeyDateToday());
 
   const { data, isLoading } = useQuery({
     queryKey: ["dashboardLiveGames", today, activeLeagueId],

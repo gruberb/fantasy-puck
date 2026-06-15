@@ -91,6 +91,10 @@ Use [`getHockeyDateToday()` / `getHockeyDateYesterday()`](../frontend/src/utils/
 
 The sibling helper `toLocalDateString(date)` is kept for date-picker round-tripping only: a `<DateHeader>` / calendar widget hands back a `Date` pinned to local midnight of the user-chosen day, and `toLocalDateString` turns it back into `YYYY-MM-DD`. Do not use it to derive "today."
 
+## Season window clamping
+
+Every surface that derives or picks a date routes the result through [`clampToSeasonWindow(date)`](../frontend/src/config.ts), which bounds it to `[VITE_NHL_PLAYOFF_START, VITE_NHL_SEASON_END]` (mirrors of the backend `NHL_PLAYOFF_START` / `NHL_SEASON_END` env vars). This is what stops the pickers and the default "yesterday" rankings date from rolling past the season's last game once the slate is over: the Games picker (`use-games-data`), the Daily Rankings default and nav (`use-rankings-data`, `DailyRankingsSection`), the home page's yesterday rankings (`use-home-page-data`), and the home live table (`LiveRankingsTable`) all clamp. `<DateHeader>` and `RankingTableHeader` additionally clamp their "Today"/"Yesterday" buttons inline against the same `APP_CONFIG` bounds. There is one helper, not per-call copies — extend it, don't fork it.
+
 ## Draft WebSocket
 
 File: [`frontend/src/features/draft/hooks/use-draft-session.ts`](../frontend/src/features/draft/hooks/use-draft-session.ts).

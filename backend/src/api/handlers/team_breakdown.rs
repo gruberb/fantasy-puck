@@ -95,6 +95,9 @@ pub async fn compose_team_breakdown(
 
     let team_games_played = games_played_from_carousel(carousel.as_ref());
     let series_states = build_series_states(carousel.as_ref());
+    let season_phase = carousel
+        .as_ref()
+        .map(crate::domain::prediction::season_phase::SeasonPhase::from_carousel);
 
     let rs_points_by_id: HashMap<i64, i32> = season_rs
         .into_iter()
@@ -175,6 +178,7 @@ pub async fn compose_team_breakdown(
         &league_totals,
         &players_out,
         yesterday_summary,
+        season_phase.as_ref(),
     );
     let diagnosis_narrative = resolve_team_diagnosis_narrative(
         state,
@@ -304,6 +308,7 @@ fn build_diagnosis_stub(
     league_totals: &[LeagueTeamSeasonTotalsRow],
     players: &[PlayerStatsResponse],
     yesterday: TeamYesterdaySummary,
+    season_phase: Option<&crate::domain::prediction::season_phase::SeasonPhase>,
 ) -> TeamDiagnosis {
     let league_size = league_totals.len() as i32;
     let (league_rank, my_total) = league_totals
@@ -359,6 +364,8 @@ fn build_diagnosis_stub(
         gap_to_third,
         yesterday,
         concentration_by_team: concentration,
+        season_over: season_phase.map(|p| p.is_over()).unwrap_or(false),
+        season_phase_label: season_phase.map(|p| p.prompt_line()).unwrap_or_default(),
     }
 }
 

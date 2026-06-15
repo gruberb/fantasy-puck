@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import { QUERY_INTERVALS } from "@/config";
+import { QUERY_INTERVALS, clampToSeasonWindow } from "@/config";
 import {
   getHockeyDateToday,
   getHockeyDateYesterday,
@@ -12,7 +12,7 @@ import { TeamStats } from "@/types/teamStats";
 
 export function useRankingsData(leagueId: string | null) {
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    return getHockeyDateYesterday();
+    return clampToSeasonWindow(getHockeyDateYesterday());
   });
 
   const enabled = !!leagueId;

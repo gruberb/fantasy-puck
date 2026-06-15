@@ -4,24 +4,18 @@ import RankingTable from "@/components/common/RankingTable";
 import { dailyRankingsColumns } from "@/components/rankingsPageTableColumns/dailysColumns";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import { APP_CONFIG } from "@/config";
+import { APP_CONFIG, clampToSeasonWindow } from "@/config";
 import {
   toLocalDateString,
   dateStringToLocalDate,
   getHockeyDateYesterday,
 } from "@/utils/timezone";
 
-function clampToWindow(date: string): string {
-  if (date < APP_CONFIG.PLAYOFF_START) return APP_CONFIG.PLAYOFF_START;
-  if (date > APP_CONFIG.SEASON_END) return APP_CONFIG.SEASON_END;
-  return date;
-}
-
 const DailyRankingsSection = () => {
   // Default to yesterday, clamped into the playoff window so the flip
   // to a new mode doesn't land us on a pre-window date with no data.
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    return clampToWindow(getHockeyDateYesterday());
+    return clampToSeasonWindow(getHockeyDateYesterday());
   });
 
   const atMinDate = selectedDate <= APP_CONFIG.PLAYOFF_START;
@@ -73,7 +67,7 @@ const DailyRankingsSection = () => {
               if (atMinDate) return;
               const date = dateStringToLocalDate(selectedDate);
               date.setDate(date.getDate() - 1);
-              setSelectedDate(clampToWindow(toLocalDateString(date)));
+              setSelectedDate(clampToSeasonWindow(toLocalDateString(date)));
             }}
             disabled={atMinDate}
             className="p-2 bg-gray-100 hover:bg-gray-200 rounded-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
@@ -107,7 +101,7 @@ const DailyRankingsSection = () => {
               if (atMaxDate) return;
               const date = dateStringToLocalDate(selectedDate);
               date.setDate(date.getDate() + 1);
-              setSelectedDate(clampToWindow(toLocalDateString(date)));
+              setSelectedDate(clampToSeasonWindow(toLocalDateString(date)));
             }}
             disabled={atMaxDate}
             className="p-2 bg-gray-100 hover:bg-gray-200 rounded-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-gray-100"
@@ -129,7 +123,7 @@ const DailyRankingsSection = () => {
 
           <button
             onClick={() => {
-              setSelectedDate(clampToWindow(getHockeyDateYesterday()));
+              setSelectedDate(clampToSeasonWindow(getHockeyDateYesterday()));
             }}
             className="text-sm px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-none"
           >

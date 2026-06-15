@@ -36,7 +36,7 @@ impl Config {
             nhl_playoff_start: optional("NHL_PLAYOFF_START")
                 .unwrap_or_else(|| "2026-04-18".into()),
             nhl_season_end: optional("NHL_SEASON_END")
-                .unwrap_or_else(|| "2026-06-15".into()),
+                .unwrap_or_else(|| "2026-06-14".into()),
 
             port: optional_parsed("PORT", 3000),
             cors_origins: optional("CORS_ORIGINS")

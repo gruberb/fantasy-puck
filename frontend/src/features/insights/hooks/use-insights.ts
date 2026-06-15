@@ -102,6 +102,11 @@ export interface InsightsNarratives {
    *  Contains one `### Sub-heading` per covered game, followed by a
    *  short paragraph. Empty when no games were played yesterday. */
   lastNight: string;
+  /** Set only once the Cup is decided: a markdown season wrap-up
+   *  (NHL champion, and the fantasy-league finish when league-scoped).
+   *  Rendered in place of the daily sections, which carry no data in
+   *  recap mode. */
+  seasonRecap?: string;
 }
 
 export interface LastNightScorer {
