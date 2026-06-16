@@ -4,6 +4,16 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+### Changed — Both Fly apps idle to zero when there is no traffic
+
+The frontend and backend Fly services now suspend their machine when idle
+and wake on the next request (`auto_stop_machines = 'suspend'`,
+`min_machines_running = 0`), instead of running a machine around the clock.
+First request after an idle period pays a cold start. The backend setting
+is an off-season choice: a suspended machine only wakes on inbound HTTP, so
+live polling and the daily crons do not run while it is idle, which is fine
+past the season window where those jobs self-skip anyway.
+
 ## v1.26.0 — 2026-06-16 (BE v1.26.0)
 
 ### Changed — Background jobs go quiet once the season is over
