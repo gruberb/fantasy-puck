@@ -40,6 +40,19 @@ pub fn game_type() -> u8 { *GAME_TYPE_CELL.get().expect("game_type config not in
 pub fn playoff_start() -> &'static str { PLAYOFF_START_CELL.get().expect("playoff_start config not initialized") }
 pub fn season_end() -> &'static str { SEASON_END_CELL.get().expect("season_end config not initialized") }
 
+/// True once `date` (YYYY-MM-DD) falls past the configured season end.
+/// ISO dates are zero-padded, so a lexicographic compare is chronological.
+///
+/// The daily cron jobs gate on this so they stop doing work once the
+/// season is over rather than churning `daily_rankings`, the response
+/// cache, and the Anthropic API every day through the off-season. Each
+/// job feeds in the date it actually operates on (the rankings and
+/// prewarm jobs work against *yesterday*, so the final game day is still
+/// captured the morning after before they go quiet).
+pub fn past_season_end(date: &str) -> bool {
+    date > season_end()
+}
+
 /// The date window DB aggregations should clamp to given the current
 /// game-type config. Playoff mode bounds both ends so pre-playoff and
 /// future-dated rows are excluded; other modes return unbounded.

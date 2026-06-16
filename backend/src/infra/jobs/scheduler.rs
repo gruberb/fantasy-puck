@@ -287,6 +287,11 @@ pub async fn init_rankings_scheduler(
                 .format("%Y-%m-%d")
                 .to_string();
 
+            if crate::api::past_season_end(&yesterday) {
+                info!(date = %yesterday, "Morning rankings: past season end, skipping");
+                return;
+            }
+
             process_daily_rankings_all_leagues(&db, &nhl_client, &yesterday).await;
 
             // Prune cache rows older than `tuning::CACHE_RETENTION`.
@@ -320,6 +325,11 @@ pub async fn init_rankings_scheduler(
                 .format("%Y-%m-%d")
                 .to_string();
 
+            if crate::api::past_season_end(&yesterday) {
+                info!(date = %yesterday, "Afternoon rankings: past season end, skipping");
+                return;
+            }
+
             process_daily_rankings_all_leagues(&db, &nhl_client, &yesterday).await;
         })
     })
@@ -332,6 +342,18 @@ pub async fn init_rankings_scheduler(
         let db = db_clone_insights.clone();
         let nhl_client = nhl_client_clone_insights.clone();
         Box::pin(async move {
+            let yesterday = Utc::now()
+                .checked_sub_signed(Duration::days(1))
+                .unwrap()
+                .naive_utc()
+                .format("%Y-%m-%d")
+                .to_string();
+
+            if crate::api::past_season_end(&yesterday) {
+                info!(date = %yesterday, "Daily prewarm: past season end, skipping");
+                return;
+            }
+
             info!("Running daily pre-warming job (playoff ingest + insights + race-odds)");
             ingest_yesterdays_playoff_games(&db, &nhl_client).await;
             prewarm_derived_payloads(&db, &nhl_client).await;
@@ -346,6 +368,12 @@ pub async fn init_rankings_scheduler(
         let db = db_clone_edge.clone();
         let nhl_client = nhl_client_clone_edge.clone();
         Box::pin(async move {
+            let today = Utc::now().naive_utc().format("%Y-%m-%d").to_string();
+            if crate::api::past_season_end(&today) {
+                info!(date = %today, "Edge refresh: past season end, skipping");
+                return;
+            }
+
             info!("Running nightly NHL Edge refresh");
             let _ = crate::infra::jobs::edge_refresher::run(&db, nhl_client, false).await;
         })

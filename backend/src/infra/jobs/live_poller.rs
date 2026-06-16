@@ -100,6 +100,12 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>) -> anyhow::Result<()> {
         .date_naive()
         .format("%Y-%m-%d")
         .to_string();
+
+    if crate::api::past_season_end(&today) {
+        debug!(date = %today, "live_poller: past season end, skipping tick");
+        return Ok(());
+    }
+
     let pool = db.pool();
 
     // Poll anything in LIVE|CRIT from any date plus today's PRE rows.

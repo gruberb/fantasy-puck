@@ -4,6 +4,21 @@ All notable changes to Fantasy Puck are documented here.
 
 ## Unreleased
 
+## v1.26.0 — 2026-06-16 (BE v1.26.0)
+
+### Changed — Background jobs go quiet once the season is over
+
+Every scheduled cron and both continuous pollers now self-skip once the
+calendar passes `NHL_SEASON_END`, so the backend can be left running (or
+scaled to zero) through the off-season without churning the daily
+rankings, the response cache, or the Anthropic API on empty slates. Each
+job gates on the date it actually operates on: the rankings and prewarm
+crons work against yesterday, so the final game day is still captured the
+morning after the season ends before they fall silent; the edge refresh
+and both pollers gate on today, since they mirror the current slate.
+Admin triggers remain ungated, so a manual re-run after the season is
+always available.
+
 ## v1.25.0 / v1.20.0 — 2026-06-15 (BE v1.25.0 / FE v1.20.0)
 
 ### Changed — Date pickers and rankings stop at the season's last game

@@ -44,6 +44,15 @@ All four crons register in `init_rankings_scheduler` ([`scheduler.rs:221-346`](.
 | Daily prewarm | `0 0 10 * * *` | 10:00 | 06:00 | `ingest_yesterdays_playoff_games` → `prewarm_derived_payloads` (insights + race-odds per league, plus global) | `GET /api/admin/prewarm` |
 | Edge refresh | `0 30 9 * * *` | 09:30 | 05:30 | `edge_refresher::run(force=false)` | Triggered opportunistically by `/api/admin/prewarm` with the same freshness gate |
 
+### Season-end gate
+
+Every cron self-skips once the season is over, so the process can keep running (or be left scaled to zero) through the off-season without churning `daily_rankings`, the response cache, and the Anthropic API on empty slates. Each job calls `api::past_season_end(date)` (a lexicographic compare against the `NHL_SEASON_END` config date) on the date it actually operates on:
+
+- **Morning / afternoon rankings** and **daily prewarm** work against *yesterday*, so they gate on yesterday. The final game day is still captured the morning after `season_end` before they go quiet.
+- **Edge refresh** captures *today's* telemetry, so it gates on today.
+
+The gate is a no-op during the season; it only matters once the calendar passes `season_end`. Admin triggers (`/api/admin/process-rankings`, `/api/admin/prewarm`) are not gated, so a manual re-run after the season is always possible.
+
 ### Morning rankings (09:00 UTC)
 
 Defined at [`scheduler.rs:239-270`](../backend/src/infra/jobs/scheduler.rs). For each league:
@@ -78,6 +87,8 @@ Order matters: playoff ingest goes first so the projection model inside `race_od
 Defined at [`scheduler.rs:307-315`](../backend/src/infra/jobs/scheduler.rs). Calls `edge_refresher::run(db, nhl, force=false)`. The freshness gate inside the refresher skips the run if `nhl_skater_edge` was updated within the last 18 hours - which means either the 09:30 cron or an admin prewarm becomes a no-op when the other already refreshed Edge recently. See [`04-nhl-integration.md`](./04-nhl-integration.md) for the refresh mechanics.
 
 ## Continuous pollers
+
+Both pollers carry the same season-end gate as the crons: each `tick_body` computes the Eastern-Time date and returns early via `api::past_season_end(today)` once the calendar passes `NHL_SEASON_END`. Live games on the final day are mirrored in real time during that day; the gate only silences ticks the day after. The pollers gate on *today* (not yesterday) because they mirror today's slate, mirroring the edge-refresh cron's choice.
 
 ### Meta poller
 

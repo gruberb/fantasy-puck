@@ -144,6 +144,12 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>, work: TickWork) -> anyh
     // ~4-hour window between midnight UTC and midnight ET.
     let today: NaiveDate = Utc::now().with_timezone(&New_York).date_naive();
     let today_str = today.format("%Y-%m-%d").to_string();
+
+    if crate::api::past_season_end(&today_str) {
+        debug!(date = %today_str, "meta_poller: past season end, skipping tick");
+        return Ok(());
+    }
+
     for (date, label) in [
         (today - ChronoDuration::days(2), "two-day-old schedule"),
         (today - ChronoDuration::days(1), "yesterday's schedule"),
