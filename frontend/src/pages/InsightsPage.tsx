@@ -1,5 +1,6 @@
 import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
 import { useInsights } from "@/features/insights";
+import InsightCard from "@/components/common/InsightCard";
 // RaceOddsSection is a Pulse surface (personal/league projections); Insights
 // stays NHL-centric. The Fantasy Champion leaderboard (no-league view) lives
 // alongside the Stanley Cup view instead.
@@ -8,12 +9,12 @@ import { useRaceOdds } from "@/features/race-odds/hooks/use-race-odds";
 import { PlayoffBracketTree } from "@/features/insights/components/PlayoffBracketTree";
 import { StanleyCupOdds } from "@/features/insights/components/StanleyCupOdds";
 import { Link } from "react-router-dom";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 import {
   getNHLTeamShortName,
   getNHLTeamLogoUrl,
-  getNHLTeamUrlSlug,
   nhlPlayerProfileUrl,
+  nhlTeamUrl,
 } from "@/utils/nhlTeams";
 import type {
   HotPlayerSignal,
@@ -187,27 +188,6 @@ const InsightsPage = () => {
 
 // -- Sub-components ----------------------------------------------------------
 
-function InsightCard({
-  accent,
-  title,
-  children,
-}: {
-  accent: string;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="bg-white rounded-none border-2 border-[#1A1A1A] overflow-hidden">
-      <div className="px-6 py-3 border-b-2 border-[#1A1A1A]" style={{ backgroundColor: accent }}>
-        <h2 className="font-extrabold text-white uppercase tracking-wider text-sm">
-          {title}
-        </h2>
-      </div>
-      <div className="p-6">{children}</div>
-    </div>
-  );
-}
-
 /**
  * Per-game card for Last Night: headline, final score, series state,
  * and up to three top scorers with point totals. Purely presentational;
@@ -247,7 +227,7 @@ function LastNightCard({ game }: { game: LastNightGame }) {
 /**
  * Renders text with a tiny markdown subset: `### Heading`, blank-line
  * paragraph breaks, and `**bold**`. Used by the Last Night section,
- * which gets per-game sub-headings from Claude. Unknown markdown lines
+ * which gets per-game sub-headings from the LLM. Unknown markdown lines
  * fall through as plain paragraphs.
  */
 function MarkdownNarrative({ text }: { text: string }) {
@@ -324,7 +304,7 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
         {/* Away team */}
         <div className="flex items-center gap-3">
           <a
-            href={`https://www.nhl.com/${getNHLTeamUrlSlug(game.awayTeam)}`}
+            href={nhlTeamUrl(game.awayTeam)}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-3 flex-1 min-w-0 hover:opacity-80"
@@ -356,7 +336,7 @@ function GameSignalCard({ game, narrative }: { game: TodaysGameSignal; narrative
         {/* Home team */}
         <div className="flex items-center gap-3">
           <a
-            href={`https://www.nhl.com/${getNHLTeamUrlSlug(game.homeTeam)}`}
+            href={nhlTeamUrl(game.homeTeam)}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-3 flex-1 min-w-0 hover:opacity-80"

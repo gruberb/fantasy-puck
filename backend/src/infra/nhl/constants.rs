@@ -25,14 +25,6 @@ pub mod players {
     pub fn team_roster(team_abbrev: &str) -> String {
         format!("{}/v1/roster/{}/current", NHL_API_BASE_URL, team_abbrev)
     }
-
-    /// Get a player's game log for a specific season and game type
-    pub fn player_game_log(player_id: i64, season: &u32, game_type: u8) -> String {
-        format!(
-            "{}/v1/player/{}/game-log/{}/{}",
-            NHL_API_BASE_URL, player_id, season, game_type
-        )
-    }
 }
 
 /// Team related endpoints

@@ -1,5 +1,5 @@
-import { getNHLTeamUrlSlug } from "@/utils/nhlTeams";
-import { useLeague } from "@/contexts/LeagueContext";
+import { nhlPlayerProfileUrl, nhlTeamUrl } from "@/utils/nhlTeams";
+import { useLeague } from "@/contexts/use-league";
 
 export const useSleepersRankingsColumns = () => {
   const { activeLeagueId } = useLeague();
@@ -32,7 +32,7 @@ export const useSleepersRankingsColumns = () => {
           )}
           <div>
             <a
-              href={`https://www.nhl.com/player/${player.nhlId}`}
+              href={nhlPlayerProfileUrl(player.nhlId)}
               target="_blank"
               rel="noopener noreferrer"
               className="font-bold text-base text-[#1A1A1A] hover:text-[#2563EB]"
@@ -42,7 +42,7 @@ export const useSleepersRankingsColumns = () => {
             <div className="text-xs text-gray-500">
               {player.position} •
               <a
-                href={`https://www.nhl.com/${getNHLTeamUrlSlug(player.nhlTeam)}`}
+                href={nhlTeamUrl(player.nhlTeam)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-[#2563EB] ml-1"

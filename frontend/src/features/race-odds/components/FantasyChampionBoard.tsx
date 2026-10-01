@@ -1,6 +1,6 @@
 import { getNHLTeamLogoUrl, getNHLTeamShortName } from "@/utils/nhlTeams";
 
-import type { PlayerOdds } from "../types";
+import type { PlayerOdds } from "@/features/race-odds/types";
 
 interface FantasyChampionBoardProps {
   players: PlayerOdds[];

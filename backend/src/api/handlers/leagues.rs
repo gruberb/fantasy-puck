@@ -9,10 +9,10 @@ use serde::Deserialize;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::auth::middleware::AuthUser;
+use crate::domain::models::db::League;
+use crate::error::Result;
 use crate::infra::db::leagues::LeagueMemberRow;
 use crate::infra::db::leagues::LeagueRow;
-use crate::error::Result;
-use crate::domain::models::db::League;
 
 // ---------------------------------------------------------------------------
 // Query / request types
@@ -72,7 +72,10 @@ pub async fn delete_league(
     auth_user: AuthUser,
     Path(league_id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>> {
-    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
+    state
+        .db
+        .verify_league_owner(&league_id, &auth_user.id)
+        .await?;
     state.db.delete_league(&league_id).await?;
     Ok(json_success(()))
 }
@@ -108,7 +111,10 @@ pub async fn remove_member(
     Path((league_id, member_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<()>>> {
     // Only the league owner can remove members
-    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
+    state
+        .db
+        .verify_league_owner(&league_id, &auth_user.id)
+        .await?;
 
     // Validate the member belongs to the league
     state

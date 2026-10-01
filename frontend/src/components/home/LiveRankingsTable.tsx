@@ -1,16 +1,16 @@
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/api/client";
 import RankingTable from "@/components/common/RankingTable";
 import {
   useLiveRankingsColumns,
   type LiveRankingRow,
 } from "@/components/rankingsPageTableColumns/liveColumns";
 import { QUERY_INTERVALS, clampToSeasonWindow } from "@/config";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 import type { Game, GamesResponse } from "@/types/games";
 import type { FantasyTeamInAction } from "@/types/matchDay";
 import { getHockeyDateToday } from "@/utils/timezone";
+import { isFinal, isLive } from "@/utils/gameState";
+import { useGamesQuery } from "@/features/games";
 
 /**
  * Appears at the top of the dashboard only while games are in flight
@@ -32,24 +32,16 @@ export function LiveRankingsTable() {
   // hides itself rather than firing an empty request for a future date.
   const today = clampToSeasonWindow(getHockeyDateToday());
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["dashboardLiveGames", today, activeLeagueId],
-    queryFn: () => api.getGames(today, activeLeagueId ?? undefined),
+  const { data, isLoading } = useGamesQuery(today, activeLeagueId, {
+    pollWhile: (games) => games.some((g) => !isFinal(g.gameState)),
     enabled: !!activeLeagueId,
-    retry: 1,
     staleTime: QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS,
-    refetchInterval: (query) => {
-      const games = (query.state.data as GamesResponse | undefined)?.games ?? [];
-      return games.some((g) => isUnfinishedState(g.gameState))
-        ? QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS
-        : false;
-    },
   });
 
   // Render nothing when games haven't loaded, there are no live games,
   // or no team has any active skaters. The section is a live-only
   // surface; we'd rather omit it than flash an empty frame.
-  if (isLoading || !data || !data.games.some((g) => isLiveState(g.gameState))) return null;
+  if (isLoading || !data || !data.games.some((g) => isLive(g.gameState))) return null;
 
   const myTeamId =
     myMemberships.find((m) => m.league_id === activeLeagueId)?.fantasy_team_id ?? null;
@@ -135,12 +127,3 @@ function buildRow(
   };
 }
 
-function isLiveState(state: string | null | undefined): boolean {
-  const s = (state ?? "").toUpperCase();
-  return s === "LIVE" || s === "CRIT";
-}
-
-function isUnfinishedState(state: string | null | undefined): boolean {
-  const s = (state ?? "").toUpperCase();
-  return s !== "OFF" && s !== "FINAL";
-}

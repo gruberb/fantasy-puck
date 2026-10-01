@@ -11,6 +11,7 @@ use crate::api::handlers;
 use crate::config::Config;
 use crate::domain::ports::prediction::PredictionService;
 use crate::infra::nhl::client::NhlClient;
+use crate::infra::prediction::openrouter::OpenRouterClient;
 use crate::ws::draft_hub::DraftHub;
 use crate::FantasyDb;
 
@@ -20,29 +21,18 @@ pub struct AppState {
     pub nhl_client: NhlClient,
     pub config: Arc<Config>,
     pub draft_hub: DraftHub,
-    /// Text-generation adapter (production: Claude via
-    /// `infra::prediction::claude::ClaudeNarrator`). Handlers call
+    /// Text-generation adapter (production: OpenRouter via
+    /// `infra::prediction::narrator::LlmNarrator`). Handlers call
     /// `state.prediction.team_diagnosis(...)` rather than building
-    /// a Claude request themselves.
+    /// a model request themselves.
     pub prediction: Arc<dyn PredictionService>,
+    /// Raw LLM client for the Insights prompts; `None` without an
+    /// OpenRouter key, in which case narratives fall back to static text.
+    pub llm: Option<Arc<OpenRouterClient>>,
 }
 
 // Create the router
-pub fn create_router(
-    db: FantasyDb,
-    nhl_client: NhlClient,
-    config: Arc<Config>,
-    prediction: Arc<dyn PredictionService>,
-) -> Router {
-    // Create shared application state
-    let state = Arc::new(AppState {
-        db,
-        nhl_client,
-        config,
-        draft_hub: DraftHub::new(),
-        prediction,
-    });
-
+pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         // ---------------------------------------------------------------
         // Health Checks
@@ -89,8 +79,7 @@ pub fn create_router(
         // ---------------------------------------------------------------
         .route(
             "/api/leagues/{league_id}/draft",
-            get(handlers::draft::get_draft_by_league)
-                .post(handlers::draft::create_draft_session),
+            get(handlers::draft::get_draft_by_league).post(handlers::draft::create_draft_session),
         )
         .route(
             "/api/leagues/{league_id}/draft/randomize-order",
@@ -98,8 +87,7 @@ pub fn create_router(
         )
         .route(
             "/api/draft/{draft_id}",
-            get(handlers::draft::get_draft_state)
-                .delete(handlers::draft::delete_draft),
+            get(handlers::draft::get_draft_state).delete(handlers::draft::delete_draft),
         )
         .route(
             "/api/draft/{draft_id}/populate",
@@ -151,8 +139,7 @@ pub fn create_router(
         .route("/api/fantasy/teams", get(handlers::teams::list_teams))
         .route(
             "/api/fantasy/teams/{id}",
-            get(handlers::teams::get_team)
-                .put(handlers::teams::update_team_name),
+            get(handlers::teams::get_team).put(handlers::teams::update_team_name),
         )
         .route(
             "/api/fantasy/teams/{id}/players",
@@ -221,24 +208,15 @@ pub fn create_router(
         // ---------------------------------------------------------------
         // Insights
         // ---------------------------------------------------------------
-        .route(
-            "/api/insights",
-            get(handlers::insights::get_insights),
-        )
+        .route("/api/insights", get(handlers::insights::get_insights))
         // ---------------------------------------------------------------
         // Pulse (me-focused live dashboard)
         // ---------------------------------------------------------------
-        .route(
-            "/api/pulse",
-            get(handlers::pulse::get_pulse),
-        )
+        .route("/api/pulse", get(handlers::pulse::get_pulse))
         // ---------------------------------------------------------------
         // Race Odds (Monte Carlo fantasy-race simulator)
         // ---------------------------------------------------------------
-        .route(
-            "/api/race-odds",
-            get(handlers::race_odds::get_race_odds),
-        )
+        .route("/api/race-odds", get(handlers::race_odds::get_race_odds))
         // ---------------------------------------------------------------
         // Admin
         // ---------------------------------------------------------------
@@ -258,18 +236,12 @@ pub fn create_router(
             "/api/admin/rebackfill-carousel",
             get(handlers::admin::rebackfill_carousel),
         )
-        .route(
-            "/api/admin/calibrate",
-            get(handlers::admin::calibrate),
-        )
+        .route("/api/admin/calibrate", get(handlers::admin::calibrate))
         .route(
             "/api/admin/calibrate-sweep",
             get(handlers::admin::calibrate_sweep_handler),
         )
-        .route(
-            "/api/admin/prewarm",
-            get(handlers::admin::prewarm_cache),
-        )
+        .route("/api/admin/prewarm", get(handlers::admin::prewarm_cache))
         .route(
             "/api/admin/rehydrate",
             get(handlers::admin::rehydrate_mirror),
@@ -281,16 +253,11 @@ pub fn create_router(
         // ---------------------------------------------------------------
         // WebSocket
         // ---------------------------------------------------------------
-        .route(
-            "/ws/draft/{session_id}",
-            get(crate::ws::handler::ws_draft),
-        )
+        .route("/ws/draft/{session_id}", get(crate::ws::handler::ws_draft))
         .with_state(state)
 }
 
-async fn health_ready(
-    State(state): State<Arc<AppState>>,
-) -> StatusCode {
+async fn health_ready(State(state): State<Arc<AppState>>) -> StatusCode {
     match state.db.ping().await {
         Ok(_) => StatusCode::OK,
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,

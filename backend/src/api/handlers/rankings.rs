@@ -13,20 +13,17 @@ use axum::{
     Json,
 };
 
-use crate::api::dtos::*;
 use crate::api::dtos::conversion::IntoResponse;
+use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{current_date_window, game_type, season};
 use crate::domain::models::db::FantasyTeamWithPlayers;
 use crate::domain::models::fantasy::TeamRanking;
-use crate::domain::models::nhl::PlayoffCarousel;
-use crate::domain::services::rankings::{
-    build_daily_rankings, DailyPlayerStat, SeasonSkaterStat,
-};
+use crate::domain::prediction::carousel::bracket_state;
+use crate::domain::services::rankings::{build_daily_rankings, DailyPlayerStat, SeasonSkaterStat};
 use crate::error::Result;
 use crate::infra::db::nhl_mirror;
-use crate::infra::nhl::urls::parse_date_param;
 
 // ---------------------------------------------------------------------
 // Overall season rankings: GET /api/fantasy/rankings
@@ -64,7 +61,7 @@ pub async fn get_rankings(
             total_points: r.points as i32,
         })
         .collect();
-    rankings.sort_by(|a, b| b.total_points.cmp(&a.total_points));
+    rankings.sort_by_key(|x| std::cmp::Reverse(x.total_points));
     for (i, r) in rankings.iter_mut().enumerate() {
         r.rank = i + 1;
     }
@@ -80,7 +77,7 @@ pub async fn get_daily_rankings(
     Query(params): Query<DailyRankingsParams>,
 ) -> Result<Json<ApiResponse<DailyRankingsResponse>>> {
     let league_id = &params.league_id;
-    let date = parse_date_param(params.date)?;
+    let date = crate::api::parse_date_param(&params.date)?;
 
     let rows = nhl_mirror::list_league_player_stats_for_date(state.db.pool(), league_id, &date)
         .await?
@@ -138,7 +135,12 @@ pub async fn get_playoff_rankings(
     let bets = state.db.get_fantasy_bets_by_nhl_team(league_id).await?;
     let bets_by_team: HashMap<i64, Vec<String>> = bets
         .into_iter()
-        .map(|b| (b.team_id, b.bets.into_iter().map(|bet| bet.nhl_team).collect()))
+        .map(|b| {
+            (
+                b.team_id,
+                b.bets.into_iter().map(|bet| bet.nhl_team).collect(),
+            )
+        })
         .collect();
 
     let teams_in_playoffs = load_teams_in_playoffs(&state).await?;
@@ -150,7 +152,7 @@ pub async fn get_playoff_rankings(
         .take(10)
         .map(|s| (s.nhl_id, s.goals + s.assists))
         .collect();
-    top_ten.sort_by(|a, b| b.1.cmp(&a.1));
+    top_ten.sort_by_key(|x| std::cmp::Reverse(x.1));
     let top_ids: HashSet<i64> = top_ten.iter().map(|(id, _)| *id).collect();
 
     let top_count_by_team: HashMap<i64, i32> = teams
@@ -185,7 +187,7 @@ pub async fn get_playoff_rankings(
         })
         .collect();
 
-    response.sort_by(|a, b| b.playoff_score.cmp(&a.playoff_score));
+    response.sort_by_key(|x| std::cmp::Reverse(x.playoff_score));
     for (i, entry) in response.iter_mut().enumerate() {
         entry.rank = i + 1;
     }
@@ -215,12 +217,9 @@ async fn load_league_teams(
 /// Load the skater leaderboard from the mirror and adapt to the
 /// shape the domain service consumes.
 async fn load_skater_leaderboard(state: &Arc<AppState>) -> Result<Vec<SeasonSkaterStat>> {
-    let rows = nhl_mirror::list_skater_season_stats(
-        state.db.pool(),
-        season() as i32,
-        game_type() as i16,
-    )
-    .await?;
+    let rows =
+        nhl_mirror::list_skater_season_stats(state.db.pool(), season() as i32, game_type() as i16)
+            .await?;
     Ok(rows
         .into_iter()
         .map(|r| SeasonSkaterStat {
@@ -231,28 +230,11 @@ async fn load_skater_leaderboard(state: &Arc<AppState>) -> Result<Vec<SeasonSkat
         .collect())
 }
 
-/// Parse the playoff carousel JSONB out of `nhl_playoff_bracket` and
-/// extract the set of NHL team abbrevs that are still alive.
+/// NHL team abbrevs still alive in the mirrored playoff bracket. Empty
+/// before the bracket is captured.
 async fn load_teams_in_playoffs(state: &Arc<AppState>) -> Result<HashSet<String>> {
-    let carousel_json: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT carousel FROM nhl_playoff_bracket WHERE season = $1",
-    )
-    .bind(season() as i32)
-    .fetch_optional(state.db.pool())
-    .await
-    .map_err(crate::error::Error::Database)?;
-
-    let Some(json) = carousel_json else {
-        return Ok(HashSet::new());
-    };
-    let carousel: PlayoffCarousel = match serde_json::from_value(json) {
-        Ok(c) => c,
-        Err(_) => return Ok(HashSet::new()),
-    };
-    let val = serde_json::to_value(carousel)
-        .map_err(|e| crate::error::Error::Internal(format!("serialization error: {e}")))?;
-    let parsed: PlayoffCarouselResponse = serde_json::from_value(val)
-        .map_err(|e| crate::error::Error::Internal(format!("conversion error: {e}")))?;
-    let computed = parsed.with_computed_state();
-    Ok(computed.teams_in_playoffs.into_iter().collect())
+    let carousel = nhl_mirror::get_playoff_carousel(state.db.pool(), season() as i32).await?;
+    Ok(carousel
+        .map(|c| bracket_state(&c).alive.into_iter().collect())
+        .unwrap_or_default())
 }

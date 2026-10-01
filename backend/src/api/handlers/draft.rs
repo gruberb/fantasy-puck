@@ -10,8 +10,8 @@ use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
 use crate::auth::middleware::AuthUser;
-use crate::infra::db::draft::{DraftPickRow, DraftSessionRow, PlayerPoolRow};
-use crate::error::{Error, Result};
+use crate::error::Result;
+use crate::infra::db::draft::{DraftPickRow, DraftSessionRow, PlayerPoolRow, SleeperRow};
 use crate::infra::jobs::player_pool::{
     fetch_playoff_roster_pool_cached, fetch_stats_leader_pool, PoolMap,
 };
@@ -20,7 +20,7 @@ use crate::ws::draft_hub::DraftEvent;
 /// Branch on configured game_type to build the pool.
 /// Playoffs (3) use the 16-team rosters; everything else uses the stats-leader endpoint.
 async fn build_player_pool(state: &AppState) -> Result<PoolMap> {
-    if game_type() == 3 {
+    if crate::api::is_playoffs() {
         fetch_playoff_roster_pool_cached(&state.db, &state.nhl_client, season(), game_type()).await
     } else {
         fetch_stats_leader_pool(&state.nhl_client, season(), game_type()).await
@@ -43,6 +43,24 @@ fn pool_to_inserts(
             }
         })
         .collect()
+}
+
+/// Global admins pass every league check so they can repair drafts in
+/// leagues they don't belong to.
+async fn require_member(state: &AppState, league_id: &str, user: &AuthUser) -> Result<()> {
+    if !user.is_admin {
+        state.db.verify_user_in_league(league_id, &user.id).await?;
+    }
+    Ok(())
+}
+
+/// Draft controls (pool, order, start/pause/resume, sleeper round) are
+/// owner-only, matching what the draft page exposes.
+async fn require_owner(state: &AppState, league_id: &str, user: &AuthUser) -> Result<()> {
+    if !user.is_admin {
+        state.db.verify_league_owner(league_id, &user.id).await?;
+    }
+    Ok(())
 }
 
 fn session_updated_event(s: &DraftSessionRow) -> DraftEvent {
@@ -95,9 +113,10 @@ pub struct DraftStateResponse {
 /// GET /api/leagues/:league_id/draft
 pub async fn get_draft_by_league(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(league_id): Path<String>,
 ) -> Result<Json<ApiResponse<Option<DraftStateResponse>>>> {
+    require_member(&state, &league_id, &auth_user).await?;
     let session = state.db.get_draft_session(&league_id).await?;
 
     match session {
@@ -122,7 +141,10 @@ pub async fn create_draft_session(
     Path(league_id): Path<String>,
     Json(body): Json<CreateDraftRequest>,
 ) -> Result<Json<ApiResponse<DraftSessionRow>>> {
-    state.db.verify_user_in_league(&league_id, &auth_user.id).await?;
+    state
+        .db
+        .verify_user_in_league(&league_id, &auth_user.id)
+        .await?;
     let session = state
         .db
         .create_draft_session(&league_id, body.total_rounds, body.snake_draft)
@@ -140,9 +162,15 @@ pub async fn create_draft_session(
 /// GET /api/draft/:draft_id
 pub async fn get_draft_state(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<DraftStateResponse>>> {
+    require_member(
+        &state,
+        &state.db.get_league_id_for_draft(&draft_id).await?,
+        &auth_user,
+    )
+    .await?;
     let session = state.db.get_draft_session_by_id(&draft_id).await?;
     let picks = state.db.get_draft_picks(&draft_id).await?;
     let player_pool = state.db.get_player_pool(&draft_id).await?;
@@ -157,11 +185,15 @@ pub async fn get_draft_state(
 /// POST /api/draft/:draft_id/populate
 pub async fn populate_player_pool(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<Vec<PlayerPoolRow>>>> {
-    let _session = state.db.get_draft_session_by_id(&draft_id).await?;
-
+    require_owner(
+        &state,
+        &state.db.get_league_id_for_draft(&draft_id).await?,
+        &auth_user,
+    )
+    .await?;
     let pool = build_player_pool(&state).await?;
 
     state.db.delete_player_pool(&draft_id).await?;
@@ -183,9 +215,10 @@ pub async fn populate_player_pool(
 /// POST /api/leagues/:league_id/draft/randomize-order
 pub async fn randomize_order(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(league_id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>> {
+    require_owner(&state, &league_id, &auth_user).await?;
     state.db.randomize_draft_order(&league_id).await?;
     Ok(json_success(()))
 }
@@ -193,17 +226,20 @@ pub async fn randomize_order(
 /// POST /api/draft/:draft_id/start
 pub async fn start_draft(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<DraftSessionRow>>> {
+    require_owner(
+        &state,
+        &state.db.get_league_id_for_draft(&draft_id).await?,
+        &auth_user,
+    )
+    .await?;
     let session = state.db.start_draft_session(&draft_id).await?;
 
     state
         .draft_hub
-        .broadcast(
-            &draft_id,
-            session_updated_event(&session),
-        )
+        .broadcast(&draft_id, session_updated_event(&session))
         .await;
 
     Ok(json_success(session))
@@ -212,17 +248,20 @@ pub async fn start_draft(
 /// POST /api/draft/:draft_id/pause
 pub async fn pause_draft(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<DraftSessionRow>>> {
+    require_owner(
+        &state,
+        &state.db.get_league_id_for_draft(&draft_id).await?,
+        &auth_user,
+    )
+    .await?;
     let session = state.db.pause_draft_session(&draft_id).await?;
 
     state
         .draft_hub
-        .broadcast(
-            &draft_id,
-            session_updated_event(&session),
-        )
+        .broadcast(&draft_id, session_updated_event(&session))
         .await;
 
     Ok(json_success(session))
@@ -231,17 +270,20 @@ pub async fn pause_draft(
 /// POST /api/draft/:draft_id/resume
 pub async fn resume_draft(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<DraftSessionRow>>> {
+    require_owner(
+        &state,
+        &state.db.get_league_id_for_draft(&draft_id).await?,
+        &auth_user,
+    )
+    .await?;
     let session = state.db.resume_draft_session(&draft_id).await?;
 
     state
         .draft_hub
-        .broadcast(
-            &draft_id,
-            session_updated_event(&session),
-        )
+        .broadcast(&draft_id, session_updated_event(&session))
         .await;
 
     Ok(json_success(session))
@@ -254,7 +296,10 @@ pub async fn delete_draft(
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>> {
     let league_id = state.db.get_league_id_for_draft(&draft_id).await?;
-    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
+    state
+        .db
+        .verify_league_owner(&league_id, &auth_user.id)
+        .await?;
     state.db.delete_draft_session(&draft_id).await?;
     Ok(json_success(()))
 }
@@ -266,108 +311,31 @@ pub async fn make_pick(
     Path(draft_id): Path<String>,
     Json(body): Json<MakePickRequest>,
 ) -> Result<Json<ApiResponse<DraftPickRow>>> {
-    // Get the current session
-    let session = state.db.get_draft_session_by_id(&draft_id).await?;
-    state.db.verify_user_in_league(&session.league_id, &auth_user.id).await?;
-
-    if session.status != "active" {
-        return Err(Error::Validation("Draft is not active".into()));
-    }
-
-    // Get members to check total picks
-    let member_ids = state
+    let league_id = state.db.get_league_id_for_draft(&draft_id).await?;
+    state
         .db
-        .get_league_member_ids_ordered(&session.league_id)
-        .await?;
-    let num_members = member_ids.len() as i32;
-    let total_picks = session.total_rounds * num_members;
-
-    if session.current_pick_index >= total_picks {
-        return Err(Error::Validation("All rounds are complete".into()));
-    }
-
-    // Look up the player in the pool
-    let pool_player = state
-        .db
-        .get_draft_pool_player(&body.player_pool_id, &draft_id)
+        .verify_user_in_league(&league_id, &auth_user.id)
         .await?;
 
-    // Check that this player hasn't already been picked
-    let already_picked = state
+    let (pick, session) = state
         .db
-        .check_player_already_picked(&draft_id, pool_player.nhl_id)
+        .make_draft_pick(&draft_id, &body.player_pool_id)
         .await?;
 
-    if already_picked {
-        return Err(Error::Validation("Player already drafted".into()));
+    match serde_json::to_value(&pick) {
+        Ok(pick_json) => {
+            state
+                .draft_hub
+                .broadcast(&draft_id, DraftEvent::PickMade { pick: pick_json })
+                .await
+        }
+        Err(e) => {
+            tracing::warn!(draft_id = %draft_id, "failed to serialize pick for broadcast: {e}")
+        }
     }
-
-    if num_members == 0 {
-        return Err(Error::Validation("No members in league".into()));
-    }
-
-    // current_pick_index is a GLOBAL counter: 0, 1, 2, ..., (total_rounds * num_members - 1)
-    let pick_index = session.current_pick_index;
-    let round = pick_index / num_members; // 0-based round
-    let index_in_round = pick_index % num_members;
-
-    // Snake draft: even rounds go forward, odd rounds go reverse
-    let member_index = if session.snake_draft && round % 2 == 1 {
-        (num_members - 1) - index_in_round
-    } else {
-        index_in_round
-    };
-
-    let picking_member_id = &member_ids[member_index as usize];
-
-    // Insert the pick (pick_number is the global 0-based index, matching frontend)
-    let pick = state
-        .db
-        .insert_draft_pick(crate::infra::db::draft::DraftPickInsert {
-            draft_session_id: draft_id.clone(),
-            league_member_id: picking_member_id.clone(),
-            player_pool_id: body.player_pool_id.clone(),
-            nhl_id: pool_player.nhl_id,
-            player_name: pool_player.name.clone(),
-            nhl_team: pool_player.nhl_team.clone(),
-            position: pool_player.position.clone(),
-            round: round + 1, // 1-based for display
-            pick_number: pick_index, // 0-based global index
-        })
-        .await?;
-
-    // Advance: increment global pick index and compute new round (1-based)
-    let new_pick_index = pick_index + 1;
-    let new_round = (new_pick_index / num_members) + 1; // 1-based
-
-    // Check if all rounds are now complete
-    let updated_session = if new_pick_index >= total_picks {
-        // Mark as "picks_done" — admin needs to finalize before sleeper round
-        state
-            .db
-            .update_draft_status(&draft_id, "picks_done", None, None)
-            .await?;
-        state.db.get_draft_session_by_id(&draft_id).await?
-    } else {
-        state
-            .db
-            .advance_draft_session(&draft_id, new_pick_index, new_round)
-            .await?
-    };
-
-    // Broadcast events
-    let pick_json = serde_json::to_value(&pick).unwrap_or_default();
     state
         .draft_hub
-        .broadcast(&draft_id, DraftEvent::PickMade { pick: pick_json })
-        .await;
-
-    state
-        .draft_hub
-        .broadcast(
-            &draft_id,
-            session_updated_event(&updated_session),
-        )
+        .broadcast(&draft_id, session_updated_event(&session))
         .await;
 
     Ok(json_success(pick))
@@ -379,8 +347,12 @@ pub async fn finalize_draft(
     auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>> {
-    let league_id = state.db.get_league_id_for_draft(&draft_id).await?;
-    state.db.verify_user_in_league(&league_id, &auth_user.id).await?;
+    require_member(
+        &state,
+        &state.db.get_league_id_for_draft(&draft_id).await?,
+        &auth_user,
+    )
+    .await?;
 
     // Sync draft picks to fantasy_players table
     state.db.finalize_draft_to_players(&draft_id).await?;
@@ -396,10 +368,7 @@ pub async fn finalize_draft(
     // Broadcast so all clients transition to sleeper round
     state
         .draft_hub
-        .broadcast(
-            &draft_id,
-            session_updated_event(&session),
-        )
+        .broadcast(&draft_id, session_updated_event(&session))
         .await;
 
     Ok(json_success(()))
@@ -411,8 +380,12 @@ pub async fn complete_draft(
     auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>> {
-    let league_id = state.db.get_league_id_for_draft(&draft_id).await?;
-    state.db.verify_user_in_league(&league_id, &auth_user.id).await?;
+    require_member(
+        &state,
+        &state.db.get_league_id_for_draft(&draft_id).await?,
+        &auth_user,
+    )
+    .await?;
 
     state
         .db
@@ -436,9 +409,15 @@ pub async fn complete_draft(
 /// GET /api/draft/:draft_id/sleepers
 pub async fn get_eligible_sleepers(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<Vec<PlayerPoolRow>>>> {
+    require_member(
+        &state,
+        &state.db.get_league_id_for_draft(&draft_id).await?,
+        &auth_user,
+    )
+    .await?;
     let sleepers = state.db.get_undrafted_pool_players(&draft_id).await?;
     Ok(json_success(sleepers))
 }
@@ -446,9 +425,15 @@ pub async fn get_eligible_sleepers(
 /// POST /api/draft/:draft_id/sleeper/start
 pub async fn start_sleeper_round(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<DraftSessionRow>>> {
+    require_owner(
+        &state,
+        &state.db.get_league_id_for_draft(&draft_id).await?,
+        &auth_user,
+    )
+    .await?;
     let session = state.db.start_sleeper_round(&draft_id).await?;
 
     state
@@ -462,34 +447,12 @@ pub async fn start_sleeper_round(
 /// GET /api/draft/:draft_id/sleeper-picks
 pub async fn get_sleeper_picks(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(draft_id): Path<String>,
-) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>> {
+) -> Result<Json<ApiResponse<Vec<SleeperRow>>>> {
     let session = state.db.get_draft_session_by_id(&draft_id).await?;
-    let picks: Vec<serde_json::Value> = sqlx::query_as::<_, (i64, i64, i64, String, String, String)>(
-        r#"
-        SELECT fs.id, fs.team_id, fs.nhl_id, fs.name, fs.position, fs.nhl_team
-        FROM fantasy_sleepers fs
-        JOIN league_members lm ON lm.fantasy_team_id = fs.team_id
-        WHERE lm.league_id = $1::uuid
-        ORDER BY fs.id
-        "#,
-    )
-    .bind(&session.league_id)
-    .fetch_all(state.db.pool())
-    .await?
-    .into_iter()
-    .map(|(id, team_id, nhl_id, name, position, nhl_team)| {
-        serde_json::json!({
-            "id": id,
-            "teamId": team_id,
-            "nhlId": nhl_id,
-            "name": name,
-            "position": position,
-            "nhlTeam": nhl_team
-        })
-    })
-    .collect();
+    require_member(&state, &session.league_id, &auth_user).await?;
+    let picks = state.db.list_league_sleepers(&session.league_id).await?;
 
     Ok(json_success(picks))
 }
@@ -501,78 +464,20 @@ pub async fn make_sleeper_pick(
     Path(draft_id): Path<String>,
     Json(body): Json<MakeSleeperPickRequest>,
 ) -> Result<Json<ApiResponse<()>>> {
-    let session = state.db.get_draft_session_by_id(&draft_id).await?;
-    state.db.verify_user_in_league(&session.league_id, &auth_user.id).await?;
-
-    if session.sleeper_status.as_deref() != Some("active") {
-        return Err(Error::Validation("Sleeper round is not active".into()));
-    }
-
-    // Check how many members — each gets exactly 1 pick
-    let member_ids = state.db.get_league_member_ids_ordered(&session.league_id).await?;
-    let num_members = member_ids.len() as i32;
-
-    if session.sleeper_pick_index >= num_members {
-        return Err(Error::Validation("All sleeper picks are done".into()));
-    }
-
-    // Check if this team already picked a sleeper
-    let already_has_sleeper: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM fantasy_sleepers WHERE team_id = $1 LIMIT 1",
-    )
-    .bind(body.team_id)
-    .fetch_optional(state.db.pool())
-    .await?;
-
-    if already_has_sleeper.is_some() {
-        return Err(Error::Validation("This team already has a sleeper pick".into()));
-    }
-
-    // Look up the pool player
-    let pool_player = state
-        .db
-        .get_draft_pool_player(&body.player_pool_id, &draft_id)
-        .await?;
-
-    // Check if this NHL player is already picked as a sleeper by another team
-    let player_already_sleeper: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM fantasy_sleepers WHERE nhl_id = $1 LIMIT 1",
-    )
-    .bind(pool_player.nhl_id)
-    .fetch_optional(state.db.pool())
-    .await?;
-
-    if player_already_sleeper.is_some() {
-        return Err(Error::Validation("This player is already picked as a sleeper by another team".into()));
-    }
-
-    // Insert sleeper pick and advance the index
+    let league_id = state.db.get_league_id_for_draft(&draft_id).await?;
     state
         .db
-        .insert_sleeper_and_advance(
-            &draft_id,
-            body.team_id,
-            pool_player.nhl_id,
-            &pool_player.name,
-            &pool_player.position,
-            &pool_player.nhl_team,
-        )
+        .verify_user_in_league(&league_id, &auth_user.id)
         .await?;
 
-    // Check if all sleeper picks are now done
-    let new_index = session.sleeper_pick_index + 1;
-    if new_index >= num_members {
-        state.db.update_sleeper_status(&draft_id, "completed", new_index).await?;
-    }
+    let session = state
+        .db
+        .make_sleeper_pick(&draft_id, body.team_id, &body.player_pool_id)
+        .await?;
 
-    // Broadcast updated session so all clients refresh
-    let updated = state.db.get_draft_session_by_id(&draft_id).await?;
     state
         .draft_hub
-        .broadcast(
-            &draft_id,
-            session_updated_event(&updated),
-        )
+        .broadcast(&draft_id, session_updated_event(&session))
         .await;
     state
         .draft_hub

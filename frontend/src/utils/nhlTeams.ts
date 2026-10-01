@@ -10,6 +10,27 @@ export function nhlPlayerProfileUrl(nhlId: number | string): string {
   return `https://www.nhl.com/player/${nhlId}`;
 }
 
+/** Team page on nhl.com; accepts an abbreviation, full name, or short name. */
+export function nhlTeamUrl(teamIdentifier: string): string {
+  return `https://www.nhl.com/${getNHLTeamUrlSlug(teamIdentifier)}`;
+}
+
+export function nhlGamecenterUrl(
+  gameId: number | string,
+  view?: "recap" | "boxscore",
+): string {
+  const base = `https://www.nhl.com/gamecenter/${gameId}`;
+  return view ? `${base}/${view}` : base;
+}
+
+export function nhlHeadshotUrl(nhlId: number | string): string {
+  return `https://assets.nhle.com/mugs/nhl/latest/${nhlId}.png`;
+}
+
+/** Generic silhouette for `<img onError>` when a player has no mug shot. */
+export const NHL_HEADSHOT_FALLBACK =
+  "https://assets.nhle.com/mugs/nhl/latest/default.png";
+
 // Map from team abbreviation to team information
 export const NHL_TEAMS_BY_ABBREV: Record<string, NHLTeamInfo> = {
   ANA: {

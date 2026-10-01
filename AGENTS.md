@@ -81,7 +81,7 @@ For multi-phase plans, commit each phase locally but hold the push + tag until t
 - `useInsights()` works with or without a league ID. Global route at `/insights`, league-scoped at `/league/:id/insights`.
 - Draft system uses WebSocket (`DraftHub`) for real-time updates.
 - Scheduled background tasks in `backend/src/utils/scheduler.rs` (daily rankings, playoff info, insights).
-- AI insights use the Anthropic API; generated narratives are cached per hockey-date in the `response_cache` table.
+- AI insights use OpenRouter (default model `anthropic/claude-sonnet-5.5`, override with `OPENROUTER_MODEL`); generated narratives are cached per hockey-date in the `response_cache` table.
 
 ## Switching season / game type
 

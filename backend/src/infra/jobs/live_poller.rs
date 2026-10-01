@@ -18,12 +18,13 @@
 
 use std::sync::Arc;
 
-use chrono::{Duration, Utc};
-use chrono_tz::America::New_York;
+use chrono::Duration;
 use tokio::time::{interval_at, Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::domain::models::nhl::GameState;
+use crate::infra::db::cache_keys;
 use crate::infra::db::{nhl_mirror, FantasyDb};
 use crate::infra::nhl::client::NhlClient;
 use crate::tuning::live_mirror;
@@ -95,11 +96,7 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>) -> anyhow::Result<()> {
     // `tick_body`. Using Utc::now() here would lose every late ET
     // game between midnight UTC and midnight ET because the
     // mirror has the row keyed under the previous day.
-    let today = Utc::now()
-        .with_timezone(&New_York)
-        .date_naive()
-        .format("%Y-%m-%d")
-        .to_string();
+    let today = crate::domain::time::hockey_today();
 
     if crate::api::past_season_end(&today) {
         debug!(date = %today, "live_poller: past season end, skipping tick");
@@ -133,10 +130,7 @@ async fn tick_body(db: &FantasyDb, nhl: &Arc<NhlClient>) -> anyhow::Result<()> {
     let grace = Duration::minutes(FINAL_SYNC_GRACE_MINUTES);
     match nhl_mirror::list_games_needing_final_sync(pool, grace).await {
         Ok(ids) if !ids.is_empty() => {
-            debug!(
-                count = ids.len(),
-                "live_poller: final-sync sweep starting"
-            );
+            debug!(count = ids.len(), "live_poller: final-sync sweep starting");
             for game_id in ids {
                 if let Err(e) = finalize_one_game(db, nhl, game_id).await {
                     warn!(
@@ -171,12 +165,11 @@ async fn finalize_one_game(
     let pool = db.pool();
 
     let box_score = nhl.get_game_boxscore_fresh(game_id as u32).await?;
-    let (home, away): (String, String) = sqlx::query_as(
-        "SELECT home_team, away_team FROM nhl_games WHERE game_id = $1",
-    )
-    .bind(game_id)
-    .fetch_one(pool)
-    .await?;
+    let (home, away): (String, String) =
+        sqlx::query_as("SELECT home_team, away_team FROM nhl_games WHERE game_id = $1")
+            .bind(game_id)
+            .fetch_one(pool)
+            .await?;
     let written =
         nhl_mirror::upsert_boxscore_players(pool, game_id, &home, &away, &box_score).await?;
     nhl_mirror::mark_game_stats_finalized(pool, game_id).await?;
@@ -188,11 +181,7 @@ async fn finalize_one_game(
     Ok(())
 }
 
-async fn poll_one_game(
-    db: &FantasyDb,
-    nhl: &Arc<NhlClient>,
-    game_id: i64,
-) -> anyhow::Result<()> {
+async fn poll_one_game(db: &FantasyDb, nhl: &Arc<NhlClient>, game_id: i64) -> anyhow::Result<()> {
     let pool = db.pool();
 
     // Snapshot the previous state before anything else so we can
@@ -208,12 +197,11 @@ async fn poll_one_game(
 
     // Home/away abbrevs live on the game row we already have. Single
     // SELECT.
-    let (home, away): (String, String) = sqlx::query_as(
-        "SELECT home_team, away_team FROM nhl_games WHERE game_id = $1",
-    )
-    .bind(game_id)
-    .fetch_one(pool)
-    .await?;
+    let (home, away): (String, String) =
+        sqlx::query_as("SELECT home_team, away_team FROM nhl_games WHERE game_id = $1")
+            .bind(game_id)
+            .fetch_one(pool)
+            .await?;
 
     let written =
         nhl_mirror::upsert_boxscore_players(pool, game_id, &home, &away, &box_score).await?;
@@ -225,10 +213,13 @@ async fn poll_one_game(
     // update in that case rather than clobber with defaults.
     let mut new_state_for_invalidation: Option<String> = None;
     if let Ok(Some(data)) = nhl.get_game_data(game_id as u32).await {
-        let state_str = serde_json::to_value(&data.game_state)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_else(|| "LIVE".into());
+        // An unrecognised upstream state would be written as UNKNOWN,
+        // which no poller filter matches and would strand the game; keep
+        // the last known state instead.
+        let state_str = match data.game_state {
+            GameState::Unknown => previous_state.clone().unwrap_or_else(|| "LIVE".into()),
+            state => state.as_str().to_string(),
+        };
         new_state_for_invalidation = Some(state_str.clone());
         nhl_mirror::update_game_live_state(
             pool,
@@ -250,7 +241,7 @@ async fn poll_one_game(
     // Only the `:v2` narrative tail is wiped. The `:bundle:v1` payload
     // (projections, grades, recent-games rollup, yesterday recap) is
     // left in place: those columns are stable mid-evening and the
-    // expensive Claude regen would otherwise stall the next Pulse load
+    // expensive LLM regen would otherwise stall the next Pulse load
     // for every team that had a player in the just-ended game. The
     // bundle ages out naturally on the date roll, and the daily
     // prewarm rebuilds it the next morning with the new narrative
@@ -262,7 +253,7 @@ async fn poll_one_game(
             let leagues = nhl_mirror::list_leagues_with_player_in_game(pool, game_id).await?;
             let cache = db.cache();
             for league_id in &leagues {
-                let pattern = format!("team_diagnosis:{}:%:v2", league_id);
+                let pattern = cache_keys::team_diagnosis_for_league(league_id);
                 match cache.invalidate_by_like(&pattern).await {
                     Ok(n) => debug!(
                         game_id,

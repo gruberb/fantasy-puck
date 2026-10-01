@@ -86,16 +86,24 @@ pub async fn get_sleepers(
         });
     }
 
-    sleeper_stats.sort_by(|a, b| b.total_points.cmp(&a.total_points));
+    sleeper_stats.sort_by_key(|x| std::cmp::Reverse(x.total_points));
     Ok(json_success(sleeper_stats))
 }
 
 /// DELETE /api/fantasy/sleepers/:sleeper_id
 pub async fn remove_sleeper(
     State(state): State<Arc<AppState>>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
     Path(sleeper_id): Path<i64>,
 ) -> Result<Json<ApiResponse<()>>> {
+    // Super admins manage sleepers from the settings page too.
+    if !auth_user.is_admin {
+        let league_id = state.db.get_league_id_for_sleeper(sleeper_id).await?;
+        state
+            .db
+            .verify_league_owner(&league_id, &auth_user.id)
+            .await?;
+    }
     state.db.remove_sleeper(sleeper_id).await?;
     Ok(json_success(()))
 }

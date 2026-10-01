@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import InsightCard from "@/components/common/InsightCard";
 import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
 import SeriesForecastHero from "@/components/pulse/SeriesForecastHero";
 import YourReadSection from "@/components/pulse/YourReadSection";
@@ -7,9 +8,10 @@ import YourLeagueSection from "@/components/pulse/YourLeagueSection";
 import { usePulse } from "@/features/pulse";
 import { RaceOddsSection } from "@/features/race-odds/components/RaceOddsSection";
 import { MyStakes } from "@/features/race-odds/components/MyStakes";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 import { getNHLTeamLogoUrl, getNHLTeamShortName, nhlPlayerProfileUrl } from "@/utils/nhlTeams";
 import type { MyGameTonight } from "@/features/pulse";
+import { isFinal, isLive } from "@/utils/gameState";
 
 const PulsePage = () => {
   const { pulse, isLoading, error } = usePulse();
@@ -38,12 +40,7 @@ const PulsePage = () => {
           First thing the caller sees: their standing + which of their players
           are playing today. */}
       {myTeam && (
-        <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-          <header className="bg-[#1A1A1A] text-white px-6 py-3">
-            <h2 className="font-extrabold uppercase tracking-wider text-sm">
-              Tonight
-            </h2>
-          </header>
+        <InsightCard accent="#1A1A1A" title="Tonight" bodyClassName="">
           <div className="p-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <Link
@@ -79,7 +76,7 @@ const PulsePage = () => {
               </p>
             </div>
           )}
-        </section>
+        </InsightCard>
       )}
 
       {/* Your Read — descriptive diagnosis narrative + concentration
@@ -107,20 +104,13 @@ const PulsePage = () => {
       {/* My Stakes — "which NHL series am I rooting for?" — every NHL team
           the caller rosters, sorted by impact on their race. */}
       {myTeam && (
-        <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-          <header className="bg-[#1A1A1A] text-white px-6 py-3">
-            <h2 className="font-extrabold uppercase tracking-wider text-sm">
-              My Stakes
-            </h2>
-          </header>
-          <div className="p-6">
-            <MyStakes
-              myTeam={
-                seriesForecast.find((f) => f.teamId === myTeam.teamId) ?? null
-              }
-            />
-          </div>
-        </section>
+        <InsightCard accent="#1A1A1A" title="My Stakes">
+          <MyStakes
+            myTeam={
+              seriesForecast.find((f) => f.teamId === myTeam.teamId) ?? null
+            }
+          />
+        </InsightCard>
       )}
 
       {/* Series Rosters — each fantasy team's players grouped by NHL series.
@@ -160,10 +150,8 @@ function StatCol({
 }
 
 function GameTonightCard({ game }: { game: MyGameTonight }) {
-  const isLive = game.gameState.toUpperCase() === "LIVE";
-  const isFinal =
-    game.gameState.toUpperCase() === "FINAL" ||
-    game.gameState.toUpperCase() === "OFF";
+  const live = isLive(game.gameState);
+  const final = isFinal(game.gameState);
   return (
     <div className="border-2 border-gray-300 p-3">
       <div className="flex items-center justify-between mb-2">
@@ -198,14 +186,14 @@ function GameTonightCard({ game }: { game: MyGameTonight }) {
         </div>
         <span
           className={`text-[10px] tracking-widest uppercase ${
-            isLive
+            live
               ? "text-[#DC2626] font-bold"
-              : isFinal
+              : final
                 ? "text-gray-500"
                 : "text-gray-400"
           }`}
         >
-          {isLive && game.period ? game.period : isFinal ? "Final" : formatTime(game.startTimeUtc)}
+          {live && game.period ? game.period : final ? "Final" : formatTime(game.startTimeUtc)}
         </span>
       </div>
 

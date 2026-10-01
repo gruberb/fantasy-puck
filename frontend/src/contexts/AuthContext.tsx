@@ -1,27 +1,8 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  ReactNode,
-} from "react";
+import { useEffect, useState, ReactNode } from "react";
 import { authService } from "@/features/auth";
+import { LAST_VIEWED_LEAGUE_KEY } from "@/config";
 import type { AuthUser, AuthProfile } from "@/features/auth";
-
-interface AuthContextType {
-  user: AuthUser | null;
-  profile: AuthProfile | null;
-  loading: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (
-    email: string,
-    password: string,
-    displayName: string,
-  ) => Promise<void>;
-  signOut: () => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+import { AuthContext } from "./use-auth";
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -79,7 +60,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     await authService.logout();
     setUser(null);
     setProfile(null);
-    localStorage.removeItem("lastViewedLeagueId");
+    localStorage.removeItem(LAST_VIEWED_LEAGUE_KEY);
   };
 
   return (
@@ -89,12 +70,4 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       {children}
     </AuthContext.Provider>
   );
-};
-
-export const useAuth = (): AuthContextType => {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return context;
 };

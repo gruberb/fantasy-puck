@@ -26,6 +26,12 @@ pub struct DraftHub {
     channels: RwLock<HashMap<String, broadcast::Sender<String>>>,
 }
 
+impl Default for DraftHub {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DraftHub {
     pub fn new() -> Self {
         Self {
@@ -51,9 +57,23 @@ impl DraftHub {
             return tx.subscribe();
         }
 
-        let (tx, rx) = broadcast::channel(64);
+        let (tx, rx) = broadcast::channel(crate::tuning::http::WS_BROADCAST_CAPACITY);
         channels.insert(session_id.to_string(), tx);
         rx
+    }
+
+    /// Drop the session's channel once its last subscriber has gone, so
+    /// the map only holds sessions with live connections. Callers drop
+    /// their receiver first. A concurrent `subscribe` either ran before
+    /// (the count is non-zero) or runs after and recreates the channel.
+    pub async fn release(&self, session_id: &str) {
+        let mut channels = self.channels.write().await;
+        if channels
+            .get(session_id)
+            .is_some_and(|tx| tx.receiver_count() == 0)
+        {
+            channels.remove(session_id);
+        }
     }
 
     /// Broadcast a draft event to all subscribers of a session.
@@ -70,5 +90,23 @@ impl DraftHub {
             // Ignore send errors (no active receivers)
             let _ = tx.send(msg);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn release_drops_channel_only_after_last_subscriber() {
+        let hub = DraftHub::new();
+        let a = hub.subscribe("s").await;
+        let b = hub.subscribe("s").await;
+        drop(a);
+        hub.release("s").await;
+        assert!(hub.channels.read().await.contains_key("s"));
+        drop(b);
+        hub.release("s").await;
+        assert!(!hub.channels.read().await.contains_key("s"));
     }
 }

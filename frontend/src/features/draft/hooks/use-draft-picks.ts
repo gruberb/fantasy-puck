@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { draftApi } from '../api/draft-api';
-import type { DraftPick } from '../types';
+import { draftApi } from '@/features/draft/api/draft-api';
+import type { DraftPick } from '@/features/draft/types';
 
 export const draftPicksQueryKey = (draftSessionId: string | null) =>
   ['draft', 'picks', draftSessionId] as const;

@@ -2,9 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 
 import { QUERY_INTERVALS } from "@/config";
 import { fetchApi } from "@/lib/api-client";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 
-import type { RaceOddsResponse } from "../types";
+import type { RaceOddsResponse } from "@/features/race-odds/types";
 
 interface UseRaceOddsOptions {
   /**

@@ -3,9 +3,44 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api/client";
 import { QUERY_INTERVALS, clampToSeasonWindow } from "@/config";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 import { getHockeyDateToday } from "@/utils/timezone";
 import { getTeamPrimaryColor } from "@/utils/teamStyles";
+import { isLive } from "@/utils/gameState";
+import type { Game } from "@/types/games";
+
+export const gamesQueryKey = (date: string, leagueId: string | null) =>
+  ["games", date, leagueId] as const;
+
+interface GamesQueryOptions {
+  /** Poll at `GAMES_LIVE_REFRESH_MS` while this returns true for the latest slate. */
+  pollWhile: (games: Game[]) => boolean;
+  enabled?: boolean;
+  staleTime?: number;
+}
+
+/**
+ * Single cache entry per (date, league) so the dashboard's live table and
+ * the Games page share one request. React Query polls at the shortest
+ * interval any mounted observer asks for.
+ */
+export function useGamesQuery(
+  date: string,
+  leagueId: string | null,
+  { pollWhile, enabled = true, staleTime }: GamesQueryOptions,
+) {
+  return useQuery({
+    queryKey: gamesQueryKey(date, leagueId),
+    queryFn: () => api.getGames(date, leagueId ?? undefined),
+    enabled,
+    staleTime,
+    retry: 1,
+    refetchInterval: (query) =>
+      pollWhile(query.state.data?.games ?? [])
+        ? QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS
+        : false,
+  });
+}
 
 export function useGamesData(dateParam?: string) {
   const navigate = useNavigate();
@@ -50,25 +85,11 @@ export function useGamesData(dateParam?: string) {
     isLoading: gamesLoading,
     error: gamesError,
     refetch: refetchGames,
-  } = useQuery({
-    queryKey: ["games", selectedDate, activeLeagueId],
-    queryFn: () => api.getGames(selectedDate, activeLeagueId ?? undefined),
-    retry: 1,
-    refetchInterval: (query) => {
-      const state = (query.state.data as typeof gamesData | undefined)?.games ?? [];
-      const anyLive = state.some((g) => {
-        const s = (g.gameState || "").toUpperCase();
-        return s === "LIVE" || s === "CRIT";
-      });
-      return anyLive ? QUERY_INTERVALS.GAMES_LIVE_REFRESH_MS : false;
-    },
+  } = useGamesQuery(selectedDate, activeLeagueId, {
+    pollWhile: (games) => games.some((g) => isLive(g.gameState)),
   });
 
-  const hasLiveGames =
-    gamesData?.games?.some((game) => {
-      const state = (game.gameState || "").toUpperCase();
-      return state === "LIVE" || state === "CRIT";
-    }) ?? false;
+  const hasLiveGames = gamesData?.games?.some((g) => isLive(g.gameState)) ?? false;
 
   const isTodaySelected = selectedDate === getHockeyDateToday();
 

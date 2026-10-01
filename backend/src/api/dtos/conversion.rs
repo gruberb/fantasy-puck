@@ -1,5 +1,5 @@
-use crate::api::dtos::PlayerHighlightResponse;
 use crate::api::dtos::rankings::DailyFantasyRankingResponse;
+use crate::api::dtos::PlayerHighlightResponse;
 use crate::domain::models::fantasy::{DailyRanking, PlayerHighlight};
 
 pub trait IntoResponse {

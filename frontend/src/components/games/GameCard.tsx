@@ -1,6 +1,6 @@
 import { Game } from "@/types/games";
 import PlayerCard from "@/components/common/PlayerCard";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 import NHLGameCard from "./NHLGameCard";
 
 interface StandardGameCardProps {

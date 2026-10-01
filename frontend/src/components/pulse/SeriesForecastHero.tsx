@@ -1,3 +1,4 @@
+import InsightCard from "@/components/common/InsightCard";
 import { nhlPlayerProfileUrl } from "@/utils/nhlTeams";
 import type {
   FantasyTeamForecast,
@@ -52,11 +53,11 @@ export default function SeriesForecastHero({
   }
 
   return (
-    <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-      <header className="bg-[#1A1A1A] text-white px-6 py-3 flex items-center justify-between">
-        <h2 className="font-extrabold uppercase tracking-wider text-sm">
-          Series Rosters
-        </h2>
+    <InsightCard
+      accent="#1A1A1A"
+      title="Series Rosters"
+      bodyClassName="divide-y-2 divide-[#1A1A1A]"
+      headerRight={
         <div className="hidden md:flex items-center gap-2 text-[10px] uppercase tracking-wider">
           {STATE_LEGEND.map((s) => (
             <span key={s.code} className="flex items-center gap-1">
@@ -67,18 +68,16 @@ export default function SeriesForecastHero({
             </span>
           ))}
         </div>
-      </header>
-
-      <div className="divide-y-2 divide-[#1A1A1A]">
-        {sorted.map((team) => (
-          <TeamForecastRow
-            key={team.teamId}
-            team={team}
-            isMine={team.teamId === myTeamId}
-          />
-        ))}
-      </div>
-    </section>
+      }
+    >
+      {sorted.map((team) => (
+        <TeamForecastRow
+          key={team.teamId}
+          team={team}
+          isMine={team.teamId === myTeamId}
+        />
+      ))}
+    </InsightCard>
   );
 }
 

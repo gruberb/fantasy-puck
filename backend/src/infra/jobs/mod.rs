@@ -7,6 +7,7 @@ pub mod edge_refresher;
 pub mod historical_seed;
 pub mod live_poller;
 pub mod meta_poller;
+pub mod mirror_steps;
 pub mod player_pool;
 pub mod playoff_ingest;
 pub mod rehydrate;

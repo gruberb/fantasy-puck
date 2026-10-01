@@ -12,13 +12,17 @@
 //! the raw carousel here rather than the projections.
 
 use crate::domain::models::nhl::{PlayoffCarousel, Series};
+use crate::domain::prediction::carousel::games_to_clinch;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SeasonPhase {
     /// The bracket is still being decided. `round_label` is the
     /// human-facing label of the deepest round with a known matchup
     /// (e.g. "Stanley Cup Final"); `summary` describes its live series.
-    InProgress { round_label: String, summary: String },
+    InProgress {
+        round_label: String,
+        summary: String,
+    },
     /// The final is clinched. Abbreviations, not full names — the domain
     /// layer has no team-name table; callers expand if they want prose.
     Over {
@@ -101,16 +105,6 @@ impl SeasonPhase {
     }
 }
 
-/// A best-of-7 needs 4 wins; treat a missing/zero `needed_to_win` as 4 so a
-/// malformed carousel row can't be read as "already clinched" at 0-0.
-fn games_to_clinch(series: &Series) -> i64 {
-    if series.needed_to_win > 0 {
-        series.needed_to_win
-    } else {
-        4
-    }
-}
-
 fn team_known(abbrev: &str) -> bool {
     !abbrev.trim().is_empty() && !abbrev.eq_ignore_ascii_case("tbd")
 }
@@ -149,15 +143,25 @@ fn describe_series(series: &Series) -> Option<String> {
     let top = (&series.top_seed.abbrev, series.top_seed.wins);
     let bottom = (&series.bottom_seed.abbrev, series.bottom_seed.wins);
     if top.1 == bottom.1 {
-        return Some(format!("{} and {} tied {}-{}", top.0, bottom.0, top.1, bottom.1));
+        return Some(format!(
+            "{} and {} tied {}-{}",
+            top.0, bottom.0, top.1, bottom.1
+        ));
     }
-    let (lead, trail) = if top.1 > bottom.1 { (top, bottom) } else { (bottom, top) };
+    let (lead, trail) = if top.1 > bottom.1 {
+        (top, bottom)
+    } else {
+        (bottom, top)
+    };
     let verb = if lead.1 >= games_to_clinch(series) {
         "beat"
     } else {
         "leads"
     };
-    Some(format!("{} {verb} {} {}-{}", lead.0, trail.0, lead.1, trail.1))
+    Some(format!(
+        "{} {verb} {} {}-{}",
+        lead.0, trail.0, lead.1, trail.1
+    ))
 }
 
 fn normalize_round_label(label: &str, round_number: i64) -> String {

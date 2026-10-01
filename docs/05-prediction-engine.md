@@ -14,7 +14,7 @@ series_projection.rs   empirical lookup (used for UI, not sim)
 backtest.rs            replay helpers
 ```
 
-Database-backed adapters live under [`backend/src/infra/prediction/`](../backend/src/infra/prediction/) (Elo replay loop, Claude narrator). The calibration harness lives at [`backend/src/infra/calibrate.rs`](../backend/src/infra/calibrate.rs).
+Database-backed adapters live under [`backend/src/infra/prediction/`](../backend/src/infra/prediction/) (Elo replay loop, LLM narrator). The calibration harness lives at [`backend/src/infra/calibrate.rs`](../backend/src/infra/calibrate.rs).
 
 ## The forecast problem
 
@@ -362,6 +362,21 @@ This is the engine that puts everything together. It takes:
 
 And returns for each fantasy team: projected final total (mean, median, p10, p90), win probability, top-3 probability, head-to-head probabilities. Plus per-NHL-team: round-advance probabilities and expected games played.
 
+### Inputs come from the mirror
+
+The race-odds handler ([`handlers/race_odds.rs`](../backend/src/api/handlers/race_odds.rs), `load_nhl_inputs`) builds every NHL-side input from Postgres, so a cache miss never calls the NHL API on the request path:
+
+| Input | Mirror source |
+| --- | --- |
+| Bracket | `nhl_playoff_bracket` |
+| Standings (team ratings, Elo seed, per-team home-ice bonus) | `nhl_standings.raw` via `load_standings_payload` |
+| Regular-season points (RS PPG, projection prior, Fantasy Champion pool) | `nhl_skater_season_stats` at `game_type = 2`, written from club stats, so every skater is covered rather than the top 25 per category |
+| Season points for the configured game type (fallback for "points so far") | `nhl_skater_season_stats` at the configured game type |
+| Goalie bonus | regular-season `nhl_goalie_season_stats` (`wins`, `save_pctg`) |
+| Points so far ("Current") | `sum_player_points`: finalized games only, clamped to the configured date window, the same rule Rankings uses |
+
+Fantasy Champion mode simulates the top `CHAMPION_POOL_SIZE` (40) regular-season skaters by points.
+
 ### Constants
 
 From [`race_sim.rs:246-277`](../backend/src/domain/prediction/race_sim.rs):
@@ -456,10 +471,10 @@ File: [`backend/src/domain/prediction/season_phase.rs`](../backend/src/domain/pr
 
 Detection is bracket-driven, not calendar-driven. The season is "over" only when the deepest round (highest `round_number`) has a series clinched (`wins >= needed_to_win`, defaulting to 4). A Game 7 that finishes past midnight Eastern therefore won't flip the app into recap mode a day early, and this trigger is independent of the `NHL_SEASON_END` date cap that bounds the pickers.
 
-Two consumers feed `prompt_line()` (or the over/label fields) into their Claude prompts:
+Two consumers feed `prompt_line()` (or the over/label fields) into their LLM prompts:
 
-- **Insights** ([`handlers/insights.rs`](../backend/src/api/handlers/insights.rs)): while live, a `=== SEASON STATE ===` block lets narratives name the round ("Stanley Cup Final"). Once over, `call_claude_recap` replaces the daily preview with a markdown `season_recap` field — an NHL Cup wrap-up, plus a fantasy-league wrap-up (champion, final standings, top scorers from `list_league_team_season_totals` + `list_top_rostered_skaters`) on the league-scoped route. The global `/insights` recap stays NHL-only. Recap responses carry no `todaysGames`, so the cache self-heal that regenerates on empty-games is gated on `season_recap.is_some()` to avoid re-hitting Claude every request.
-- **Pulse** ([`handlers/team_breakdown.rs`](../backend/src/api/handlers/team_breakdown.rs) populates `TeamDiagnosis.season_over` / `season_phase_label`): the headline carries the phase line, and `ClaudeNarrator::team_diagnosis` swaps to `TEAM_DIAGNOSIS_RECAP_SYSTEM_PROMPT` when over — reframing the four sections into How It Ended / What Carried You / What Fell Short / The Verdict. No new data is fetched; the recap reads the rank, totals, and per-player lines already in the headline.
+- **Insights** ([`handlers/insights.rs`](../backend/src/api/handlers/insights.rs)): while live, a `=== SEASON STATE ===` block lets narratives name the round ("Stanley Cup Final"). Once over, `generate_season_recap` replaces the daily preview with a markdown `season_recap` field — an NHL Cup wrap-up, plus a fantasy-league wrap-up (champion, final standings, top scorers from `list_league_team_season_totals` + `list_top_rostered_skaters`) on the league-scoped route. The global `/insights` recap stays NHL-only. Recap responses carry no `todaysGames`, so the cache self-heal that regenerates on empty-games is gated on `season_recap.is_some()` to avoid re-hitting the model every request.
+- **Pulse** ([`handlers/team_breakdown.rs`](../backend/src/api/handlers/team_breakdown.rs) populates `TeamDiagnosis.season_over` / `season_phase_label`): the headline carries the phase line, and `LlmNarrator::team_diagnosis` swaps to `TEAM_DIAGNOSIS_RECAP_SYSTEM_PROMPT` when over — reframing the four sections into How It Ended / What Carried You / What Fell Short / The Verdict. No new data is fetched; the recap reads the rank, totals, and per-player lines already in the headline.
 
 ## 6a. Player grading
 
@@ -529,7 +544,7 @@ All mirror tables are populated by background jobs (see [`04-nhl-integration.md`
 
 ## 8. Calibration
 
-File: [`backend/src/infra/calibrate.rs`](../backend/src/infra/calibrate.rs). Admin endpoints at `GET /api/admin/calibrate` and `GET /api/admin/calibrate-sweep` ([`handlers/admin.rs:291-318`](../backend/src/api/handlers/admin.rs)).
+File: [`backend/src/infra/calibrate.rs`](../backend/src/infra/calibrate.rs). Admin endpoints at `GET /api/admin/calibrate` and `GET /api/admin/calibrate-sweep` ([`handlers/admin.rs`](../backend/src/api/handlers/admin.rs)).
 
 Calibration answers: are the probabilities this model produces actually honest? If the model says "30% chance of winning round 1", then across all 30% predictions, the team should actually win about 30% of the time.
 
@@ -554,7 +569,7 @@ Brier score is `mean((predicted_prob - actual)²)`. Lower is better; perfect is 
 
 The production `DEFAULT_K_FACTOR = 0.010` and `PRODUCTION_SHRINKAGE = 0.7` come from sweeps against 2021-22 through 2024-25 backfilled seasons. Earlier values concentrated Cup probability too tightly on chalky favourites (Colorado at 39 % on 2025-26 vs HockeyStats reference of about 13 %). The docstring on `PRODUCTION_SHRINKAGE` ([`playoff_elo.rs:43-49`](../backend/src/domain/prediction/playoff_elo.rs)) carries the rationale.
 
-Operators run the sweep off-line. The endpoint is capped at 200 grid cells so a misconfigured invocation cannot peg the server for hours ([`handlers/admin.rs:289-290`](../backend/src/api/handlers/admin.rs)).
+Operators run the sweep off-line. The endpoint is capped at 200 grid cells so a misconfigured invocation cannot peg the server for hours ([`handlers/admin.rs`](../backend/src/api/handlers/admin.rs)).
 
 ## Where the outputs surface
 
@@ -563,6 +578,6 @@ Operators run the sweep off-line. The endpoint is capped at 200 grid cells so a 
 | `/api/race-odds` (Race Odds page, Fantasy Champion board) | `race_sim::simulate` wrapped in `response_cache` | Per-fantasy-team win probability, head-to-head, Stanley Cup odds per NHL team |
 | `/api/pulse` (Pulse page) | `series_projection` for series badges; race-sim outputs for fan-wide context | "Your team has X% chance to finish first"; today's stakes |
 | `/api/insights` (Insights page) | Player projection + bracket enrichment | Hot / cold players; round previews |
-| `/api/pulse` (Pulse "Your Read" + "Your League" blocks) | `project_players` + `grade` + previous-date mirror stats + cached race-odds + Claude narrator | Per-player box line + grade + bucket + remaining-points impact; team-level descriptive diagnosis narrative with a Yesterday section; top-3 projected finishers across the league |
+| `/api/pulse` (Pulse "Your Read" + "Your League" blocks) | `project_players` + `grade` + previous-date mirror stats + cached race-odds + LLM narrator | Per-player box line + grade + bucket + remaining-points impact; team-level descriptive diagnosis narrative with a Yesterday section; top-3 projected finishers across the league |
 
 See [`03-api.md`](./03-api.md) for endpoint shapes and cache keys.

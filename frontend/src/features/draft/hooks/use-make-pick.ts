@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { draftApi } from '../api/draft-api';
+import { draftApi } from '@/features/draft/api/draft-api';
 import { draftSessionQueryKey } from './use-draft-session';
 import { draftPicksQueryKey } from './use-draft-picks';
-import type { PlayerPoolEntry } from '../types';
+import type { PlayerPoolEntry } from '@/features/draft/types';
 
 export function useMakePick() {
   const queryClient = useQueryClient();

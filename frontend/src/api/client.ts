@@ -1,5 +1,4 @@
 import { fetchApi, withLeague } from '@/lib/api-client';
-import { authService } from '@/features/auth';
 import {
   NHLTeam,
   FantasyTeamPoints,
@@ -17,18 +16,6 @@ import { APP_CONFIG } from '@/config';
 // API client functions
 export const api = {
   // ── Auth ───────────────────────────────────────────────────────────────
-
-  async login(email: string, password: string) {
-    return authService.login(email, password);
-  },
-
-  async register(email: string, password: string, displayName: string) {
-    return authService.register(email, password, displayName);
-  },
-
-  async logout() {
-    return authService.logout();
-  },
 
   async updateProfile(displayName: string) {
     return fetchApi("auth/profile", { method: "PUT", body: { displayName } });
@@ -49,8 +36,8 @@ export const api = {
     return fetchApi<League[]>(endpoint, { fallback: [] });
   },
 
-  async createLeague(name: string, season?: string) {
-    return fetchApi("leagues", { method: "POST", body: { name, season } });
+  async createLeague(name: string, season?: string): Promise<League> {
+    return fetchApi<League>("leagues", { method: "POST", body: { name, season } });
   },
 
   async deleteLeague(leagueId: string) {
@@ -236,74 +223,7 @@ export const api = {
     return fetchApi(`fantasy/sleepers/${sleeperId}`, { method: "DELETE" });
   },
 
-  async createDraftSession(
-    leagueId: string,
-    totalRounds: number,
-    snakeDraft: boolean,
-  ) {
-    return fetchApi(`leagues/${leagueId}/draft`, {
-      method: "POST",
-      body: { totalRounds, snakeDraft },
-    });
-  },
-
-  async getDraftState(draftId: string) {
-    return fetchApi(`draft/${draftId}`);
-  },
-
-  async populatePlayerPool(draftId: string) {
-    return fetchApi(`draft/${draftId}/populate`, { method: "POST" });
-  },
-
-  async randomizeDraftOrder(leagueId: string) {
-    return fetchApi(`leagues/${leagueId}/draft/randomize-order`, {
-      method: "POST",
-    });
-  },
-
-  async startDraft(draftId: string) {
-    return fetchApi(`draft/${draftId}/start`, { method: "POST" });
-  },
-
-  async pauseDraft(draftId: string) {
-    return fetchApi(`draft/${draftId}/pause`, { method: "POST" });
-  },
-
-  async resumeDraft(draftId: string) {
-    return fetchApi(`draft/${draftId}/resume`, { method: "POST" });
-  },
-
   async deleteDraftSession(draftId: string) {
     return fetchApi(`draft/${draftId}`, { method: "DELETE" });
-  },
-
-  async makePick(draftId: string, playerPoolId: string) {
-    return fetchApi(`draft/${draftId}/pick`, {
-      method: "POST",
-      body: { playerPoolId },
-    });
-  },
-
-  async finalizeDraft(draftId: string) {
-    return fetchApi(`draft/${draftId}/finalize`, { method: "POST" });
-  },
-
-  async getEligibleSleepers(draftId: string) {
-    return fetchApi(`draft/${draftId}/sleepers`);
-  },
-
-  async startSleeperRound(draftId: string) {
-    return fetchApi(`draft/${draftId}/sleeper/start`, { method: "POST" });
-  },
-
-  async makeSleeperPick(
-    draftId: string,
-    playerPoolId: string,
-    teamId: number,
-  ) {
-    return fetchApi(`draft/${draftId}/sleeper/pick`, {
-      method: "POST",
-      body: { playerPoolId, teamId },
-    });
   },
 };

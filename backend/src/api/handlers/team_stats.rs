@@ -10,8 +10,8 @@ use crate::api::dtos::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{current_date_window, game_type, playoff_start, season};
-use crate::error::Result;
 use crate::domain::models::db::FantasyTeamWithPlayers;
+use crate::error::Result;
 use crate::infra::db::{nhl_mirror, DateWindow};
 
 /// Per-team season-overview cards on the rankings page. Reads the same
@@ -79,7 +79,7 @@ pub async fn get_team_stats(
     // `daily_rankings` is append-only across seasons and game types, so
     // playoff Season Overview must clamp to `playoff_start()` or it
     // counts regular-season daily wins as playoff wins.
-    let daily_window = if game_type() == 3 {
+    let daily_window = if crate::api::is_playoffs() {
         DateWindow::since(playoff_start())
     } else {
         DateWindow::unbounded()
@@ -129,7 +129,7 @@ pub async fn get_team_stats(
             *nhl_team_points.entry(player.nhl_team.clone()).or_insert(0) += points;
         }
 
-        player_stats.sort_by(|a, b| b.points.cmp(&a.points));
+        player_stats.sort_by_key(|x| std::cmp::Reverse(x.points));
         let top_players = player_stats.into_iter().take(3).collect();
 
         let mut top_nhl_teams = nhl_team_points
@@ -141,7 +141,7 @@ pub async fn get_team_stats(
                 team_name: state.nhl_client.get_team_name(&nhl_team),
             })
             .collect::<Vec<_>>();
-        top_nhl_teams.sort_by(|a, b| b.points.cmp(&a.points));
+        top_nhl_teams.sort_by_key(|x| std::cmp::Reverse(x.points));
         let top_nhl_teams = top_nhl_teams.into_iter().take(3).collect();
 
         let (daily_wins, daily_top_three, win_dates, top_three_dates) = daily_rankings_map

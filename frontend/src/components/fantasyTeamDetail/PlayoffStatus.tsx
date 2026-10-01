@@ -1,6 +1,6 @@
 import { NHLTeamBet } from "@/types/fantasyTeams";
 import { SkaterStats } from "@/types/skaters";
-import { getNHLTeamUrlSlug } from "@/utils/nhlTeams";
+import { nhlPlayerProfileUrl, nhlTeamUrl } from "@/utils/nhlTeams";
 import { usePlayoffsData } from "@/features/rankings";
 
 interface PlayoffStatusProps {
@@ -40,7 +40,7 @@ export default function PlayoffStatus({
                 <div className="flex flex-wrap gap-2">
                   {teamsInPlayoffs.map((team) => (
                     <a
-                      href={`https://www.nhl.com/${getNHLTeamUrlSlug(team.nhlTeam)}`}
+                      href={nhlTeamUrl(team.nhlTeam)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-gray-900 hover:text-[#2563EB] hover:underline flex items-center font-medium"
@@ -93,7 +93,7 @@ export default function PlayoffStatus({
                         className={`flex items-center" ${!isInPlayoffs ? "opacity-25" : ""}`}
                       >
                         <a
-                          href={`https://www.nhl.com/player/${player.nhlId}`}
+                          href={nhlPlayerProfileUrl(player.nhlId)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-gray-900 hover:text-[#2563EB] hover:underline flex items-center font-medium"

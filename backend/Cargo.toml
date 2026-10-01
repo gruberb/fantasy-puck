@@ -1,6 +1,6 @@
 [package]
 name = "fantasy-hockey"
-version = "1.26.0"
+version = "1.27.0"
 edition = "2021"
 
 [dependencies]
@@ -36,3 +36,4 @@ rand = { version = "0.8", features = ["small_rng"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 secrecy = "0.10"
 async-trait = "0.1"
+thiserror = "2"

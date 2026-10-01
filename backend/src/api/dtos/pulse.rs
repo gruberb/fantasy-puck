@@ -37,7 +37,7 @@ pub struct PulseResponse {
     pub nhl_team_cup_odds: HashMap<String, f32>,
     /// Full per-player breakdown + descriptive diagnosis for the
     /// caller's team — concentration chips, grades, remaining-points
-    /// projections, yesterday's mirror-backed recap, and the Claude
+    /// projections, yesterday's mirror-backed recap, and the LLM
     /// `### Yesterday / ### Where You Stand / ### Player-by-Player /
     /// ### What to Expect` narrative. Populated
     /// only when `my_team` is resolved and we're in playoff mode.
@@ -110,7 +110,6 @@ pub struct LeagueOutlookStack {
     /// cached race-odds payload. Zero when not available.
     pub cup_win_prob: f32,
 }
-
 
 /// A single matchup on today's slate, surfaced at the top level of
 /// `PulseResponse` so the dashboard's Live Rankings section can

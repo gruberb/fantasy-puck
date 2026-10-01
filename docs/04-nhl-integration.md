@@ -52,13 +52,13 @@ File: [`backend/src/infra/nhl/client.rs`](../backend/src/infra/nhl/client.rs). B
 
 ### Rate limit handling
 
-The NHL API enforces per-IP limits without a public quota. The client's `fetch_raw` loop ([`client.rs:107-160`](../backend/src/infra/nhl/client.rs)) treats a 429 as transient: it waits `base << (retries-1)` milliseconds and tries again, up to five retries. At the default 500 ms base, the worst-case total wait is about 15 seconds before the call surfaces an `Error::NhlApi` to the caller.
+The NHL API enforces per-IP limits without a public quota. The client's `fetch_raw` loop ([`client.rs`](../backend/src/infra/nhl/client.rs)) treats a 429 as transient: it waits `base << (retries-1)` milliseconds and tries again, up to five retries. At the default 500 ms base, the worst-case total wait is about 15 seconds before the call surfaces an `Error::NhlApi` to the caller.
 
 Every outbound call also has to acquire a permit from a shared `tokio::sync::Semaphore` of size 10. That's the ceiling on how many NHL requests this process can have in flight at once. Raising it speeds up fan-out-heavy pages but pushes more calls into the 429 window; 10 is the value that survived 2026 playoff traffic ([`tuning.rs:67`](../backend/src/tuning.rs)).
 
 ### In-memory URL cache
 
-Responses are cached in a `tokio::sync::RwLock<HashMap<String, CacheEntry>>`. Keys are full URLs; entries carry an insertion `Instant` and a `Duration` TTL ([`client.rs:18-29`](../backend/src/infra/nhl/client.rs)). `make_request_cached` checks for a non-expired entry under a read lock, falls back to `fetch_raw` on miss, and writes the body back under a write lock ([`client.rs:163-197`](../backend/src/infra/nhl/client.rs)).
+Responses are cached in a `tokio::sync::RwLock<HashMap<String, CacheEntry>>`. Keys are full URLs; entries carry an insertion `Instant` and a `Duration` TTL ([`client.rs`](../backend/src/infra/nhl/client.rs)). `make_request_cached` checks for a non-expired entry under a read lock, falls back to `fetch_raw` on miss, and writes the body back under a write lock ([`client.rs`](../backend/src/infra/nhl/client.rs)).
 
 Per-endpoint TTLs, all declared in [`tuning::nhl_client`](../backend/src/tuning.rs):
 
@@ -140,30 +140,32 @@ The locks are session-scoped, which is why the pollers hold a dedicated connecti
 
 ## Meta poller
 
-File: [`backend/src/infra/jobs/meta_poller.rs`](../backend/src/infra/jobs/meta_poller.rs). Spawned from [`main.rs:166-172`](../backend/src/main.rs).
+File: [`backend/src/infra/jobs/meta_poller.rs`](../backend/src/infra/jobs/meta_poller.rs). Spawned from [`main.rs`](../backend/src/main.rs).
 
 | Property | Value | Source |
 | --- | --- | --- |
 | Interval | 5 min | `live_mirror::META_POLL_INTERVAL` |
 | Startup delay | 15 s | `live_mirror::META_POLL_STARTUP_DELAY` |
 | Lock | `META_LOCK_KEY` | |
-| Missed-tick behavior | `Skip` | `meta_poller.rs:40` |
+| Missed-tick behavior | `Skip` | `meta_poller.rs` |
+
+The steps themselves live in [`infra/jobs/mirror_steps.rs`](../backend/src/infra/jobs/mirror_steps.rs), shared with the admin rehydrate so the two pipelines can't drift. Every writer is a batched `UNNEST` upsert (one statement per table per step), and typed payloads are written as-is: a serialization failure is an error, never a NULL that overwrites good data.
 
 The poller maintains a `counter: u32` and uses it to gate work at coarser cadences:
 
-- **Every tick** - The previous two ET dates plus today's schedule → `nhl_games`. Pre-game landing captures for today's FUT/PRE games → `nhl_game_landing` (write-once). "Today" is the Eastern Time date, not the UTC date, because NHL's `/schedule/{date}` is keyed by ET. The implementation uses `chrono_tz::America::New_York` ([`meta_poller.rs:148`](../backend/src/infra/jobs/meta_poller.rs)).
-- **Every 6 ticks (≈30 min)** - Tomorrow's schedule, skater leaderboard, goalie leaderboard, standings, playoff carousel (if `game_type == 3`).
-- **Every 288 ticks (≈24 h)** - Walk all 32 team rosters with a 250 ms delay between fetches (`ROSTER_FETCH_DELAY`).
+- **Every tick** - The previous two ET dates plus today's schedule → `nhl_games`. Pre-game landing captures for today's FUT/PRE games → `nhl_game_landing` (write-once). "Today" is the Eastern Time date, not the UTC date, because NHL's `/schedule/{date}` is keyed by ET. The ET date comes from `domain::time::hockey_today_date`. `upsert_game` reports whether a game is new or changed state; only then (or when a game is cancelled) does today's step drop today's `insights:*` cache rows. Score-only changes don't, because the cached narrative is a day preview and regenerating it per goal would cost an LLM call per goal per league.
+- **Every 6 ticks (≈30 min)** - Tomorrow's schedule, skater leaderboard, goalie leaderboard (plus the regular-season goalie leaderboard in playoff mode, for the goalie rating bonus), standings (typed columns plus the `raw` entry), playoff carousel (in playoff mode).
+- **Every 288 ticks (≈24 h)** - All 32 team rosters and each team's regular-season club stats, paced by `ROSTER_FETCH_DELAY`. They run as one step behind one freshness gate so the club stats can't go stale for a whole roster TTL.
 
 The schedule mirror tolerates NHL's playoff placeholders: `TBD` teams can arrive with `team.id = -1`, and if-necessary series records can carry `-1` counters before the opponent is known. Scores are read from `homeTeam.score` / `awayTeam.score` when the older `gameScore` block is absent. After every successful schedule fetch, unresolved `FUT` / `PRE` rows for that same date, season, and game type that no longer appear upstream are marked `CANCELLED`; user-facing game reads and landing capture skip those rows so dropped if-necessary games do not keep 404ing through gamecenter. The regular poller also refreshes the two previous schedules so late upstream cancellations and completed-game series-status corrections self-heal on historical Games pages without route handlers calling NHL live.
 
-Each step has a freshness gate that reads the mirror's `updated_at` and skips the fetch if the row was touched more recently than the step's TTL. This keeps a server restart from re-fetching everything on the first tick just because `counter` reset to 1 ([`meta_poller.rs:128-136`](../backend/src/infra/jobs/meta_poller.rs)).
+Each step has a freshness gate that reads the mirror's `updated_at` and skips the fetch if the row was touched more recently than the step's TTL. This keeps a server restart from re-fetching everything on the first tick just because `counter` reset to 1.
 
 Per-step errors are logged at `warn` and swallowed - a transient NHL outage on one endpoint does not prevent the others from running.
 
 ## Live poller
 
-File: [`backend/src/infra/jobs/live_poller.rs`](../backend/src/infra/jobs/live_poller.rs). Spawned from [`main.rs:173-180`](../backend/src/main.rs).
+File: [`backend/src/infra/jobs/live_poller.rs`](../backend/src/infra/jobs/live_poller.rs). Spawned from [`main.rs`](../backend/src/main.rs).
 
 | Property | Value | Source |
 | --- | --- | --- |
@@ -182,7 +184,7 @@ The tick body ([`live_poller.rs:85-109`](../backend/src/infra/jobs/live_poller.r
 1. Snapshot the previous `game_state` from the mirror.
 2. `get_game_boxscore(game_id)` → `upsert_boxscore_players` writes every skater and goalie row into `nhl_player_game_stats`.
 3. `get_game_data(game_id)` returns the state/score/period block; `update_game_live_state` writes those columns on `nhl_games`.
-4. If `(previous, new)` transitioned from `LIVE|CRIT` to `OFF|FINAL`, look up every league that had a rostered player in this game, and for each call `cache.invalidate_by_like(f"team_diagnosis:{league_id}:%:v2")`. Scores do not need invalidation — they live in the mirror. Only the narrative text, which refers to the in-progress game by name, needs regeneration. The sibling `:bundle:v1` payload is intentionally left in place: its projections, grades, and recent-games rollup are stable through the evening, and wiping it would stall the next Pulse load on a synchronous Claude rebuild.
+4. If `(previous, new)` transitioned from `LIVE|CRIT` to `OFF|FINAL`, look up every league that had a rostered player in this game, and for each call `cache.invalidate_by_like(f"team_diagnosis:{league_id}:%:v2")`. Scores do not need invalidation — they live in the mirror. Only the narrative text, which refers to the in-progress game by name, needs regeneration. The sibling `:bundle:v1` payload is intentionally left in place: its projections, grades, and recent-games rollup are stable through the evening, and wiping it would stall the next Pulse load on a synchronous LLM rebuild.
 
 The invalidation runs exactly once per game because the state write in step 3 flips the mirror before the check in step 4 fires; the next tick sees the new state and skips the block.
 
@@ -209,7 +211,7 @@ At 30 players × 500 ms, the run takes about 15 seconds of wall-clock time. Oper
 
 ## Auto-seed on boot
 
-File: [`backend/src/main.rs:200-233`](../backend/src/main.rs).
+File: [`backend/src/main.rs`](../backend/src/main.rs).
 
 After startup, a background task sleeps 45 s (long enough for the meta poller to populate today's schedule), then runs:
 
@@ -217,7 +219,7 @@ After startup, a background task sleeps 45 s (long enough for the meta poller to
 SELECT COUNT(*) FROM nhl_player_game_stats
 ```
 
-If the count is zero, it invokes [`infra/jobs/rehydrate::run`](../backend/src/infra/jobs/rehydrate.rs): iterate every game row in `nhl_games`, fetch its boxscore, upsert player stats. Completed games use the fresh boxscore path so a manual rehydrate can repair stale sealed rows as well as missing rows. This recovers the "deploy in the middle of playoff day" case where every already-final game has no row in `nhl_player_game_stats` and would otherwise read as zero until the next live tick.
+If the table is empty, it invokes [`infra/jobs/rehydrate::run`](../backend/src/infra/jobs/rehydrate.rs): run every `mirror_steps` step (schedule from playoff start through tomorrow, landings, leaderboards, standings, bracket, rosters with club stats), then fetch the boxscore of every started game of the configured season and upsert player stats. Completed games use the fresh boxscore path so a manual rehydrate can repair stale sealed rows as well as missing rows. This recovers the "deploy in the middle of playoff day" case where every already-final game has no row in `nhl_player_game_stats` and would otherwise read as zero until the next live tick.
 
 The same function is exposed at `GET /api/admin/rehydrate` for explicit reseeds.
 

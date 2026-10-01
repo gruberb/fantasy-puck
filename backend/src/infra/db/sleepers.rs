@@ -1,17 +1,9 @@
-use sqlx::postgres::PgPool;
+use crate::infra::db::FantasyDb;
 
-use crate::error::Result;
 use crate::domain::models::db::FantasySleeper;
+use crate::error::Result;
 
-pub struct SleeperDbService<'a> {
-    pool: &'a PgPool,
-}
-
-impl<'a> SleeperDbService<'a> {
-    pub fn new(pool: &'a PgPool) -> Self {
-        Self { pool }
-    }
-
+impl FantasyDb {
     /// Get all sleepers for teams in a league
     pub async fn get_all_sleepers(&self, league_id: &str) -> Result<Vec<FantasySleeper>> {
         let sleepers = sqlx::query_as::<_, FantasySleeper>(
@@ -23,17 +15,16 @@ impl<'a> SleeperDbService<'a> {
             "#,
         )
         .bind(league_id)
-        .fetch_all(self.pool)
+        .fetch_all(self.pool())
         .await?;
 
         Ok(sleepers)
     }
 
-    /// Remove a sleeper by ID or NHL ID
     pub async fn remove_sleeper(&self, sleeper_id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM fantasy_sleepers WHERE id = $1 OR nhl_id = $1")
+        sqlx::query("DELETE FROM fantasy_sleepers WHERE id = $1")
             .bind(sleeper_id)
-            .execute(self.pool)
+            .execute(self.pool())
             .await?;
         Ok(())
     }

@@ -1,6 +1,6 @@
-import { getNHLTeamUrlSlug } from "@/utils/nhlTeams";
+import { nhlPlayerProfileUrl, nhlTeamUrl } from "@/utils/nhlTeams";
 import { Link } from "react-router-dom";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 
 export const useDailyRankingsColumns = () => {
   const { activeLeagueId } = useLeague();
@@ -72,7 +72,7 @@ export const useDailyRankingsColumns = () => {
             <div>
               {player.nhlId ? (
                 <a
-                  href={`https://www.nhl.com/player/${player.nhlId}`}
+                  href={nhlPlayerProfileUrl(player.nhlId)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-gray-900 hover:text-[#2563EB] hover:underline"
@@ -89,7 +89,7 @@ export const useDailyRankingsColumns = () => {
                 <span>
                   {player.nhlTeam ? (
                     <a
-                      href={`https://www.nhl.com/${getNHLTeamUrlSlug(player.nhlTeam)}`}
+                      href={nhlTeamUrl(player.nhlTeam)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="hover:text-[#2563EB] hover:underline"

@@ -1,3 +1,4 @@
+import type { FantasyTeamInAction, PlayerInAction } from "./matchDay";
 export interface Team {
   id: number;
   name: string;
@@ -59,4 +60,4 @@ export interface GamesResponse {
 }
 
 // Re-export from matchDay for convenience (used by extended games response)
-export type { FantasyTeamInAction, PlayerInAction } from "./matchDay";
+export type { FantasyTeamInAction, PlayerInAction };

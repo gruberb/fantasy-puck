@@ -14,8 +14,8 @@
 //! 2. Replay every completed playoff game in chronological order,
 //!    applying the standard logistic-Elo update with home-ice added to
 //!    the home team's pre-game rating:
-//!      `p_home = 1 / (1 + 10^(-(elo_home - elo_away + HOME_ICE_ADV) / 400))`
-//!      `elo_new = elo_old + K * ln(|goal_diff| + 1) * (result - p_home)`
+//!    `p_home = 1 / (1 + 10^(-(elo_home - elo_away + HOME_ICE_ADV) / 400))`
+//!    `elo_new = elo_old + K * ln(|goal_diff| + 1) * (result - p_home)`
 //!    The `ln(goal_diff + 1)` factor is the Silver-style blowout bonus
 //!    so a 6-1 win moves ratings more than a 2-1 win, but with
 //!    diminishing returns.

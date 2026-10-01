@@ -1,8 +1,9 @@
 import { Link } from "react-router-dom";
-import { useLeague } from "@/contexts/LeagueContext";
-import { TeamStats } from "@/types/teamStats";
+import { useLeague } from "@/contexts/use-league";
+import type { Column } from "@/components/common/RankingTable/types";
+import type { Ranking } from "@/types/rankings";
 
-export const useSeasonRankingsColumns = () => {
+export const useSeasonRankingsColumns = (): Column<Ranking>[] => {
   const { activeLeagueId } = useLeague();
   const lp = activeLeagueId ? `/league/${activeLeagueId}` : "";
 
@@ -17,7 +18,7 @@ export const useSeasonRankingsColumns = () => {
       header: "Team",
       className: "font-medium",
       sortable: true,
-      render: (value: string, team: TeamStats) => (
+      render: (value: string, team: Ranking) => (
         <Link
           to={`${lp}/teams/${team.teamId}`}
           className="font-bold text-base text-[#1A1A1A] hover:text-[#2563EB]"

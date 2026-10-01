@@ -123,8 +123,7 @@ pub fn compute_bonuses(entries: &[GoalieEntry]) -> HashMap<String, f32> {
 /// Pure conversion: save-percentage → clamped Elo bonus. Exposed for
 /// unit tests and to let callers spot-check a specific goalie.
 pub fn bonus_for_svp(sv_pct: f32) -> f32 {
-    ((sv_pct - LEAGUE_AVG_SVP) * GOALIE_BONUS_SCALE)
-        .clamp(-GOALIE_BONUS_CLAMP, GOALIE_BONUS_CLAMP)
+    ((sv_pct - LEAGUE_AVG_SVP) * GOALIE_BONUS_SCALE).clamp(-GOALIE_BONUS_CLAMP, GOALIE_BONUS_CLAMP)
 }
 
 #[cfg(test)]
@@ -194,7 +193,11 @@ mod tests {
             entry(2, "BOS", 18.0, Some(0.915)), // bonus 8
         ];
         let bonuses = compute_bonuses(&entries);
-        assert!((bonuses["BOS"] - 16.0).abs() < 1e-4, "got {}", bonuses["BOS"]);
+        assert!(
+            (bonuses["BOS"] - 16.0).abs() < 1e-4,
+            "got {}",
+            bonuses["BOS"]
+        );
     }
 
     #[test]

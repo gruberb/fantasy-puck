@@ -51,7 +51,10 @@ pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>, force: bool) -> RefreshSum
                 }
             }
             Ok(None) => debug!("edge_refresher: no prior refresh, running"),
-            Err(e) => warn!("edge_refresher: freshness lookup failed (running anyway): {}", e),
+            Err(e) => warn!(
+                "edge_refresher: freshness lookup failed (running anyway): {}",
+                e
+            ),
         }
     }
 

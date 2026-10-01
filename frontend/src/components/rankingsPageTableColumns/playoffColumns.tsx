@@ -1,8 +1,9 @@
 import { Link } from "react-router-dom";
-import { useLeague } from "@/contexts/LeagueContext";
-import { TeamStats } from "@/types/teamStats";
+import { useLeague } from "@/contexts/use-league";
+import type { Column } from "@/components/common/RankingTable/types";
+import type { PlayoffFantasyTeamRanking } from "@/types/rankings";
 
-export const usePlayoffRankingsColumns = () => {
+export const usePlayoffRankingsColumns = (): Column<PlayoffFantasyTeamRanking>[] => {
   const { activeLeagueId } = useLeague();
   const lp = activeLeagueId ? `/league/${activeLeagueId}` : "";
 
@@ -11,14 +12,14 @@ export const usePlayoffRankingsColumns = () => {
       key: "rank",
       header: "Rank",
       // Use index as rank
-      render: (_value: any, _row: any, index: number) => index + 1,
+      render: (_value, _row, index) => index + 1,
     },
     {
       key: "teamName",
       header: "Team",
       className: "font-medium",
       sortable: true,
-      render: (value: string, team: TeamStats) => (
+      render: (value: string, team: PlayoffFantasyTeamRanking) => (
         <Link
           to={`${lp}/teams/${team.teamId}`}
           className="font-bold text-base text-[#1A1A1A] hover:text-[#2563EB]"
@@ -30,7 +31,7 @@ export const usePlayoffRankingsColumns = () => {
     {
       key: "playersInPlayoffs",
       header: "Skaters active",
-      render: (_value: any, row: any) => (
+      render: (_value: unknown, row: PlayoffFantasyTeamRanking) => (
         <div className="flex items-center">
           <span className="mr-2">
             {row.playersInPlayoffs} / {row.totalPlayers}
@@ -41,7 +42,7 @@ export const usePlayoffRankingsColumns = () => {
     {
       key: "teamsInPlayoffs",
       header: "Teams active",
-      render: (_value: any, row: any) => (
+      render: (_value: unknown, row: PlayoffFantasyTeamRanking) => (
         <div className="flex items-center">
           <span className="mr-2">
             {row.teamsInPlayoffs} / {row.totalTeams}

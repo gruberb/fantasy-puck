@@ -1,10 +1,10 @@
 //! Port: narrative generation for Pulse, Insights, and Race-Odds.
 //!
-//! Handlers never call Anthropic (or whatever model host) directly.
+//! Handlers never call the model host directly.
 //! They see this trait through `Arc<dyn PredictionService>` on
 //! `AppState`. Today the only production adapter is
-//! [`crate::infra::prediction::claude::ClaudeNarrator`], which wraps
-//! the Anthropic `/v1/messages` endpoint. A gRPC-backed adapter
+//! [`crate::infra::prediction::narrator::LlmNarrator`], which wraps
+//! the OpenRouter `/chat/completions` endpoint. A gRPC-backed adapter
 //! pointing at an out-of-process model server would implement the
 //! same trait and slot into the composition root in `main.rs` with
 //! no handler changes.

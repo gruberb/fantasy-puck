@@ -1,12 +1,12 @@
 import RankingTable from "@/components/common/RankingTable";
 import { useRankingsData } from "@/features/rankings";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 import { useLeagueStats } from "@/features/league-stats/hooks/use-league-stats";
 import { APP_CONFIG } from "@/config";
 
 import { useDailyRankingsColumns } from "@/components/rankingsPageTableColumns/dailysColumns";
 import { usePlayoffRankingsColumns } from "@/components/rankingsPageTableColumns/playoffColumns";
-import { TeamStatsColumns } from "@/components/rankingsPageTableColumns/teamStatsColumns";
+import { useTeamStatsColumns } from "@/components/rankingsPageTableColumns/teamStatsColumns";
 import { useNhlTeamRosterColumns } from "@/components/rankingsPageTableColumns/nhlTeamRosterColumns";
 import { useTopRosteredSkatersColumns } from "@/components/rankingsPageTableColumns/topRosteredSkatersColumns";
 
@@ -30,7 +30,7 @@ const RankingsPage = () => {
     isError: leagueStatsError,
   } = useLeagueStats(activeLeagueId);
 
-  const teamStatsColumns = TeamStatsColumns();
+  const teamStatsColumns = useTeamStatsColumns();
   const dailyRankingsColumns = useDailyRankingsColumns();
   const playoffRankingsColumns = usePlayoffRankingsColumns();
   const nhlTeamRosterColumns = useNhlTeamRosterColumns();

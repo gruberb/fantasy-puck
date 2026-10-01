@@ -79,8 +79,24 @@ pub fn series_context_label(status: &SeriesStatus) -> Option<String> {
     Some(format!("{} - {}", title, state))
 }
 
+/// One side is a win from clinching and the series isn't already over.
 pub fn series_is_elimination_game(status: &SeriesStatus) -> bool {
-    status.top_seed_wins == 3 || status.bottom_seed_wins == 3
+    let (top, bottom) = (status.top_seed_wins, status.bottom_seed_wins);
+    (top == 3 || bottom == 3) && top < 4 && bottom < 4
+}
+
+/// "2 Period", "1 OT", "1 Shootout". Shared by every surface that shows a
+/// live game clock so Games and Pulse render the same label.
+pub fn format_period(number: Option<i16>, period_type: Option<&str>) -> Option<String> {
+    let num = number?;
+    let label = match period_type {
+        Some("REG") => "Period",
+        Some("OT") => "OT",
+        Some("SO") => "Shootout",
+        Some(other) => other,
+        None => "",
+    };
+    Some(format!("{} {}", num, label))
 }
 
 #[cfg(test)]
@@ -120,6 +136,7 @@ mod series_context_tests {
         );
         assert!(series_is_elimination_game(&status(3, 2)));
         assert!(!series_is_elimination_game(&status(4, 2)));
+        assert!(!series_is_elimination_game(&status(3, 4)));
     }
 }
 

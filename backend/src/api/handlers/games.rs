@@ -32,24 +32,42 @@ use crate::api::routes::AppState;
 use crate::api::season as cfg_season;
 use crate::domain::models::fantasy::{FantasyTeamInGame, PlayerInGame};
 use crate::domain::models::nhl::{GameState, SeriesStatus};
+use crate::domain::time::{day_before, hockey_today};
 use crate::error::Result;
 use crate::infra::db::nhl_mirror::{
     self, NhlGameRow, PlayerFormRow, PlayerGameStatRow, PlayerPlayoffTotalsRow,
 };
 use crate::infra::nhl::client::NhlClient;
+use crate::tuning;
+use chrono::Timelike;
 
 // ---------------------------------------------------------------------
 // Query helpers
 // ---------------------------------------------------------------------
 
+/// The slate for `date`, plus yesterday's still-live games when `date`
+/// is today and it's before the carry-over cutoff: a west-coast game
+/// that runs past midnight ET is keyed under the previous day.
+async fn slate_with_carryover(pool: &sqlx::PgPool, date: &str) -> Result<Vec<NhlGameRow>> {
+    let mut games = nhl_mirror::list_games_for_date(pool, date).await?;
+    let now = crate::domain::time::hockey_now();
+    if date != hockey_today() || now.hour() >= tuning::live_mirror::CARRYOVER_CUTOFF_HOUR_ET {
+        return Ok(games);
+    }
+    if let Some(yesterday) = day_before(date) {
+        let carried = nhl_mirror::list_games_for_date(pool, &yesterday).await?;
+        games.extend(
+            carried
+                .into_iter()
+                .filter(|g| state_str_is_live(&g.game_state)),
+        );
+    }
+    Ok(games)
+}
+
 fn parse_date(params: &HashMap<String, String>) -> Result<String> {
     match params.get("date") {
-        Some(d) if d.len() == 10 && d.chars().all(|c| c == '-' || c.is_ascii_digit()) => {
-            Ok(d.clone())
-        }
-        Some(_) => Err(crate::error::Error::Validation(
-            "Invalid date format. Use YYYY-MM-DD".into(),
-        )),
+        Some(d) => crate::api::parse_date_param(d),
         None => Err(crate::error::Error::Validation(
             "Date parameter is required (format: YYYY-MM-DD)".into(),
         )),
@@ -80,32 +98,8 @@ pub async fn get_match_day(
     Query(league_params): Query<LeagueParams>,
 ) -> Result<Json<ApiResponse<MatchDayResponse>>> {
     let league_id = &league_params.league_id;
-    let now_et = chrono::Utc::now().with_timezone(&chrono_tz::America::New_York);
-    let hockey_today = now_et.format("%Y-%m-%d").to_string();
-
-    // Early-morning carry-over: if a west-coast game from yesterday
-    // is still LIVE, include it in today's response. Rare on playoff
-    // nights but legitimate for long OT games.
-    let include_yesterday = now_et
-        .time()
-        .format("%H")
-        .to_string()
-        .parse::<u32>()
-        .unwrap_or(12)
-        < 12;
-    let hockey_yesterday = (now_et - chrono::Duration::days(1))
-        .format("%Y-%m-%d")
-        .to_string();
-
-    let mut games: Vec<NhlGameRow> =
-        nhl_mirror::list_games_for_date(state.db.pool(), &hockey_today).await?;
-    if include_yesterday {
-        let yest = nhl_mirror::list_games_for_date(state.db.pool(), &hockey_yesterday).await?;
-        games.extend(
-            yest.into_iter()
-                .filter(|g| state_str_is_live(&g.game_state)),
-        );
-    }
+    let hockey_today = hockey_today();
+    let games = slate_with_carryover(state.db.pool(), &hockey_today).await?;
 
     if games.is_empty() {
         return Ok(json_success(MatchDayResponse {
@@ -223,30 +217,7 @@ async fn process_extended(
     date: &str,
     league_id: &str,
 ) -> Result<Json<ApiResponse<TodaysGamesResponse>>> {
-    let mut games = nhl_mirror::list_games_for_date(state.db.pool(), date).await?;
-
-    // Early-morning carry-over for yesterday's still-live games.
-    let now_et = chrono::Utc::now().with_timezone(&chrono_tz::America::New_York);
-    let hockey_today = now_et.format("%Y-%m-%d").to_string();
-    let is_today = date == hockey_today;
-    if is_today
-        && now_et
-            .time()
-            .format("%H")
-            .to_string()
-            .parse::<u32>()
-            .unwrap_or(12)
-            < 12
-    {
-        let hockey_yesterday = (now_et - chrono::Duration::days(1))
-            .format("%Y-%m-%d")
-            .to_string();
-        let yest = nhl_mirror::list_games_for_date(state.db.pool(), &hockey_yesterday).await?;
-        games.extend(
-            yest.into_iter()
-                .filter(|g| state_str_is_live(&g.game_state)),
-        );
-    }
+    let games = slate_with_carryover(state.db.pool(), date).await?;
 
     if games.is_empty() {
         return Ok(json_success(TodaysGamesResponse {
@@ -405,7 +376,7 @@ async fn assemble_match_day(
             .find(|t| t.team_id == team_id)
             .map(|t| t.team_name.clone())
             .unwrap_or_else(|| format!("Team {}", team_id));
-        players.sort_by(|a, b| b.points.cmp(&a.points));
+        players.sort_by_key(|x| std::cmp::Reverse(x.points));
         let total = players.len();
         fantasy_team_responses.push(MatchDayFantasyTeamResponse {
             team_id,
@@ -414,7 +385,7 @@ async fn assemble_match_day(
             total_players_today: total,
         });
     }
-    fantasy_team_responses.sort_by(|a, b| b.total_players_today.cmp(&a.total_players_today));
+    fantasy_team_responses.sort_by_key(|x| std::cmp::Reverse(x.total_players_today));
 
     let summary = summary_from_games(games, &nhl_team_players);
 
@@ -664,7 +635,7 @@ fn summary_from_games(
             })
         })
         .collect();
-    counts.sort_by(|a, b| b.player_count.cmp(&a.player_count));
+    counts.sort_by_key(|x| std::cmp::Reverse(x.player_count));
 
     GamesSummaryResponse {
         total_games: games.len(),
@@ -676,18 +647,6 @@ fn summary_from_games(
 // ---------------------------------------------------------------------
 // Formatters
 // ---------------------------------------------------------------------
-
-fn format_period(number: Option<i16>, period_type: Option<&str>) -> Option<String> {
-    let num = number?;
-    let label = match period_type {
-        Some("REG") => "Period",
-        Some("OT") => "OT",
-        Some("SO") => "Shootout",
-        Some(other) => other,
-        None => "",
-    };
-    Some(format!("{} {}", num, label))
-}
 
 fn format_toi(seconds: i32) -> String {
     let m = seconds / 60;

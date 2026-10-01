@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-use crate::infra::db::FantasyDb;
 use crate::error::Result;
+use crate::infra::db::FantasyDb;
 
 #[derive(Debug, Clone, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]

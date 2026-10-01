@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/use-auth";
 import { api } from "@/api/client";
-import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
+import { Button, LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
+import { Toast } from "@/components/common/Toast";
+import { useFlash } from "@/hooks/use-flash";
 import { formatSeason } from "@/utils/format";
 import { APP_CONFIG } from "@/config";
-import { useLeagues } from "@/features/draft";
+import { leagueKeys, membershipKeys, useLeagues } from "@/features/draft";
 
 const MyLeaguesPage = () => {
   const { user, loading: authLoading } = useAuth();
@@ -16,16 +18,13 @@ const MyLeaguesPage = () => {
   const [newLeagueName, setNewLeagueName] = useState("");
   const [newTeamName, setNewTeamName] = useState("");
   const [creating, setCreating] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const { flash, showFlash } = useFlash();
 
   // Always scope to the signed-in user's leagues — the cross-league
   // "All Leagues" view lives on the admin dashboard now.
   const { leagues, loading: leaguesLoading, createLeague } = useLeagues(user?.id, false);
 
-  const flashError = (msg: string) => {
-    setErrorMsg(msg);
-    setTimeout(() => setErrorMsg(null), 6000);
-  };
+  const flashError = (msg: string) => showFlash(msg, "error");
 
   if (authLoading) return <LoadingSpinner message="Checking access..." />;
   if (!user) {
@@ -57,8 +56,8 @@ const MyLeaguesPage = () => {
         user.id,
       );
       await api.joinLeague(league.id, newTeamName.trim());
-      await queryClient.invalidateQueries({ queryKey: ["leagues"] });
-      await queryClient.invalidateQueries({ queryKey: ["memberships"] });
+      await queryClient.invalidateQueries({ queryKey: leagueKeys.all });
+      await queryClient.invalidateQueries({ queryKey: membershipKeys.all });
       setNewLeagueName("");
       setNewTeamName("");
       navigate(`/league/${league.id}`);
@@ -77,11 +76,7 @@ const MyLeaguesPage = () => {
         subtitle="Create, join, and manage your leagues."
       />
 
-      {errorMsg && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#1A1A1A] text-white px-6 py-3 border-2 border-[#EF4444] text-sm font-bold uppercase tracking-wider shadow-[4px_4px_0px_0px_#EF4444] max-w-lg text-center">
-          {errorMsg}
-        </div>
-      )}
+      <Toast flash={flash} />
 
       {/* Create New League */}
       <div className="fantasy-card">
@@ -105,13 +100,13 @@ const MyLeaguesPage = () => {
               className="w-full px-4 py-2 border-2 border-[#1A1A1A] rounded-none focus:ring-2 focus:ring-[#2563EB]/40 focus:border-[#2563EB] outline-none transition-all"
               onKeyDown={(e) => e.key === "Enter" && handleCreateLeague()}
             />
-            <button
+            <Button
               onClick={handleCreateLeague}
               disabled={creating || !newLeagueName.trim() || !newTeamName.trim()}
-              className="btn-gradient disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap w-full sm:w-auto"
+              className="whitespace-nowrap w-full sm:w-auto"
             >
               {creating ? "Creating..." : "Create & Join"}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

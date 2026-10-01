@@ -17,6 +17,7 @@ use std::sync::Arc;
 use chrono::NaiveDate;
 use tracing::{debug, info, warn};
 
+use crate::domain::models::nhl::GAME_TYPE_PLAYOFFS;
 use crate::domain::models::nhl::{GameState, TodayGame, TodaySchedule};
 use crate::error::Result;
 use crate::infra::db::FantasyDb;
@@ -43,7 +44,7 @@ pub async fn ingest_playoff_games_for_date(
         // Only playoff games; only completed. `game_type == 3` is
         // playoffs — everything else (regular season, preseason, special
         // events) is out of scope for this table.
-        if game.game_type != 3 || !game.game_state.is_completed() {
+        if game.game_type != GAME_TYPE_PLAYOFFS || !game.game_state.is_completed() {
             continue;
         }
         match ingest_single_game(db, nhl, date, &game).await {
@@ -160,10 +161,7 @@ pub async fn rebackfill_playoff_season_via_carousel(
                     // Surface rather than silently swallow — silent
                     // failures were masking a real NHL-side problem and
                     // made the whole backfill look like a no-op.
-                    return Err(crate::error::Error::NhlApi(format!(
-                        "series {} ({}): {}",
-                        series.series_letter, season, e
-                    )));
+                    return Err(e.context(format!("series {} ({})", series.series_letter, season)));
                 }
             };
             let games_count = games.games.len();
@@ -186,7 +184,10 @@ pub async fn rebackfill_playoff_season_via_carousel(
                 };
                 // Derive game_date from the start-time ISO string
                 // (YYYY-MM-DDThh:mm:ssZ).
-                let game_date = &start[..10];
+                let Some(game_date) = start.get(..10) else {
+                    skipped_reasons.push("bad_start_time");
+                    continue;
+                };
                 let winner = if home_score > away_score {
                     &game.home_team.abbrev
                 } else {
@@ -261,8 +262,9 @@ async fn ingest_single_game(
     // `NaiveDate` arrays directly isn't available.
     let game_date_str = date.to_string();
     // Fail fast if the caller handed us something that isn't a valid date.
-    NaiveDate::parse_from_str(&game_date_str, "%Y-%m-%d")
-        .map_err(|e| crate::error::Error::Internal(format!("bad date {}: {}", date, e)))?;
+    NaiveDate::parse_from_str(&game_date_str, "%Y-%m-%d").map_err(|e| {
+        crate::error::Error::Internal(anyhow::Error::new(e).context(format!("bad date {date}")))
+    })?;
     let away_abbrev = game.away_team.abbrev.clone();
     let home_abbrev = game.home_team.abbrev.clone();
 
@@ -275,19 +277,10 @@ async fn ingest_single_game(
             game.home_team.score.unwrap_or(0),
             game.away_team.score.unwrap_or(0),
         ),
-        None => {
-            let sum_goals = |team: &crate::domain::models::nhl::TeamGameStats| -> i32 {
-                team.forwards
-                    .iter()
-                    .chain(team.defense.iter())
-                    .map(|p| p.goals.unwrap_or(0))
-                    .sum()
-            };
-            (
-                sum_goals(&box_score.player_by_game_stats.home_team),
-                sum_goals(&box_score.player_by_game_stats.away_team),
-            )
-        }
+        None => (
+            box_score.player_by_game_stats.home_team.skater_goals(),
+            box_score.player_by_game_stats.away_team.skater_goals(),
+        ),
     };
     let winner = if home_score > away_score {
         home_abbrev.clone()
@@ -458,6 +451,9 @@ fn games_for_logging(schedule: &crate::domain::models::nhl::TodaySchedule, date:
     schedule
         .games_for_date(date)
         .iter()
-        .filter(|g| g.game_type == 3 && matches!(g.game_state, GameState::Final | GameState::Off))
+        .filter(|g| {
+            g.game_type == GAME_TYPE_PLAYOFFS
+                && matches!(g.game_state, GameState::Final | GameState::Off)
+        })
         .count()
 }

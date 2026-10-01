@@ -5,15 +5,14 @@ use std::time::{Duration, Instant};
 use reqwest::Client;
 use serde_json::Value;
 use tokio::sync::{RwLock, Semaphore};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
-use crate::error::{Error, Result};
 use crate::domain::models::nhl::{
-    GameBoxscore, GameData, GameState, GoalieStatsLeaders, Player, PlayerGameLog, PlayoffCarousel,
-    StatsLeaders, TodaySchedule,
+    GameBoxscore, GameData, GameState, GoalieStatsLeaders, Player, PlayoffCarousel, StatsLeaders,
+    TodaySchedule,
 };
+use crate::error::{Error, Result};
 use crate::infra::nhl::constants as endpoints;
-use crate::domain::services::nhl_stats::calculate_totals_from_game_log;
 
 /// A cached HTTP response with its expiration time.
 struct CacheEntry {
@@ -34,12 +33,10 @@ impl CacheEntry {
 use crate::tuning::nhl_client as tuning;
 mod ttl {
     pub use crate::tuning::nhl_client::{
-        BOXSCORE_FINAL_TTL as BOXSCORE_FINAL, BOXSCORE_LIVE_TTL as BOXSCORE_LIVE,
-        EDGE_TTL as EDGE, GAME_CENTER_TTL as GAME_CENTER,
-        PLAYER_DETAILS_TTL as PLAYER_DETAILS, PLAYER_GAME_LOG_TTL as PLAYER_GAME_LOG,
-        PLAYOFF_CAROUSEL_TTL as PLAYOFF_CAROUSEL, ROSTER_TTL as ROSTER,
-        SCHEDULE_TTL as SCHEDULE, SCORES_TTL as SCORES,
-        SKATER_STATS_TTL as SKATER_STATS, STANDINGS_TTL as STANDINGS,
+        BOXSCORE_FINAL_TTL as BOXSCORE_FINAL, BOXSCORE_LIVE_TTL as BOXSCORE_LIVE, EDGE_TTL as EDGE,
+        GAME_CENTER_TTL as GAME_CENTER, PLAYOFF_CAROUSEL_TTL as PLAYOFF_CAROUSEL,
+        ROSTER_TTL as ROSTER, SCHEDULE_TTL as SCHEDULE, SKATER_STATS_TTL as SKATER_STATS,
+        STANDINGS_TTL as STANDINGS,
     };
 }
 
@@ -65,7 +62,9 @@ impl NhlClient {
         let client = Client::builder()
             .timeout(tuning::REQUEST_TIMEOUT)
             .build()
-            .unwrap_or_default();
+            // Only fails if the TLS backend can't initialise; falling back
+            // to a default client would silently drop the request timeout.
+            .expect("failed to build NHL HTTP client");
 
         Self {
             client,
@@ -105,11 +104,9 @@ impl NhlClient {
 
     // Fetch raw response body from NHL API with semaphore + retry logic
     async fn fetch_raw(&self, url: &str) -> Result<String> {
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|e| Error::NhlApi(format!("Semaphore error: {}", e)))?;
+        let _permit = self.semaphore.acquire().await.map_err(|e| {
+            Error::NhlApi(anyhow::Error::new(e).context("NHL client semaphore closed"))
+        })?;
 
         // Retry budget and base delay live in `crate::tuning::nhl_client`.
         // The backoff doubles each retry, starting from RETRY_INITIAL_DELAY.
@@ -118,25 +115,27 @@ impl NhlClient {
         loop {
             info!("Fetching from NHL API: {}", url);
 
-            let response = self
-                .client
-                .get(url)
-                .send()
-                .await
-                .map_err(|e| Error::NhlApi(format!("Request failed: {}", e)))?;
+            let response = self.client.get(url).send().await.map_err(|e| {
+                Error::NhlApi(anyhow::Error::new(e).context(format!("request to {url} failed")))
+            })?;
 
             if response.status() == 429 {
                 retries += 1;
                 if retries > tuning::MAX_RETRIES {
-                    return Err(Error::NhlApi(
-                        "NHL API rate limit exceeded after retries".to_string(),
-                    ));
+                    return Err(Error::nhl_api("rate limit exceeded after retries"));
                 }
                 let base = tuning::RETRY_INITIAL_DELAY.as_millis() as u64;
                 let delay = Duration::from_millis(base << (retries - 1));
                 warn!("NHL API rate limited (429), retrying in {:?}...", delay);
                 tokio::time::sleep(delay).await;
                 continue;
+            }
+
+            // A missing resource (unpublished bracket, unknown game) is a
+            // 404 for our callers too, not an upstream failure.
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                debug!(url = %url, "NHL API returned 404");
+                return Err(Error::NotFound("NHL resource not found".into()));
             }
 
             if !response.status().is_success() {
@@ -146,16 +145,14 @@ impl NhlClient {
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
 
-                return Err(Error::NhlApi(format!(
-                    "NHL API returned status {}: {}",
-                    status, error_text
+                return Err(Error::nhl_api(format!(
+                    "status {status} from {url}: {error_text}"
                 )));
             }
 
-            return response
-                .text()
-                .await
-                .map_err(|e| Error::NhlApi(format!("Failed to get response text: {}", e)));
+            return response.text().await.map_err(|e| {
+                Error::NhlApi(anyhow::Error::new(e).context("failed to get response text"))
+            });
         }
     }
 
@@ -170,7 +167,9 @@ impl NhlClient {
             if let Some(entry) = cache.get(url) {
                 if !entry.is_expired() {
                     return serde_json::from_str(&entry.body).map_err(|e| {
-                        Error::NhlApi(format!("Cache deserialization error: {}", e))
+                        Error::NhlApi(
+                            anyhow::Error::new(e).context("failed to deserialize cached response"),
+                        )
                     });
                 }
             }
@@ -192,8 +191,9 @@ impl NhlClient {
             );
         }
 
-        serde_json::from_str(&body)
-            .map_err(|e| Error::NhlApi(format!("Failed to parse NHL API response: {}", e)))
+        serde_json::from_str(&body).map_err(|e| {
+            Error::NhlApi(anyhow::Error::new(e).context("failed to parse NHL API response"))
+        })
     }
 
     /// Fetch skater stats leaders for a specific season and game type
@@ -228,43 +228,6 @@ impl NhlClient {
     ) -> Result<GoalieStatsLeaders> {
         let url = endpoints::stats::goalie_stats_leaders(season, game_type);
         self.make_request_cached(&url, ttl::SKATER_STATS).await
-    }
-
-    /// Search for players by name, using team rosters
-    pub async fn search_players(&self, query: &str) -> Result<Vec<Player>> {
-        info!("Searching for players matching '{}'...", query);
-
-        // Get all teams first
-        let teams = self.get_all_teams().await?;
-        let mut matching_players = Vec::new();
-
-        let query_lower = query.to_lowercase();
-
-        for team_abbrev in teams {
-            match self.get_team_roster(&team_abbrev).await {
-                Ok(players) => {
-                    let team_matches: Vec<Player> = players
-                        .into_iter()
-                        .filter(|player| {
-                            let first = player.first_name.get("default").cloned().unwrap_or_default();
-                            let last = player.last_name.get("default").cloned().unwrap_or_default();
-                            let full_name = format!("{} {}", first, last).to_lowercase();
-                            full_name.contains(&query_lower)
-                        })
-                        .collect();
-
-                    if !team_matches.is_empty() {
-                        matching_players.extend(team_matches);
-                    }
-                }
-                Err(e) => {
-                    warn!("Could not fetch roster for {}: {}", team_abbrev, e);
-                    continue;
-                }
-            }
-        }
-
-        Ok(matching_players)
     }
 
     /// Get all NHL teams
@@ -364,12 +327,6 @@ impl NhlClient {
         Ok(players)
     }
 
-    /// Get today's NHL schedule
-    pub async fn get_today_schedule(&self) -> Result<TodaySchedule> {
-        let url = endpoints::games::today_schedule_url();
-        self.make_request_cached(&url, ttl::SCHEDULE).await
-    }
-
     /// Get schedule for a specific date
     pub async fn get_schedule_by_date(&self, date: &str) -> Result<TodaySchedule> {
         let url = endpoints::games::schedule_by_date(date);
@@ -386,82 +343,15 @@ impl NhlClient {
         endpoints::teams::team_logo(team_abbrev)
     }
 
-    /// Gets player stats including a headshot image
-    pub async fn get_player_details(&self, player_id: i64) -> Result<Player> {
-        let url = endpoints::players::player_details(player_id);
-        self.make_request_cached(&url, ttl::PLAYER_DETAILS).await
-    }
-
-    /// Get game scores
-    pub async fn get_game_scores(&self, game_id: u32) -> Result<(Option<i32>, Option<i32>)> {
-        let url = endpoints::games::game_center(game_id);
-        let json: Value = self.make_request_cached(&url, ttl::GAME_CENTER).await?;
-
-        // Extract scores - based on actual response structure
-        let home_score = json
-            .get("homeTeam")
-            .and_then(|team| team.get("score"))
-            .and_then(|score| score.as_i64())
-            .map(|s| s as i32);
-
-        let away_score = json
-            .get("awayTeam")
-            .and_then(|team| team.get("score"))
-            .and_then(|score| score.as_i64())
-            .map(|s| s as i32);
-
-        Ok((home_score, away_score))
-    }
-
-    /// Get period information for a game
-    pub async fn get_period_info(&self, game_id: u32) -> Result<Option<String>> {
-        let url = endpoints::games::game_center(game_id);
-        let json: Value = self.make_request_cached(&url, ttl::GAME_CENTER).await?;
-
-        // Extract period information
-        let period_descriptor = json.get("periodDescriptor");
-
-        if let Some(period_data) = period_descriptor {
-            let number = period_data
-                .get("number")
-                .and_then(|n| n.as_i64())
-                .unwrap_or(0);
-            let period_type = period_data.get("periodType").and_then(|t| t.as_str());
-
-            let period_type_text = match period_type {
-                Some("REG") => "Period",
-                Some("OT") => "OT",
-                Some("SO") => "Shootout",
-                Some(other) => other,
-                None => "",
-            };
-
-            return Ok(Some(format!("{} {}", number, period_type_text)));
-        }
-
-        Ok(None)
-    }
-
     pub async fn get_game_data(&self, game_id: u32) -> Result<Option<GameData>> {
         let url = endpoints::games::game_center(game_id);
         let json: Value = self.make_request_cached(&url, ttl::GAME_CENTER).await?;
 
-        // Extract game state
-        let game_state_str = json
+        let game_state: GameState = json
             .get("gameState")
             .and_then(Value::as_str)
-            .unwrap_or("UNKNOWN");
-
-        // Parse game state
-        let game_state: GameState = match game_state_str {
-            "LIVE" => GameState::Live,
-            "FINAL" => GameState::Final,
-            "OFF" => GameState::Off,
-            "CRIT" => GameState::Crit,
-            "PRE" => GameState::Preview,
-            "FUT" => GameState::Fut,
-            _ => GameState::Unknown,
-        };
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_default();
 
         // Extract scores
         let home_score = json
@@ -484,20 +374,19 @@ impl NhlClient {
         // `period_number` drifted from `period_type`, which in turn
         // produced renders like `P12` (= "1" from stale number + "2 Period"
         // from fresh type, stripped of non-digits).
-        let (period_number, period_type) =
-            if let Some(period_data) = json.get("periodDescriptor") {
-                let number = period_data
-                    .get("number")
-                    .and_then(|n| n.as_i64())
-                    .and_then(|n| i16::try_from(n).ok());
-                let period_type = period_data
-                    .get("periodType")
-                    .and_then(|t| t.as_str())
-                    .map(str::to_string);
-                (number, period_type)
-            } else {
-                (None, None)
-            };
+        let (period_number, period_type) = if let Some(period_data) = json.get("periodDescriptor") {
+            let number = period_data
+                .get("number")
+                .and_then(|n| n.as_i64())
+                .and_then(|n| i16::try_from(n).ok());
+            let period_type = period_data
+                .get("periodType")
+                .and_then(|t| t.as_str())
+                .map(str::to_string);
+            (number, period_type)
+        } else {
+            (None, None)
+        };
 
         Ok(Some(GameData {
             game_state,
@@ -510,7 +399,11 @@ impl NhlClient {
 
     pub async fn get_playoff_carousel(&self, season: String) -> Result<Option<PlayoffCarousel>> {
         let url = endpoints::playoffs::carousel_for_season(season);
-        self.make_request_cached(&url, ttl::PLAYOFF_CAROUSEL).await
+        // The NHL 404s the carousel until the bracket is published.
+        match self.make_request_cached(&url, ttl::PLAYOFF_CAROUSEL).await {
+            Err(Error::NotFound(_)) => Ok(None),
+            other => other,
+        }
     }
 
     /// Fetch all games of one playoff series by its letter (A-O-ish).
@@ -545,7 +438,9 @@ impl NhlClient {
             if let Some(entry) = cache.get(&url) {
                 if !entry.is_expired() {
                     return serde_json::from_str(&entry.body).map_err(|e| {
-                        Error::NhlApi(format!("Cache deserialization error: {}", e))
+                        Error::NhlApi(
+                            anyhow::Error::new(e).context("failed to deserialize cached response"),
+                        )
                     });
                 }
             }
@@ -563,7 +458,7 @@ impl NhlClient {
     }
 
     async fn fetch_and_cache_game_boxscore(&self, url: &str) -> Result<GameBoxscore> {
-        let body = self.fetch_raw(&url).await?;
+        let body = self.fetch_raw(url).await?;
 
         let cache_ttl = Self::boxscore_cache_ttl(&body);
 
@@ -580,15 +475,12 @@ impl NhlClient {
         }
 
         serde_json::from_str(&body)
-            .map_err(|e| Error::NhlApi(format!("Failed to parse boxscore: {}", e)))
+            .map_err(|e| Error::NhlApi(anyhow::Error::new(e).context("failed to parse boxscore")))
     }
 
     fn boxscore_cache_ttl(body: &str) -> Duration {
         let json: Value = serde_json::from_str(body).unwrap_or_default();
-        let game_state = json
-            .get("gameState")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let game_state = json.get("gameState").and_then(Value::as_str).unwrap_or("");
         match game_state {
             "FINAL" | "OFF" => ttl::BOXSCORE_FINAL,
             _ => ttl::BOXSCORE_LIVE,
@@ -608,18 +500,9 @@ impl NhlClient {
     /// the regular season finale and playoff game 1; callers should
     /// step the date backward a few days if the first attempt is
     /// empty.
-    pub async fn get_standings_for_date(
-        &self,
-        date: &str,
-    ) -> Result<serde_json::Value> {
+    pub async fn get_standings_for_date(&self, date: &str) -> Result<serde_json::Value> {
         let url = endpoints::standings::on_date(date);
         self.make_request_cached(&url, ttl::STANDINGS).await
-    }
-
-    /// Get scores/results for a specific date (raw JSON)
-    pub async fn get_scores_by_date(&self, date: &str) -> Result<serde_json::Value> {
-        let url = endpoints::scores::scores_by_date(date);
-        self.make_request_cached(&url, ttl::SCORES).await
     }
 
     /// Get NHL Edge analytics for a skater (skating speed, shot speed, etc.)
@@ -630,83 +513,6 @@ impl NhlClient {
 
     pub fn get_team_name(&self, team_abbrev: &str) -> String {
         crate::infra::nhl::constants::team_names::get_team_name(team_abbrev).to_string()
-    }
-
-    /// Get a player's game log for a specific season and game type
-    pub async fn get_player_game_log(
-        &self,
-        player_id: i64,
-        season: &u32,
-        game_type: u8,
-    ) -> Result<PlayerGameLog> {
-        let url = endpoints::players::player_game_log(player_id, season, game_type);
-        self.make_request_cached(&url, ttl::PLAYER_GAME_LOG).await
-    }
-
-    /// Helper method to calculate a player's form based on recent games
-    /// Returns (goals, assists, points) in last n games
-    pub async fn get_player_form(
-        &self,
-        player_id: i64,
-        season: &u32,
-        game_type: u8,
-        num_games: usize,
-    ) -> Result<(i32, i32, i32)> {
-        let game_log = self
-            .get_player_game_log(player_id, season, game_type)
-            .await?;
-
-        // Take last n games (or fewer if not enough games)
-        let recent_games = game_log
-            .game_log
-            .iter()
-            .rev() // Most recent games first
-            .take(num_games)
-            .collect::<Vec<_>>();
-
-        if recent_games.is_empty() {
-            return Ok((0, 0, 0));
-        }
-
-        // Calculate totals
-        let recent_goals = recent_games.iter().map(|g| g.goals).sum();
-        let recent_assists = recent_games.iter().map(|g| g.assists).sum();
-        let recent_points = recent_games.iter().map(|g| g.points).sum();
-
-        Ok((recent_goals, recent_assists, recent_points))
-    }
-
-    /// Check if a player is participating in the playoffs
-    /// Returns (participating, goals, assists, points, games) tuple
-    pub async fn check_player_in_playoffs(
-        &self,
-        player_id: i64,
-        season: &u32,
-        game_type: u8,
-    ) -> Result<(bool, i32, i32, i32, i32)> {
-        // Try to get player game log
-        match self.get_player_game_log(player_id, season, game_type).await {
-            Ok(game_log) => {
-                // Is the player in the playoffs?
-                let is_in_playoffs = !game_log.game_log.is_empty();
-
-                // If player has playoff games
-                if is_in_playoffs {
-                    // Calculate totals from game log entries
-                    let (goals, assists, points, games) =
-                        calculate_totals_from_game_log(&game_log.game_log);
-                    return Ok((true, goals, assists, points, games));
-                }
-
-                // Player not in playoffs
-                Ok((false, 0, 0, 0, 0))
-            }
-            Err(e) => {
-                // Log the error but don't fail the entire operation
-                tracing::warn!("Error fetching game log for player {}: {}", player_id, e);
-                Ok((false, 0, 0, 0, 0))
-            }
-        }
     }
 }
 

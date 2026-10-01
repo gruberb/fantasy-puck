@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import { draftApi } from '../api/draft-api';
+import { draftApi } from '@/features/draft/api/draft-api';
 
 export function useFinalizeDraft() {
   const mutation = useMutation({

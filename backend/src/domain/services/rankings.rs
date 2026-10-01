@@ -73,7 +73,7 @@ pub fn calculate_team_rankings(
         })
         .collect();
 
-    rankings.sort_by(|a, b| b.total_points.cmp(&a.total_points));
+    rankings.sort_by_key(|x| std::cmp::Reverse(x.total_points));
     for (i, r) in rankings.iter_mut().enumerate() {
         r.rank = i + 1;
     }
@@ -118,7 +118,7 @@ pub fn build_daily_rankings(rows: Vec<DailyPlayerStat>) -> Vec<DailyRanking> {
         .into_values()
         .map(|perf| {
             let mut players = perf.player_performances;
-            players.sort_by(|a, b| b.points.cmp(&a.points));
+            players.sort_by_key(|x| std::cmp::Reverse(x.points));
             let highlights: Vec<PlayerHighlight> = players
                 .into_iter()
                 .take(3)
@@ -141,7 +141,7 @@ pub fn build_daily_rankings(rows: Vec<DailyPlayerStat>) -> Vec<DailyRanking> {
         })
         .collect();
 
-    rankings.sort_by(|a, b| b.daily_points.cmp(&a.daily_points));
+    rankings.sort_by_key(|x| std::cmp::Reverse(x.daily_points));
     for (i, r) in rankings.iter_mut().enumerate() {
         r.rank = i + 1;
     }
@@ -181,9 +181,21 @@ mod tests {
             players: vec![mk_player(30, "Crosby")],
         };
         let stats = vec![
-            SeasonSkaterStat { nhl_id: 10, goals: 5, assists: 3 },
-            SeasonSkaterStat { nhl_id: 20, goals: 2, assists: 4 },
-            SeasonSkaterStat { nhl_id: 30, goals: 1, assists: 1 },
+            SeasonSkaterStat {
+                nhl_id: 10,
+                goals: 5,
+                assists: 3,
+            },
+            SeasonSkaterStat {
+                nhl_id: 20,
+                goals: 2,
+                assists: 4,
+            },
+            SeasonSkaterStat {
+                nhl_id: 30,
+                goals: 1,
+                assists: 1,
+            },
         ];
         let r = calculate_team_rankings(vec![team_a, team_b], &stats);
         assert_eq!(r[0].team_id, 1);
@@ -201,7 +213,11 @@ mod tests {
             name: "A".into(),
             players: vec![mk_player(10, "Ovi"), mk_player(10, "Ovi dup")],
         };
-        let stats = vec![SeasonSkaterStat { nhl_id: 10, goals: 5, assists: 3 }];
+        let stats = vec![SeasonSkaterStat {
+            nhl_id: 10,
+            goals: 5,
+            assists: 3,
+        }];
         let r = calculate_team_rankings(vec![team], &stats);
         assert_eq!(r[0].total_points, 8);
     }
@@ -232,7 +248,11 @@ mod tests {
         ];
         let r = build_daily_rankings(rows);
         assert_eq!(r[0].daily_points, 2);
-        assert_eq!(r[0].player_highlights.len(), 1, "zero-point players not in highlights");
+        assert_eq!(
+            r[0].player_highlights.len(),
+            1,
+            "zero-point players not in highlights"
+        );
         assert_eq!(r[0].player_highlights[0].nhl_id, 10);
     }
 }

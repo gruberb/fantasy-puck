@@ -8,8 +8,8 @@ use crate::api::routes::AppState;
 use crate::auth::jwt::issue_token;
 use crate::auth::middleware::AuthUser;
 use crate::auth::password::{hash_password, verify_password};
-use crate::infra::db::users::MembershipRow;
 use crate::error::{Error, Result};
+use crate::infra::db::users::MembershipRow;
 
 // ---------------------------------------------------------------------------
 // Request / response types
@@ -86,7 +86,12 @@ pub async fn login(
     }
 
     let profile = state.db.get_profile(&user.id).await?;
-    let token = issue_token(&user.id, &user.email, profile.is_admin, &state.config.jwt_secret)?;
+    let token = issue_token(
+        &user.id,
+        &user.email,
+        profile.is_admin,
+        &state.config.jwt_secret,
+    )?;
 
     Ok(json_success(AuthResponse {
         token,
@@ -119,7 +124,12 @@ pub async fn register(
         .await?;
 
     let profile = state.db.get_profile(&user.id).await?;
-    let token = issue_token(&user.id, &user.email, profile.is_admin, &state.config.jwt_secret)?;
+    let token = issue_token(
+        &user.id,
+        &user.email,
+        profile.is_admin,
+        &state.config.jwt_secret,
+    )?;
 
     Ok(json_success(AuthResponse {
         token,

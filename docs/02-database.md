@@ -1,6 +1,6 @@
 # Database schema
 
-Every table and view, grouped by the concern they serve. Migration files live under [`backend/supabase/migrations/`](../backend/supabase/migrations/) and are applied at boot by `sqlx::migrate!` in [`main.rs:87`](../backend/src/main.rs) (idempotent; every migration uses `CREATE ... IF NOT EXISTS` or explicit `DO $$` guards, so applying an already-migrated database is a no-op).
+Every table and view, grouped by the concern they serve. Migration files live under [`backend/supabase/migrations/`](../backend/supabase/migrations/) and are applied at boot by `sqlx::migrate!` in [`main.rs`](../backend/src/main.rs) (idempotent; every migration uses `CREATE ... IF NOT EXISTS` or explicit `DO $$` guards, so applying an already-migrated database is a no-op).
 
 ## Migrations
 
@@ -15,6 +15,10 @@ Every table and view, grouped by the concern they serve. Migration files live un
 | `20260419000000_playoff_roster_cache.sql` | Single JSONB blob per `(season, game_type)` holding 16 playoff rosters so the draft does not fan out to NHL on every cold read. |
 | `20260420000000_nhl_mirror.sql` | Creates the eight NHL mirror tables plus `v_daily_fantasy_totals`. This is the big one. |
 | `20260420010000_nhl_skater_edge.sql` | Per-skater top speed / top shot speed from NHL Edge; written nightly. |
+| `20260429000000_stats_finalized_at.sql` | `nhl_games.stats_finalized_at`: set once a game's boxscore is post-buzzer-synced; every fantasy aggregate counts only finalized games. |
+| `20260508000000_final_state_detected_at.sql` | `nhl_games.final_state_detected_at`: first time the mirror saw the game FINAL/OFF; starts the final-sync grace window. |
+| `20261001000000_mirror_parity.sql` | `nhl_standings.raw` and `nhl_goalie_season_stats.wins`, so race odds can read standings and goalie starters from the mirror instead of the NHL API. |
+| `20261001010000_draft_pick_uniqueness.sql` | Unique `(draft_session_id, pick_number)` and `(draft_session_id, nhl_id)` on `draft_picks`, created only if existing rows allow. |
 
 ## Four groups of tables
 
@@ -187,7 +191,9 @@ One row per pick, both the regular draft and the sleeper round.
 | `pick_number` | INTEGER | Global 0-based pick index |
 | `picked_at` | TIMESTAMPTZ | |
 
-Finalizing a draft (`POST /api/draft/{id}/finalize`) copies `draft_picks` rows into `fantasy_players`. Picks stay in `draft_picks` for history.
+Unique indexes on `(draft_session_id, pick_number)` and `(draft_session_id, nhl_id)` (migration `20261001010000_draft_pick_uniqueness.sql`, created only when existing data allows) back up the session row lock that serializes picks; see [`08-draft.md`](./08-draft.md).
+
+Finalizing a draft (`POST /api/draft/{id}/finalize`) copies `draft_picks` rows into `fantasy_players` in one `INSERT ... SELECT`. Picks stay in `draft_picks` for history.
 
 ### `playoff_roster_cache`
 Cache table, not a mirror. One JSONB blob per `(season, game_type)`:
@@ -259,6 +265,8 @@ Season leaderboard mirror. One row per `(player_id, season, game_type)`.
 
 Index: `idx_nsss_season_gt_points` on `(season, game_type, points DESC)` for top-N reads.
 
+Two sources write this table: the skater leaderboard (top N per category) and per-team club stats (every skater who dressed, regular season). Both go through one batched writer that merges with `COALESCE(new, old)`, so a player missing from a leaderboard category never has a club-stats total overwritten with 0.
+
 ### `nhl_goalie_season_stats`
 Narrow mirror - only the fields that show up in the Pulse matchup block and the goalie Elo bonus.
 
@@ -266,8 +274,11 @@ Narrow mirror - only the fields that show up in the Pulse matchup block and the 
 | --- | --- | --- |
 | `player_id`, `season`, `game_type` | composite PK | |
 | `team_abbrev`, `name`, `record` | TEXT | |
+| `wins` | INTEGER | Starter signal for the goalie rating bonus |
 | `gaa`, `save_pctg` | REAL | |
 | `shutouts` | INTEGER | |
+
+Mirrored for the configured game type and, in playoff mode, also for the regular season, which is what the goalie bonus reads.
 
 ### `nhl_team_rosters`
 Current roster per team. JSONB column holds the raw NHL roster shape.
@@ -290,6 +301,7 @@ One row per team per season.
 | `point_pctg` | REAL | |
 | `streak_code`, `streak_count` | TEXT/INTEGER | `W7`, `L2`, etc. |
 | `l10_wins`, `l10_losses`, `l10_ot_losses` | INTEGER | Last-ten, frozen once the regular season ends |
+| `raw` | JSONB | Full NHL standings entry; `load_standings_payload` serves these so Elo seeding and the home-ice bonus see home/road splits |
 | `updated_at` | TIMESTAMPTZ | |
 
 ### `nhl_playoff_bracket`
@@ -369,7 +381,7 @@ Cache-key patterns in use:
 | `race_odds:...` | `handlers/race_odds.rs` | Same as insights |
 | `pulse_narrative:{league_id}:{game_id}` | `handlers/pulse.rs` | Live poller on `LIVE → OFF/FINAL` transition |
 
-Retention: the 09:00 UTC cron deletes rows whose `date` is older than seven days ([`scheduler.rs:256-267`](../backend/src/infra/jobs/scheduler.rs)).
+Retention: the 09:00 UTC cron deletes rows whose `date` is older than seven days ([`scheduler.rs`](../backend/src/infra/jobs/scheduler.rs)).
 
 ---
 

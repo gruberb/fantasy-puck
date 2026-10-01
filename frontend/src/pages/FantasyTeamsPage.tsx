@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
 import { useTeams } from "@/features/teams";
 import { useLeagueMembers } from "@/features/draft";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 import { getTeamGradient } from "@/utils/teamStyles";
 
 const FantasyTeamsPage = () => {

@@ -1,7 +1,7 @@
 import { NHLTeam } from "@/types/fantasyTeams";
 import { FantasyTeamPoints } from "@/types/fantasyTeams";
 import { Link } from "react-router-dom";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 
 interface TeamHeaderProps {
   team: NHLTeam;

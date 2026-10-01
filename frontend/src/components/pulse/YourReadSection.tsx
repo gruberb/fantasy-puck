@@ -1,4 +1,5 @@
 import type { MyTeamDiagnosis } from "@/features/pulse";
+import InsightCard from "@/components/common/InsightCard";
 
 interface Props {
   data: MyTeamDiagnosis;
@@ -15,25 +16,17 @@ export default function YourReadSection({ data }: Props) {
   const hasNarrative = diagnosis.narrativeMarkdown.trim().length > 0;
 
   return (
-    <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-      <header className="bg-[var(--color-you)] px-6 py-3">
-        <h2 className="font-extrabold uppercase tracking-wider text-sm text-[#1A1A1A]">
-          Your Read
-        </h2>
-      </header>
-
-      <div className="p-6 space-y-4">
-        <RankStrip data={data} />
-        <ConcentrationStrip data={data} />
-        <div className="pt-3 border-t border-gray-200">
-          {hasNarrative ? (
-            <MarkdownBlock text={diagnosis.narrativeMarkdown} />
-          ) : (
-            <StaticFallback data={data} />
-          )}
-        </div>
+    <InsightCard accent="var(--color-you)" title="Your Read" ink="#1A1A1A" bodyClassName="p-6 space-y-4">
+      <RankStrip data={data} />
+      <ConcentrationStrip data={data} />
+      <div className="pt-3 border-t border-gray-200">
+        {hasNarrative ? (
+          <MarkdownBlock text={diagnosis.narrativeMarkdown} />
+        ) : (
+          <StaticFallback data={data} />
+        )}
       </div>
-    </section>
+    </InsightCard>
   );
 }
 
@@ -123,7 +116,7 @@ function MarkdownBlock({ text }: { text: string }) {
   };
   for (const rawLine of text.split("\n")) {
     const line = rawLine.trim();
-    // Claude occasionally emits markdown horizontal rules as section
+    // The model occasionally emits markdown horizontal rules as section
     // separators ("---", "***", "___"). The visual card already has
     // an H3 + border for each section — the rule is noise; drop it.
     if (/^[-*_]{3,}\s*$/.test(line)) {

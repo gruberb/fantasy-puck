@@ -1,6 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { useMemo, useCallback } from "react";
+import { APP_CONFIG } from "@/config";
+
+const IS_PLAYOFFS = APP_CONFIG.DEFAULT_GAME_TYPE === 3;
 
 export function usePlayoffsData() {
   const {
@@ -28,8 +31,10 @@ export function usePlayoffsData() {
     [playoffsData],
   );
 
+  // Outside playoff mode there is no bracket to be eliminated from, so
+  // every team counts as active; otherwise every row would render dimmed.
   const isTeamInPlayoffs = useCallback(
-    (teamAbbrev: string) => teamsInPlayoffs.has(teamAbbrev),
+    (teamAbbrev: string) => !IS_PLAYOFFS || teamsInPlayoffs.has(teamAbbrev),
     [teamsInPlayoffs],
   );
 

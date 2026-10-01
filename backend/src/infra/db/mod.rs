@@ -1,9 +1,11 @@
+use anyhow::Context;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use std::str::FromStr;
 
 use crate::error::{Error, Result};
 
 pub mod cache;
+pub mod cache_keys;
 pub mod draft;
 pub mod league_stats;
 pub mod leagues;
@@ -25,15 +27,24 @@ pub struct DateWindow<'a> {
 
 impl<'a> DateWindow<'a> {
     pub fn unbounded() -> Self {
-        Self { min_date: None, max_date: None }
+        Self {
+            min_date: None,
+            max_date: None,
+        }
     }
 
     pub fn since(min_date: &'a str) -> Self {
-        Self { min_date: Some(min_date), max_date: None }
+        Self {
+            min_date: Some(min_date),
+            max_date: None,
+        }
     }
 
     pub fn between(min_date: &'a str, max_date: &'a str) -> Self {
-        Self { min_date: Some(min_date), max_date: Some(max_date) }
+        Self {
+            min_date: Some(min_date),
+            max_date: Some(max_date),
+        }
     }
 }
 
@@ -48,7 +59,7 @@ impl FantasyDb {
         // Use session pooler (port 5432) which supports prepared statements,
         // but still set cache to 0 for safety with PgBouncer
         let connect_options = PgConnectOptions::from_str(db_url)
-            .map_err(|e| Error::Internal(format!("Invalid DATABASE_URL: {}", e)))?
+            .context("invalid DATABASE_URL")?
             .statement_cache_capacity(0);
 
         let pool = PgPoolOptions::new()
@@ -102,34 +113,48 @@ impl FantasyDb {
 
     /// Get all league IDs (used by scheduler to iterate over leagues)
     pub async fn get_all_league_ids(&self) -> Result<Vec<String>> {
-        let ids: Vec<String> =
-            sqlx::query_scalar("SELECT id::text FROM leagues")
-                .fetch_all(&self.pool)
-                .await?;
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id::text FROM leagues")
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(ids)
     }
 
     /// Get the league_id for a draft session. Useful for authorization checks.
     pub async fn get_league_id_for_draft(&self, draft_id: &str) -> Result<String> {
-        let league_id: String = sqlx::query_scalar(
-            "SELECT league_id::text FROM draft_sessions WHERE id = $1::uuid",
-        )
-        .bind(draft_id)
-        .fetch_one(&self.pool)
-        .await?;
+        let league_id: String =
+            sqlx::query_scalar("SELECT league_id::text FROM draft_sessions WHERE id = $1::uuid")
+                .bind(draft_id)
+                .fetch_one(&self.pool)
+                .await?;
         Ok(league_id)
     }
 
     /// Get the league_id that a fantasy team belongs to.
     pub async fn get_league_id_for_team(&self, team_id: i64) -> Result<String> {
+        let league_id: String =
+            sqlx::query_scalar("SELECT league_id::text FROM fantasy_teams WHERE id = $1")
+                .bind(team_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| Error::NotFound("Team not found".into()))?;
+
+        Ok(league_id)
+    }
+
+    pub async fn get_league_id_for_sleeper(&self, sleeper_id: i64) -> Result<String> {
         let league_id: String = sqlx::query_scalar(
-            "SELECT league_id::text FROM fantasy_teams WHERE id = $1",
+            r#"
+            SELECT ft.league_id::text
+            FROM fantasy_sleepers fs
+            JOIN fantasy_teams ft ON ft.id = fs.team_id
+            WHERE fs.id = $1
+            "#,
         )
-        .bind(team_id)
+        .bind(sleeper_id)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| Error::NotFound("Team not found".into()))?;
+        .ok_or_else(|| Error::NotFound("Sleeper not found".into()))?;
 
         Ok(league_id)
     }
@@ -150,163 +175,6 @@ impl FantasyDb {
         .ok_or_else(|| Error::NotFound("Player not found".into()))?;
 
         Ok(league_id)
-    }
-
-    // --- Team methods (delegate to TeamDbService) ---
-
-    pub async fn get_team(
-        &self,
-        team_id: i64,
-        league_id: &str,
-    ) -> Result<crate::domain::models::db::FantasyTeam> {
-        teams::TeamDbService::new(&self.pool)
-            .get_team(team_id, league_id)
-            .await
-    }
-
-    pub async fn get_all_teams(
-        &self,
-        league_id: &str,
-    ) -> Result<Vec<crate::domain::models::db::FantasyTeam>> {
-        teams::TeamDbService::new(&self.pool)
-            .get_all_teams(league_id)
-            .await
-    }
-
-    pub async fn get_fantasy_bets_by_nhl_team(
-        &self,
-        league_id: &str,
-    ) -> Result<Vec<crate::domain::models::db::FantasyTeamBets>> {
-        teams::TeamDbService::new(&self.pool)
-            .get_fantasy_bets_by_nhl_team(league_id)
-            .await
-    }
-
-    pub async fn get_fantasy_teams_for_nhl_teams(
-        &self,
-        nhl_teams: &[&str],
-        league_id: &str,
-    ) -> Result<Vec<crate::domain::models::fantasy::FantasyTeamInGame>> {
-        teams::TeamDbService::new(&self.pool)
-            .get_fantasy_teams_for_nhl_teams(nhl_teams, league_id)
-            .await
-    }
-
-    pub async fn update_team_name(&self, team_id: i64, name: &str) -> Result<()> {
-        teams::TeamDbService::new(&self.pool)
-            .update_team_name(team_id, name)
-            .await
-    }
-
-    pub async fn get_team_sparklines(
-        &self,
-        league_id: &str,
-        days: i32,
-        min_date: &str,
-    ) -> Result<std::collections::HashMap<i64, Vec<i32>>> {
-        teams::TeamDbService::new(&self.pool)
-            .get_team_sparklines(league_id, days, min_date)
-            .await
-    }
-
-    /// Same shape as `get_team_sparklines` but unioned with
-    /// `v_daily_fantasy_totals` so today's running total shows up
-    /// in the chart before the nightly/afternoon cron rolls it into
-    /// `daily_rankings`. Used by Pulse.
-    pub async fn get_team_sparklines_with_live(
-        &self,
-        league_id: &str,
-        days: i32,
-        min_date: &str,
-    ) -> Result<std::collections::HashMap<i64, Vec<i32>>> {
-        teams::TeamDbService::new(&self.pool)
-            .get_team_sparklines_with_live(league_id, days, min_date)
-            .await
-    }
-
-    pub async fn get_all_teams_with_players(
-        &self,
-        league_id: &str,
-    ) -> Result<Vec<crate::domain::models::fantasy::FantasyTeamInGame>> {
-        teams::TeamDbService::new(&self.pool)
-            .get_all_teams_with_players(league_id)
-            .await
-    }
-
-    // --- Player methods (delegate to PlayerDbService) ---
-
-    pub async fn add_player_to_team(
-        &self,
-        team_id: i64,
-        nhl_id: i64,
-        name: &str,
-        position: &str,
-        nhl_team: &str,
-    ) -> Result<crate::domain::models::db::FantasyPlayer> {
-        players::PlayerDbService::new(&self.pool)
-            .add_player_to_team(team_id, nhl_id, name, position, nhl_team)
-            .await
-    }
-
-    pub async fn remove_player(&self, player_id: i64) -> Result<()> {
-        players::PlayerDbService::new(&self.pool)
-            .remove_player(player_id)
-            .await
-    }
-
-    pub async fn get_team_players(
-        &self,
-        team_id: i64,
-    ) -> Result<Vec<crate::domain::models::db::FantasyPlayer>> {
-        players::PlayerDbService::new(&self.pool)
-            .get_team_players(team_id)
-            .await
-    }
-
-    pub async fn get_nhl_teams_and_players(
-        &self,
-        league_id: &str,
-    ) -> Result<Vec<crate::domain::models::db::NhlTeamPlayers>> {
-        players::PlayerDbService::new(&self.pool)
-            .get_nhl_teams_and_players(league_id)
-            .await
-    }
-
-    pub async fn get_fantasy_players_for_nhl_teams(
-        &self,
-        nhl_teams: &[&str],
-        league_id: &str,
-    ) -> Result<Vec<crate::domain::models::fantasy::FantasyTeamInGame>> {
-        players::PlayerDbService::new(&self.pool)
-            .get_fantasy_players_for_nhl_teams(nhl_teams, league_id)
-            .await
-    }
-
-    // --- Sleeper methods (delegate to SleeperDbService) ---
-
-    pub async fn get_all_sleepers(
-        &self,
-        league_id: &str,
-    ) -> Result<Vec<crate::domain::models::db::FantasySleeper>> {
-        sleepers::SleeperDbService::new(&self.pool)
-            .get_all_sleepers(league_id)
-            .await
-    }
-
-    pub async fn remove_sleeper(&self, sleeper_id: i64) -> Result<()> {
-        sleepers::SleeperDbService::new(&self.pool)
-            .remove_sleeper(sleeper_id)
-            .await
-    }
-
-    pub async fn get_daily_ranking_stats(
-        &self,
-        league_id: &str,
-        window: DateWindow<'_>,
-    ) -> Result<Vec<crate::domain::models::db::TeamDailyRankingStats>> {
-        teams::TeamDbService::new(&self.pool)
-            .get_daily_ranking_stats(league_id, window)
-            .await
     }
 
     /// Read the cached playoff roster pool (16-team blob) if present.

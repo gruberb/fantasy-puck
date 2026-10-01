@@ -1,5 +1,5 @@
 import { API_URL } from '@/config';
-import type { AuthService, AuthSession } from '../types';
+import type { AuthService, AuthSession } from '@/features/auth/types';
 
 const STORAGE_KEY = "auth_session";
 

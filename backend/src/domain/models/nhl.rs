@@ -3,6 +3,10 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+/// NHL `gameTypeId` values, as used in API paths and `game_type` columns.
+pub const GAME_TYPE_REGULAR: u8 = 2;
+pub const GAME_TYPE_PLAYOFFS: u8 = 3;
+
 /// Player data from NHL API
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -246,6 +250,27 @@ pub struct TeamGameStats {
     pub goalies: Vec<BoxscorePlayer>,
 }
 
+impl TeamGameStats {
+    pub fn skaters(&self) -> impl Iterator<Item = &BoxscorePlayer> {
+        self.forwards.iter().chain(&self.defense)
+    }
+
+    pub fn all_players(&self) -> impl Iterator<Item = &BoxscorePlayer> {
+        self.skaters().chain(&self.goalies)
+    }
+
+    /// The team's goal total as the scoreboard shows it. Goalies never
+    /// score in the NHL's per-player lines, so skaters are enough.
+    pub fn skater_goals(&self) -> i32 {
+        self.skaters().map(|p| p.goals.unwrap_or(0)).sum()
+    }
+}
+
+/// The `default` entry of an NHL localized-name map (`{"default": "..."}`).
+pub fn default_name(names: &HashMap<String, String>) -> String {
+    names.get("default").cloned().unwrap_or_default()
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BoxscoreTeam {
@@ -437,48 +462,6 @@ pub struct TopSeed {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct PlayerGameLog {
-    pub season_id: u32,
-    pub game_type_id: u8,
-    pub player_stats_seasons: Vec<PlayerStatsSeason>,
-    pub game_log: Vec<GameLogEntry>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct PlayerStatsSeason {
-    pub season: u32,
-    pub game_types: Vec<u8>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct GameLogEntry {
-    pub game_id: u32,
-    pub team_abbrev: String,
-    pub home_road_flag: String,
-    pub game_date: String,
-    pub goals: i32,
-    pub assists: i32,
-    pub common_name: CommonName,
-    pub opponent_common_name: CommonName,
-    pub points: i32,
-    pub plus_minus: i32,
-    pub power_play_goals: i32,
-    pub power_play_points: i32,
-    pub game_winning_goals: i32,
-    pub ot_goals: i32,
-    pub shots: i32,
-    pub shifts: i32,
-    pub shorthanded_goals: i32,
-    pub shorthanded_points: i32,
-    pub opponent_abbrev: String,
-    pub pim: i32,
-    pub toi: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CommonName {
     pub default: String,
 }
@@ -517,6 +500,21 @@ impl GameState {
     pub fn is_upcoming(&self) -> bool {
         matches!(self, GameState::Preview | GameState::Pre | GameState::Fut)
     }
+
+    /// Upstream spelling, as stored in `nhl_games.game_state`. Must stay
+    /// in sync with the serde renames above.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GameState::Live => "LIVE",
+            GameState::Final => "FINAL",
+            GameState::Off => "OFF",
+            GameState::Crit => "CRIT",
+            GameState::Preview => "PREVIEW",
+            GameState::Pre => "PRE",
+            GameState::Fut => "FUT",
+            GameState::Unknown => "UNKNOWN",
+        }
+    }
 }
 
 impl FromStr for GameState {
@@ -536,7 +534,27 @@ impl FromStr for GameState {
     }
 }
 
-// Player matching and stat calculation utilities are in utils/nhl.rs
+#[cfg(test)]
+mod game_state_tests {
+    use super::GameState;
+
+    #[test]
+    fn as_str_matches_serde_and_from_str() {
+        for state in [
+            GameState::Live,
+            GameState::Final,
+            GameState::Off,
+            GameState::Crit,
+            GameState::Preview,
+            GameState::Pre,
+            GameState::Fut,
+            GameState::Unknown,
+        ] {
+            assert_eq!(serde_json::to_value(state).unwrap(), state.as_str());
+            assert_eq!(state.as_str().parse::<GameState>(), Ok(state));
+        }
+    }
+}
 
 #[cfg(test)]
 mod schedule_payload_tests {

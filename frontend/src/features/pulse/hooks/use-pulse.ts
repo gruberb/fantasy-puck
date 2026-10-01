@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { QUERY_INTERVALS } from "@/config";
 import { fetchApi } from "@/lib/api-client";
-import { useLeague } from "@/contexts/LeagueContext";
-import type { PulseResponse } from "../types";
+import { useLeague } from "@/contexts/use-league";
+import type { PulseResponse } from "@/features/pulse/types";
 
 export function usePulse() {
   const { activeLeagueId } = useLeague();

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use chrono::Utc;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -32,9 +33,7 @@ impl CacheService {
             .map_err(Error::Database)?;
 
         if let Some(row) = row {
-            let data: String = row
-                .try_get(0)
-                .map_err(|e| Error::Internal(format!("Failed to read data from cache: {}", e)))?;
+            let data: String = row.try_get(0).context("failed to read data from cache")?;
 
             // Treat deserialize failures as a cache miss. This self-heals
             // schema drift: when a DTO gains a new field (or changes shape),
@@ -57,14 +56,21 @@ impl CacheService {
         }
     }
 
+    /// Cache writes on the request path are an optimisation: a failure is
+    /// logged and the caller still returns the value it computed.
+    pub async fn store_best_effort<T: Serialize>(&self, cache_key: &str, date: &str, response: &T) {
+        if let Err(e) = self.store_response(cache_key, date, response).await {
+            warn!(cache_key = %cache_key, "cache write failed: {e}");
+        }
+    }
+
     pub async fn store_response<T: Serialize>(
         &self,
         cache_key: &str,
         date: &str,
         response: &T,
     ) -> Result<()> {
-        let data = serde_json::to_string(response)
-            .map_err(|e| Error::Internal(format!("Failed to serialize response: {}", e)))?;
+        let data = serde_json::to_string(response).context("failed to serialize response")?;
 
         let now = Utc::now().to_rfc3339();
 
@@ -83,25 +89,6 @@ impl CacheService {
             .bind(&data)
             .bind(&now)
             .bind(&now)
-            .execute(&self.pool)
-            .await
-            .map_err(Error::Database)?;
-
-        Ok(())
-    }
-
-    pub async fn update_last_updated(&self, cache_key: &str) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-
-        let query = r#"
-            UPDATE response_cache
-            SET last_updated = $1
-            WHERE cache_key = $2
-        "#;
-
-        sqlx::query(query)
-            .bind(&now)
-            .bind(cache_key)
             .execute(&self.pool)
             .await
             .map_err(Error::Database)?;
@@ -154,18 +141,6 @@ impl CacheService {
 }
 
 impl CacheService {
-    /// Delete every row whose `cache_key` begins with `prefix`.
-    pub async fn invalidate_by_prefix(&self, prefix: &str) -> Result<u64> {
-        let query = "DELETE FROM response_cache WHERE cache_key LIKE $1";
-        let pattern = format!("{}%", prefix);
-        let result = sqlx::query(query)
-            .bind(pattern)
-            .execute(&self.pool)
-            .await
-            .map_err(Error::Database)?;
-        Ok(result.rows_affected())
-    }
-
     /// Delete every row whose `cache_key` matches the SQL LIKE
     /// `pattern`. Used to target a narrow slice of the keyspace where a
     /// pure prefix would also wipe sibling keys the caller wants to

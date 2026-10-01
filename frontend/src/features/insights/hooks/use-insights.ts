@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { API_URL, QUERY_INTERVALS } from "@/config";
-import { useLeague } from "@/contexts/LeagueContext";
+import { QUERY_INTERVALS } from "@/config";
+import { fetchApi, withLeague } from "@/lib/api-client";
+import { useLeague } from "@/contexts/use-league";
 
 export interface HotPlayerSignal {
   nhlId: number;
@@ -142,15 +143,10 @@ export interface InsightsResponse {
   signals: InsightsSignals;
 }
 
-async function fetchInsights(leagueId?: string): Promise<InsightsResponse> {
-  let endpoint = `${API_URL}/insights`;
-  if (leagueId) {
-    endpoint += `?league_id=${leagueId}`;
-  }
-  const res = await fetch(endpoint);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || "Failed to fetch insights");
-  return json.data;
+function fetchInsights(leagueId?: string): Promise<InsightsResponse> {
+  return fetchApi<InsightsResponse>(
+    leagueId ? withLeague("insights", leagueId) : "insights",
+  );
 }
 
 export function useInsights() {

@@ -1,51 +1,14 @@
-import {
-  createContext,
-  useContext,
-  useCallback,
-  ReactNode,
-} from "react";
+import { useCallback, useState, ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "./AuthContext";
-import { api } from "@/api/client";
+import { useAuth } from "./use-auth";
+import { LeagueContext } from "./use-league";
+import type { LeagueMembership, MembershipRow } from "./use-league";
 import type { League } from "@/types/league";
 import type { DraftSession } from "@/features/draft";
-
-// -- Types ------------------------------------------------------------------
-
-export interface MembershipRow {
-  leagueId: string;
-  leagueName: string;
-  leagueSeason: string;
-  fantasyTeamId: number | null;
-  teamName: string | null;
-  draftOrder: number;
-}
-
-export interface LeagueMembership {
-  id: string;
-  league_id: string;
-  user_id: string;
-  fantasy_team_id: number;
-  draft_order: number;
-  leagues: League;
-  fantasy_teams: { id: number; name: string } | null;
-}
-
-interface LeagueContextType {
-  activeLeagueId: string | null;
-  setActiveLeagueId: (id: string | null) => void;
-  activeLeague: League | null;
-  allLeagues: League[];
-  leaguesLoading: boolean;
-  myMemberships: LeagueMembership[];
-  myLeagues: League[];
-  draftSession: DraftSession | null;
-  loading: boolean;
-}
-
-const STORAGE_KEY = "lastViewedLeagueId";
-
-const LeagueContext = createContext<LeagueContextType | undefined>(undefined);
+import { api } from "@/api/client";
+import { LAST_VIEWED_LEAGUE_KEY } from "@/config";
+import { leagueKeys, membershipKeys } from "@/features/draft/hooks/use-leagues";
+import { draftSessionQueryKey } from "@/features/draft/hooks/use-draft-session";
 
 // -- Helper to transform membership rows ------------------------------------
 
@@ -69,8 +32,6 @@ function transformMemberships(data: MembershipRow[], userId: string): LeagueMemb
 
 // -- Provider ---------------------------------------------------------------
 
-import { useState } from "react";
-
 export const LeagueProvider = ({ children }: { children: ReactNode }) => {
   const { user } = useAuth();
 
@@ -78,7 +39,7 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
   // `/games/:date` (which don't run LeagueShell) still know the last-viewed
   // league across a hard refresh.
   const [activeLeagueId, setActiveLeagueIdState] = useState<string | null>(
-    () => (typeof window === "undefined" ? null : localStorage.getItem(STORAGE_KEY)),
+    () => (typeof window === "undefined" ? null : localStorage.getItem(LAST_VIEWED_LEAGUE_KEY)),
   );
 
   // Set active league ID and persist to localStorage
@@ -87,9 +48,9 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
       setActiveLeagueIdState(id);
       if (user) {
         if (id) {
-          localStorage.setItem(STORAGE_KEY, id);
+          localStorage.setItem(LAST_VIEWED_LEAGUE_KEY, id);
         } else {
-          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem(LAST_VIEWED_LEAGUE_KEY);
         }
       }
     },
@@ -98,7 +59,7 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
 
   // Fetch leagues via React Query
   const leaguesQuery = useQuery({
-    queryKey: ["leagues", user?.id ?? "public"],
+    queryKey: leagueKeys.list(user?.id),
     queryFn: () => api.getLeagues(!user),
   });
 
@@ -106,7 +67,7 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
 
   // Fetch memberships via React Query (only when logged in)
   const membershipsQuery = useQuery({
-    queryKey: ["memberships", user?.id],
+    queryKey: membershipKeys.forUser(user?.id),
     queryFn: async () => {
       const data = (await api.getMemberships()) as MembershipRow[];
       return transformMemberships(data, user!.id);
@@ -116,9 +77,9 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
 
   const myMemberships: LeagueMembership[] = membershipsQuery.data ?? [];
 
-  // Fetch draft session — uses same query key as useDraftSession so WS updates propagate
+  // Shares useDraftSession's key so WS updates propagate here too.
   const draftQuery = useQuery({
-    queryKey: ["draft", "session", activeLeagueId],
+    queryKey: draftSessionQueryKey(activeLeagueId),
     queryFn: async () => {
       const data = (await api.getDraftByLeague(activeLeagueId!)) as {
         session: DraftSession;
@@ -151,14 +112,4 @@ export const LeagueProvider = ({ children }: { children: ReactNode }) => {
       {children}
     </LeagueContext.Provider>
   );
-};
-
-// -- Hook -------------------------------------------------------------------
-
-export const useLeague = (): LeagueContextType => {
-  const context = useContext(LeagueContext);
-  if (context === undefined) {
-    throw new Error("useLeague must be used within a LeagueProvider");
-  }
-  return context;
 };

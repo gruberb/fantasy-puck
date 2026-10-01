@@ -4,11 +4,11 @@
 //! tonight, league board, league outlook) is recomputed from the NHL
 //! mirror on every request. The expensive caller-specific breakdown
 //! (per-player projections, grades, recent games, yesterday recap,
-//! and the Claude narrative) is cached as a single
+//! and the LLM narrative) is cached as a single
 //! `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:bundle:v1`
 //! payload. The nested narrative still has its own
 //! `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:v2` cache key
-//! so a bundle miss does not necessarily mean a Claude miss.
+//! so a bundle miss does not necessarily mean an LLM miss.
 //!
 //! Cache invalidation: the live poller (see
 //! `infra::jobs::live_poller::poll_one_game`) observes each game's
@@ -16,7 +16,7 @@
 //! `:v2` narrative tail for leagues whose rostered players were in
 //! that game. The `:bundle:v1` payload survives the transition: its
 //! projections and rollups are stable mid-evening and a blanket wipe
-//! would force a synchronous Claude regen on the next Pulse load.
+//! would force a synchronous LLM regen on the next Pulse load.
 //! The bundle ages out on the date roll and is rebuilt by the daily
 //! prewarm with the fresh narrative nested inside.
 
@@ -30,17 +30,21 @@ use axum::{
 use chrono::Utc;
 use tracing::warn;
 
+use crate::api::dtos::format_period;
 use crate::api::dtos::pulse::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{current_date_window, game_type, season};
 use crate::auth::middleware::AuthUser;
 use crate::domain::models::fantasy::{FantasyTeamInGame, PlayerInGame};
+use crate::domain::models::nhl::GAME_TYPE_PLAYOFFS;
 use crate::domain::models::nhl::{GameState, SeriesStatus};
 use crate::domain::prediction::series_projection::{
     classify, games_remaining, probability_to_advance, SeriesStateCode,
 };
+use crate::domain::time::hockey_today;
 use crate::error::Result;
+use crate::infra::db::cache_keys;
 use crate::infra::db::nhl_mirror::{self, NhlGameRow, PlayerGameStatRow};
 use crate::infra::nhl::constants::team_names;
 
@@ -112,7 +116,7 @@ pub(crate) async fn resolve_my_team_diagnosis(
     team_id: i64,
     today: &str,
 ) -> Result<Option<crate::api::dtos::pulse::MyTeamDiagnosis>> {
-    if game_type() != 3 {
+    if !crate::api::is_playoffs() {
         return Ok(None);
     }
 
@@ -139,23 +143,16 @@ pub(crate) async fn resolve_my_team_diagnosis(
         diagnosis: bundle.diagnosis,
         players: bundle.players,
     };
-    let _ = state
+    state
         .db
         .cache()
-        .store_response(&cache_key, today, &diagnosis)
+        .store_best_effort(&cache_key, today, &diagnosis)
         .await;
     Ok(Some(diagnosis))
 }
 
 fn team_diagnosis_bundle_cache_key(league_id: &str, team_id: i64, today: &str) -> String {
-    format!(
-        "team_diagnosis:{}:{}:{}:{}:{}:bundle:v1",
-        league_id,
-        team_id,
-        season(),
-        game_type(),
-        today
-    )
+    cache_keys::team_diagnosis_bundle(league_id, team_id, season(), game_type(), today)
 }
 
 fn largest_stack(nhl_teams: &[String]) -> Option<(String, u32)> {
@@ -178,7 +175,7 @@ async fn build_league_outlook(
     use crate::api::dtos::pulse::{LeagueOutlook, LeagueOutlookEntry, LeagueOutlookStack};
     use crate::infra::prediction::race_odds_cache;
 
-    if game_type() != 3 {
+    if !crate::api::is_playoffs() {
         return None;
     }
     let pool = state.db.pool();
@@ -187,7 +184,7 @@ async fn build_league_outlook(
         pool,
         league_id,
         season() as i32,
-        3,
+        GAME_TYPE_PLAYOFFS as i16,
         current_date_window(),
     )
     .await
@@ -203,7 +200,7 @@ async fn build_league_outlook(
         let n = points_distribution.len();
         if n == 0 {
             0.0
-        } else if n % 2 == 0 {
+        } else if n.is_multiple_of(2) {
             (points_distribution[n / 2 - 1] + points_distribution[n / 2]) as f32 / 2.0
         } else {
             points_distribution[n / 2] as f32
@@ -214,7 +211,7 @@ async fn build_league_outlook(
         .db
         .cache()
         .get_cached_response::<crate::api::dtos::race_odds::RaceOddsResponse>(
-            &race_odds_cache::cache_key(league_id, season(), game_type(), today),
+            &cache_keys::race_odds(league_id, season(), game_type(), today),
         )
         .await
         .ok()
@@ -690,14 +687,6 @@ async fn compute_my_games_tonight(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn hockey_today() -> String {
-    use chrono_tz::America::New_York;
-    Utc::now()
-        .with_timezone(&New_York)
-        .format("%Y-%m-%d")
-        .to_string()
-}
-
 async fn resolve_my_team_id(state: &Arc<AppState>, league_id: &str, user_id: &str) -> Option<i64> {
     match state.db.get_league_members(league_id).await {
         Ok(members) => members
@@ -709,12 +698,6 @@ async fn resolve_my_team_id(state: &Arc<AppState>, league_id: &str, user_id: &st
             None
         }
     }
-}
-
-fn format_period(number: Option<i16>, period_type: Option<&str>) -> Option<String> {
-    let n = number?;
-    let label = period_type.unwrap_or("");
-    Some(format!("{} {}", n, label))
 }
 
 /// Map the string stored in `nhl_games.game_state` to the debug-form

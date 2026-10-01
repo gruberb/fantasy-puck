@@ -8,4 +8,7 @@ export type {
   MyGameTonight,
   MyPlayerInGame,
   LeagueBoardEntry,
+  MyTeamDiagnosis,
+  LeagueOutlook,
+  LeagueOutlookEntry,
 } from "./types";

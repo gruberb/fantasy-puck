@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useParams, Outlet } from "react-router-dom";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 import { ErrorMessage, LoadingSpinner } from "@gruberb/fun-ui";
 
 const LeagueShell = () => {

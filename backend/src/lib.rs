@@ -6,7 +6,7 @@
 // - `domain`  — pure business logic (no axum / sqlx / reqwest).
 //               Exposes `ports::*` traits that `infra` implements.
 // - `infra`   — adapters for Postgres (`infra::db`), the NHL API
-//               (`infra::nhl`), Anthropic (`infra::prediction`),
+//               (`infra::nhl`), OpenRouter (`infra::prediction`),
 //               and scheduled background jobs (`infra::jobs`).
 // - `api`     — Axum handlers, DTOs, routes, extractors, middleware.
 //

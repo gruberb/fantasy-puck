@@ -5,7 +5,6 @@ use axum::{
     extract::{Query, State},
     Json,
 };
-use serde_json::{from_value, to_value};
 
 use crate::api::dtos::PlayoffCarouselResponse;
 use crate::api::response::{json_success, ApiResponse};
@@ -33,20 +32,15 @@ pub async fn get_playoff_info(
         }
     };
 
-    let raw = state
+    let carousel = state
         .nhl_client
         .get_playoff_carousel(season.clone())
-        .await
-        .map_err(|_| {
+        .await?
+        .ok_or_else(|| {
             crate::error::Error::NotFound(
                 "Cannot find the Playoff Season you are looking for".to_string(),
             )
         })?;
 
-    let val = to_value(raw)
-        .map_err(|e| crate::error::Error::Internal(format!("serialization error: {}", e)))?;
-    let slim: PlayoffCarouselResponse = from_value(val)
-        .map_err(|e| crate::error::Error::Internal(format!("conversion error: {}", e)))?;
-
-    Ok(json_success(slim.with_computed_state()))
+    Ok(json_success(PlayoffCarouselResponse::from(carousel)))
 }

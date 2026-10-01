@@ -1,7 +1,7 @@
 import type { Column } from "@/components/common/RankingTable/types";
 import type { RosteredSkaterRow } from "@/types/leagueStats";
-import { getNHLTeamUrlSlug } from "@/utils/nhlTeams";
-import { useLeague } from "@/contexts/LeagueContext";
+import { nhlPlayerProfileUrl, nhlTeamUrl } from "@/utils/nhlTeams";
+import { useLeague } from "@/contexts/use-league";
 import { Link } from "react-router-dom";
 
 /**
@@ -43,7 +43,7 @@ export function useTopRosteredSkatersColumns(): Column[] {
               </div>
             )}
             <a
-              href={`https://www.nhl.com/player/${skater.nhlId}`}
+              href={nhlPlayerProfileUrl(skater.nhlId)}
               target="_blank"
               rel="noopener noreferrer"
               className="font-bold text-base text-[#1A1A1A] hover:text-[#2563EB]"
@@ -74,7 +74,7 @@ export function useTopRosteredSkatersColumns(): Column[] {
               </div>
             )}
             <a
-              href={`https://www.nhl.com/${getNHLTeamUrlSlug(skater.nhlTeam)}`}
+              href={nhlTeamUrl(skater.nhlTeam)}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-gray-600 hover:text-[#2563EB]"

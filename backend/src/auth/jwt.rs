@@ -1,3 +1,4 @@
+use anyhow::Context;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -36,7 +37,8 @@ pub fn issue_token(
         &claims,
         &EncodingKey::from_secret(secret.expose_secret().as_bytes()),
     )
-    .map_err(|e| Error::Internal(format!("Failed to issue JWT: {e}")))
+    .context("failed to issue JWT")
+    .map_err(Error::from)
 }
 
 /// Validate a JWT and return the claims.

@@ -129,11 +129,6 @@ pub mod nhl_client {
     /// a clinching goal.
     pub const PLAYOFF_CAROUSEL_TTL: Duration = Duration::from_secs(900);
 
-    /// Per-player game log. The heavy fan-out on Pulse and Insights
-    /// (one call per player on the slate) relies on this cache to
-    /// amortize cold loads across users within the TTL window.
-    pub const PLAYER_GAME_LOG_TTL: Duration = Duration::from_secs(600);
-
     /// Player bio and season totals.
     pub const PLAYER_DETAILS_TTL: Duration = Duration::from_secs(1800);
 
@@ -211,10 +206,22 @@ pub mod scheduler {
 // HTTP paths that talk out of process
 // ---------------------------------------------------------------------
 
-/// Outbound HTTP timeouts for services other than NHL: Anthropic,
+/// Outbound HTTP timeouts for services other than NHL: OpenRouter,
 /// the Daily Faceoff scraper, and the Axum inbound server timeout.
 pub mod http {
     use super::Duration;
+
+    /// Upper bound on `GET /api/nhl/skaters/top?limit=`. The league
+    /// settings player search asks for the whole pool (~800), so this
+    /// sits just above that rather than at a display-sized number.
+    pub const MAX_TOP_SKATERS_LIMIT: u32 = 1000;
+
+    /// Upper bound on `form_games` for the same endpoint.
+    pub const MAX_FORM_GAMES: usize = 20;
+
+    /// Per-session draft event buffer. A client that falls further behind
+    /// skips the missed events and refetches state on the next one.
+    pub const WS_BROADCAST_CAPACITY: usize = 64;
 
     /// Outer Axum timeout applied by the middleware layer in
     /// `backend/src/api/mod.rs`. Caps a request's total server-side
@@ -223,15 +230,14 @@ pub mod http {
     /// retry loop is cut off by the outer timeout.
     pub const AXUM_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-    /// Anthropic `/v1/messages` timeout. Covers the insights haiku
-    /// prompt, the team-diagnosis sonnet prompt, and any future
-    /// narrative calls. Set at 90 s because the team-diagnosis
-    /// payload is the heaviest one we send — full per-player
-    /// breakdown + recent-games strip for every rostered skater —
-    /// and Sonnet 4.6 can comfortably take 45–60 s to produce the
-    /// three 2200-token sections. 30 s was tight enough that the
-    /// daily prewarm caught sporadic timeouts on first deploy.
-    pub const CLAUDE_TIMEOUT: Duration = Duration::from_secs(90);
+    /// OpenRouter `/chat/completions` timeout. Covers the insights
+    /// prompts, the team-diagnosis prompt, and any future narrative
+    /// calls. Set at 90 s because the team-diagnosis payload is the
+    /// heaviest one we send — full per-player breakdown + recent-games
+    /// strip for every rostered skater — and a Sonnet-class model can
+    /// comfortably take 45–60 s to produce the four sections. 30 s was
+    /// tight enough that the daily prewarm caught sporadic timeouts.
+    pub const LLM_TIMEOUT: Duration = Duration::from_secs(90);
 
     /// Daily Faceoff headline scraper. The insights page renders
     /// without the news block if the scraper times out, so this is
@@ -257,8 +263,26 @@ pub mod http {
 /// the pollers are in place, the NHL client semaphore still guards
 /// concurrency — these intervals govern how often the pollers wake,
 /// not how many calls they make per wake.
+pub mod llm {
+    /// Four markdown sections with per-player bullets; a 10-skater
+    /// roster runs to ~10 bullets in the Player-by-Player block.
+    pub const TEAM_DIAGNOSIS_MAX_TOKENS: u32 = 2600;
+
+    /// JSON object with the daily preview, per-game narratives, hot
+    /// players, bracket, and last-night sections.
+    pub const DAILY_INSIGHTS_MAX_TOKENS: u32 = 3072;
+
+    /// Single markdown season wrap-up.
+    pub const SEASON_RECAP_MAX_TOKENS: u32 = 1600;
+}
+
 pub mod live_mirror {
     use super::Duration;
+
+    /// Before this ET hour, "today's games" also include yesterday's
+    /// still-live games so a long west-coast OT game doesn't vanish
+    /// from the slate at midnight ET.
+    pub const CARRYOVER_CUTOFF_HOUR_ET: u32 = 12;
 
     /// Live-poller period. How often to re-fetch boxscore and scores
     /// for every game whose state is LIVE or CRIT. 60 s matches the

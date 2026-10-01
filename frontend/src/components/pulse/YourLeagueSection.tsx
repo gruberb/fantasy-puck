@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
-import { useLeague } from "@/contexts/LeagueContext";
+import InsightCard from "@/components/common/InsightCard";
+import { useLeague } from "@/contexts/use-league";
 import type { LeagueOutlook, LeagueOutlookEntry } from "@/features/pulse";
 
 interface Props {
@@ -18,62 +19,55 @@ export default function YourLeagueSection({ data }: Props) {
   const max = Math.max(...data.pointsDistribution, 1);
 
   return (
-    <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-      <header className="bg-[#1A1A1A] text-white px-6 py-3">
-        <h2 className="font-extrabold uppercase tracking-wider text-sm">
-          Your League
-        </h2>
-      </header>
-      <div className="p-6 space-y-5">
-        <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
-          <span className="text-xs font-bold uppercase tracking-wider text-gray-500">
-            Leader
-          </span>
-          <Link
-            to={`${lp}/teams/${data.leaderTeamId}`}
-            className="font-bold text-lg hover:text-[#2563EB]"
-          >
-            {data.leaderName}
-          </Link>
-          <span className="tabular-nums font-bold">{data.leaderPoints} pts</span>
-          <span className="text-xs text-gray-500">
-            Median {data.medianPoints.toFixed(1)} · {data.totalTeams} teams
-          </span>
-        </div>
+    <InsightCard accent="#1A1A1A" title="Your League" bodyClassName="p-6 space-y-5">
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+        <span className="text-xs font-bold uppercase tracking-wider text-gray-500">
+          Leader
+        </span>
+        <Link
+          to={`${lp}/teams/${data.leaderTeamId}`}
+          className="font-bold text-lg hover:text-[#2563EB]"
+        >
+          {data.leaderName}
+        </Link>
+        <span className="tabular-nums font-bold">{data.leaderPoints} pts</span>
+        <span className="text-xs text-gray-500">
+          Median {data.medianPoints.toFixed(1)} · {data.totalTeams} teams
+        </span>
+      </div>
 
+      <div>
+        <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-2">
+          Points distribution
+        </div>
+        <div className="flex items-end gap-1 h-10">
+          {data.pointsDistribution.map((pts, i) => {
+            const h = Math.max(2, Math.round((pts / max) * 40));
+            return (
+              <div
+                key={i}
+                className="flex-1 bg-[#1A1A1A]"
+                style={{ height: `${h}px` }}
+                title={`${pts} pts`}
+              />
+            );
+          })}
+        </div>
+      </div>
+
+      {data.topThree.length > 0 && (
         <div>
           <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-2">
-            Points distribution
+            Top 3 expected finish
           </div>
-          <div className="flex items-end gap-1 h-10">
-            {data.pointsDistribution.map((pts, i) => {
-              const h = Math.max(2, Math.round((pts / max) * 40));
-              return (
-                <div
-                  key={i}
-                  className="flex-1 bg-[#1A1A1A]"
-                  style={{ height: `${h}px` }}
-                  title={`${pts} pts`}
-                />
-              );
-            })}
-          </div>
+          <ol className="divide-y divide-gray-100 border-2 border-[#1A1A1A]">
+            {data.topThree.map((e, i) => (
+              <TopThreeRow key={e.teamId} rank={i + 1} entry={e} lp={lp} />
+            ))}
+          </ol>
         </div>
-
-        {data.topThree.length > 0 && (
-          <div>
-            <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-2">
-              Top 3 expected finish
-            </div>
-            <ol className="divide-y divide-gray-100 border-2 border-[#1A1A1A]">
-              {data.topThree.map((e, i) => (
-                <TopThreeRow key={e.teamId} rank={i + 1} entry={e} lp={lp} />
-              ))}
-            </ol>
-          </div>
-        )}
-      </div>
-    </section>
+      )}
+    </InsightCard>
   );
 }
 

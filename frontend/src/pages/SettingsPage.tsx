@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/use-auth";
 import { api } from "@/api/client";
 import { authService } from "@/features/auth";
-import { PageHeader } from "@gruberb/fun-ui";
+import { Button, PageHeader } from "@gruberb/fun-ui";
+import { Toast } from "@/components/common/Toast";
+import { useFlash } from "@/hooks/use-flash";
 
 const SettingsPage = () => {
   const { user, profile, signOut } = useAuth();
@@ -11,7 +13,7 @@ const SettingsPage = () => {
 
   const [displayName, setDisplayName] = useState(profile?.displayName ?? "");
   const [saving, setSaving] = useState(false);
-  const [flash, setFlash] = useState<string | null>(null);
+  const { flash, showFlash } = useFlash();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -21,11 +23,6 @@ const SettingsPage = () => {
     setDisplayName(profile?.displayName ?? "");
   }, [profile?.displayName]);
 
-  const showFlash = (msg: string) => {
-    setFlash(msg);
-    setTimeout(() => setFlash(null), 3000);
-  };
-
   const handleSaveDisplayName = async () => {
     if (!user || !displayName.trim()) return;
     setSaving(true);
@@ -33,7 +30,7 @@ const SettingsPage = () => {
       await api.updateProfile(displayName.trim());
       // Update the stored session so the nav/profile reflects the change immediately
       authService.updateSessionProfile({ displayName: displayName.trim(), isAdmin: profile?.isAdmin ?? false });
-      showFlash("Display name updated!");
+      showFlash("Display name updated!", "success", 3000);
     } catch {
       // ignore
     }
@@ -60,11 +57,7 @@ const SettingsPage = () => {
     <div className="max-w-2xl mx-auto space-y-8">
       <PageHeader title="Settings" subtitle={user.email} />
 
-      {flash && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#1A1A1A] text-white px-6 py-3 border-2 border-[#16A34A] text-sm font-bold uppercase tracking-wider shadow-[4px_4px_0px_0px_#16A34A]">
-          {flash}
-        </div>
-      )}
+      <Toast flash={flash} />
 
       {/* Profile */}
       <div className="border-2 border-[#1A1A1A] bg-white">
@@ -82,13 +75,12 @@ const SettingsPage = () => {
               onChange={(e) => setDisplayName(e.target.value)}
               className="flex-1 px-4 py-2 border-2 border-[#1A1A1A] rounded-none focus:outline-none focus:ring-2 focus:ring-[#2563EB] font-medium"
             />
-            <button
+            <Button
               onClick={handleSaveDisplayName}
               disabled={saving || displayName === profile?.displayName}
-              className="btn-gradient disabled:opacity-40"
             >
               {saving ? "Saving..." : "Save"}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

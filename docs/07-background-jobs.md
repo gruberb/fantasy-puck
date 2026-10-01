@@ -35,7 +35,7 @@ Every admin endpoint that manually triggers one of these jobs is noted in its ro
 
 ## Scheduled crons
 
-All four crons register in `init_rankings_scheduler` ([`scheduler.rs:221-346`](../backend/src/infra/jobs/scheduler.rs)). Cron expressions come from [`tuning::scheduler`](../backend/src/tuning.rs) and use the six-field form (`sec min hour dom mon dow`) that `tokio_cron_scheduler` expects.
+All four crons register in `init_rankings_scheduler` ([`scheduler.rs`](../backend/src/infra/jobs/scheduler.rs)). Cron expressions come from [`tuning::scheduler`](../backend/src/tuning.rs) and use the six-field form (`sec min hour dom mon dow`) that `tokio_cron_scheduler` expects.
 
 | Job | Cron | UTC | ET | Function | Admin trigger |
 | --- | --- | --- | --- | --- | --- |
@@ -46,7 +46,7 @@ All four crons register in `init_rankings_scheduler` ([`scheduler.rs:221-346`](.
 
 ### Season-end gate
 
-Every cron self-skips once the season is over, so the process can keep running (or be left scaled to zero) through the off-season without churning `daily_rankings`, the response cache, and the Anthropic API on empty slates. Each job calls `api::past_season_end(date)` (a lexicographic compare against the `NHL_SEASON_END` config date) on the date it actually operates on:
+Every cron self-skips once the season is over, so the process can keep running (or be left scaled to zero) through the off-season without churning `daily_rankings`, the response cache, and the OpenRouter API on empty slates. Each job calls `api::past_season_end(date)` (a lexicographic compare against the `NHL_SEASON_END` config date) on the date it actually operates on:
 
 - **Morning / afternoon rankings** and **daily prewarm** work against *yesterday*, so they gate on yesterday. The final game day is still captured the morning after `season_end` before they go quiet.
 - **Edge refresh** captures *today's* telemetry, so it gates on today.
@@ -55,13 +55,12 @@ The gate is a no-op during the season; it only matters once the calendar passes 
 
 ### Morning rankings (09:00 UTC)
 
-Defined at [`scheduler.rs:239-270`](../backend/src/infra/jobs/scheduler.rs). For each league:
+Defined at [`scheduler.rs`](../backend/src/infra/jobs/scheduler.rs). For each league:
 
-1. Compute yesterday's date (UTC-based).
-2. Call `process_daily_rankings(db, nhl, yesterday, league_id)` ([`scheduler.rs:19-99`](../backend/src/infra/jobs/scheduler.rs)):
+1. Compute yesterday's ET hockey date (`day_before(hockey_today())`).
+2. Call `process_daily_rankings(db, nhl, yesterday, league_id)` ([`scheduler.rs`](../backend/src/infra/jobs/scheduler.rs)):
    - If any game on yesterday is still `LIVE` / `CRIT` / `PRE`, skip (the daily total is still moving).
-   - Read `v_daily_fantasy_totals` filtered to that league + date, ordered by `points DESC`.
-   - Upsert into `daily_rankings` with 1-based rank.
+   - `FantasyDb::snapshot_daily_rankings`: one `INSERT ... SELECT` from `v_daily_fantasy_totals` for that league and date, ranked with `ROW_NUMBER() OVER (ORDER BY points DESC, team_id)`, upserted into `daily_rankings`.
 
 After iterating all leagues, delete `response_cache` rows where `date` is older than `tuning::scheduler::CACHE_RETENTION` (seven days).
 
@@ -71,10 +70,10 @@ Same pipeline as morning but without the cache prune. Exists because the NHL som
 
 ### Daily prewarm (10:00 UTC)
 
-Defined at [`scheduler.rs:293-302`](../backend/src/infra/jobs/scheduler.rs). Two phases:
+Defined at [`scheduler.rs`](../backend/src/infra/jobs/scheduler.rs). Two phases:
 
-1. **`ingest_yesterdays_playoff_games`** ([`scheduler.rs:127-148`](../backend/src/infra/jobs/scheduler.rs)) - `playoff_ingest::ingest_playoff_games_for_date(yesterday)`. Upserts per-skater playoff stats into `playoff_skater_game_stats` and team results into `playoff_game_results`.
-2. **`prewarm_derived_payloads`** ([`scheduler.rs:154-218`](../backend/src/infra/jobs/scheduler.rs)):
+1. **`ingest_yesterdays_playoff_games`** ([`scheduler.rs`](../backend/src/infra/jobs/scheduler.rs)) - `playoff_ingest::ingest_playoff_games_for_date(yesterday)`. Upserts per-skater playoff stats into `playoff_skater_game_stats` and team results into `playoff_game_results`.
+2. **`prewarm_derived_payloads`** ([`scheduler.rs`](../backend/src/infra/jobs/scheduler.rs)):
    - Rebuild an `AppState` inside the job so it can call handler functions directly.
    - If `game_type == 3`, refresh `playoff_roster_cache` (one JSONB blob with all 16 playoff rosters, fetched sequentially with roster pacing; if NHL rejects the refresh but a cache row already exists, keep the existing row).
    - Call `generate_and_cache_insights(state, "")` and `generate_and_cache_race_odds(state, "", None)` for the global (no-league) variant.
@@ -84,7 +83,7 @@ Order matters: playoff ingest goes first so the projection model inside `race_od
 
 ### Edge refresh (09:30 UTC)
 
-Defined at [`scheduler.rs:307-315`](../backend/src/infra/jobs/scheduler.rs). Calls `edge_refresher::run(db, nhl, force=false)`. The freshness gate inside the refresher skips the run if `nhl_skater_edge` was updated within the last 18 hours - which means either the 09:30 cron or an admin prewarm becomes a no-op when the other already refreshed Edge recently. See [`04-nhl-integration.md`](./04-nhl-integration.md) for the refresh mechanics.
+Defined at [`scheduler.rs`](../backend/src/infra/jobs/scheduler.rs). Calls `edge_refresher::run(db, nhl, force=false)`. The freshness gate inside the refresher skips the run if `nhl_skater_edge` was updated within the last 18 hours - which means either the 09:30 cron or an admin prewarm becomes a no-op when the other already refreshed Edge recently. See [`04-nhl-integration.md`](./04-nhl-integration.md) for the refresh mechanics.
 
 ## Continuous pollers
 
@@ -112,7 +111,7 @@ File: [`backend/src/infra/jobs/live_poller.rs`](../backend/src/infra/jobs/live_p
 | Interval | 60 s |
 | Startup delay | 45 s |
 | Leader election | Postgres advisory lock `884_471_193_002` |
-| Work | Via `nhl_mirror::list_games_needing_poll(today)`: every non-cancelled `LIVE` / `CRIT` row regardless of date, plus non-cancelled `PRE` rows on today. For each one: upsert boxscore, update state/score/period, and on `LIVE\|CRIT → OFF\|FINAL` transition invalidate only the `:v2` narrative tail of `team_diagnosis:{league}:*` (the `:bundle:v1` payload is left in place so the next Pulse load stays out of Claude). The any-date sweep is the self-heal pass — a process restart or rate-limit blip can leave a row stuck on `LIVE` after the real game finalised, and a today-only query would never re-check it. After the live pass, a final-sync sweep (`nhl_mirror::list_games_needing_final_sync`, 15-minute grace from `final_state_detected_at`) re-fetches an uncached boxscore one last time for every `FINAL` / `OFF` game whose `nhl_games.stats_finalized_at` is still NULL, then stamps the column. This is the path that captures NHL's post-buzzer scoring corrections (empty-net assist credit, OT/shootout settlement, late official review) — without it, aggregated rankings drift permanently below the leaderboard. |
+| Work | Via `nhl_mirror::list_games_needing_poll(today)`: every non-cancelled `LIVE` / `CRIT` row regardless of date, plus non-cancelled `PRE` rows on today. For each one: upsert boxscore, update state/score/period, and on `LIVE\|CRIT → OFF\|FINAL` transition invalidate only the `:v2` narrative tail of `team_diagnosis:{league}:*` (the `:bundle:v1` payload is left in place so the next Pulse load stays out of the LLM). The any-date sweep is the self-heal pass — a process restart or rate-limit blip can leave a row stuck on `LIVE` after the real game finalised, and a today-only query would never re-check it. After the live pass, a final-sync sweep (`nhl_mirror::list_games_needing_final_sync`, 15-minute grace from `final_state_detected_at`) re-fetches an uncached boxscore one last time for every `FINAL` / `OFF` game whose `nhl_games.stats_finalized_at` is still NULL, then stamps the column. This is the path that captures NHL's post-buzzer scoring corrections (empty-net assist credit, OT/shootout settlement, late official review) — without it, aggregated rankings drift permanently below the leaderboard. |
 
 ## Startup one-shots
 
@@ -120,7 +119,7 @@ These run in `main.rs` before (and during) the pollers starting. All are idempot
 
 ### Historical-skater CSV seed
 
-[`main.rs:100-107`](../backend/src/main.rs) → [`infra/jobs/historical_seed.rs`](../backend/src/infra/jobs/historical_seed.rs).
+[`main.rs`](../backend/src/main.rs) → [`infra/jobs/historical_seed.rs`](../backend/src/infra/jobs/historical_seed.rs).
 
 - **Guard:** `SELECT COUNT(*) FROM historical_playoff_skater_totals > 0` → skip.
 - **Work:** parse an `include_str!`-embedded CSV (600 rows, ~36 KB, five-year playoff aggregate) and bulk-insert.
@@ -130,7 +129,7 @@ The CSV is regenerated offline by `backend/scripts/parse_historical_playoff_skat
 
 ### Historical rankings backfill
 
-[`main.rs:110-124`](../backend/src/main.rs) → [`scheduler::populate_historical_rankings`](../backend/src/infra/jobs/scheduler.rs).
+[`main.rs`](../backend/src/main.rs) → [`scheduler::populate_historical_rankings`](../backend/src/infra/jobs/scheduler.rs).
 
 - **Guard:** `today >= playoff_start` AND `scheduler::is_rankings_table_empty(db)` → run. Otherwise skip.
 - **Work:** iterate dates from `playoff_start` through `min(today, season_end)`; for each league × each date, call `process_daily_rankings`.
@@ -138,7 +137,7 @@ The CSV is regenerated offline by `backend/scripts/parse_historical_playoff_skat
 
 ### Playoff skater-stats backfill
 
-[`main.rs:130-151`](../backend/src/main.rs) → [`playoff_ingest::ingest_playoff_games_for_range`](../backend/src/infra/jobs/playoff_ingest.rs).
+[`main.rs`](../backend/src/main.rs) → [`playoff_ingest::ingest_playoff_games_for_range`](../backend/src/infra/jobs/playoff_ingest.rs).
 
 - **Guard:** `is_playoff_skater_game_stats_empty(db)` → run. Otherwise skip.
 - **Work:** iterate dates from `playoff_start` through today; for each, ingest completed playoff games into `playoff_skater_game_stats` and `playoff_game_results`.
@@ -146,11 +145,11 @@ The CSV is regenerated offline by `backend/scripts/parse_historical_playoff_skat
 
 ### Auto-seed rehydrate
 
-[`main.rs:200-233`](../backend/src/main.rs) → [`infra/jobs/rehydrate.rs`](../backend/src/infra/jobs/rehydrate.rs).
+[`main.rs`](../backend/src/main.rs) → [`infra/jobs/rehydrate.rs`](../backend/src/infra/jobs/rehydrate.rs).
 
-- **Timer:** `tokio::time::sleep(45 s)` so the meta poller's first tick populates `nhl_games`.
+- **Timer:** sleeps `LIVE_POLL_STARTUP_DELAY` (45 s) so the meta poller's first tick populates `nhl_games`.
 - **Guard:** `SELECT COUNT(*) FROM nhl_player_game_stats > 0` → skip.
-- **Work:** call `rehydrate::run` - for each known game row, fetch the boxscore and upsert per-player stats. Completed games use the uncached boxscore path so rehydrate can repair stale final rows, not only missing rows.
+- **Work:** call `rehydrate::run` - run every `mirror_steps` step, then for each started game of the configured season fetch the boxscore and upsert per-player stats. Completed games use the uncached boxscore path so rehydrate can repair stale final rows, not only missing rows.
 - **Motivation:** the live poller never re-fetches boxscores for games that finalized before it first saw them. After a deploy mid-day, every already-final game would otherwise read as zeros in rankings and fantasy totals.
 
 ## Admin-triggered work
@@ -159,18 +158,18 @@ Admin handlers are at [`backend/src/api/handlers/admin.rs`](../backend/src/api/h
 
 | Endpoint | Handler line | Purpose |
 | --- | --- | --- |
-| `GET /api/admin/process-rankings/{date}` | `admin.rs:23-42` | Re-run `process_daily_rankings` for every league on the given date. Use when the morning cron missed a date or snapshotted zeros against a not-yet-populated mirror. |
-| `GET /api/admin/cache/invalidate?scope=(all\|today\|{date})` | `admin.rs:49-87` | Delete `response_cache` rows matching scope; optionally also clear the NHL client's in-memory URL cache. |
-| `GET /api/admin/backfill-historical?from=&to=` | `admin.rs:105-125` | Re-run `playoff_ingest::ingest_playoff_games_for_range` over a date range. Use after filling a known gap in `playoff_skater_game_stats`. |
-| `GET /api/admin/rebackfill-carousel?season=` | `admin.rs:142-158` | Rebuild `playoff_game_results` for a past season via the playoff-carousel + series-games endpoints. |
+| `GET /api/admin/process-rankings/{date}` | `admin.rs` | Re-run `process_daily_rankings` for every league on the given date. Use when the morning cron missed a date or snapshotted zeros against a not-yet-populated mirror. |
+| `GET /api/admin/cache/invalidate?scope=(all\|today\|{date})` | `admin.rs` | Delete `response_cache` rows matching scope; optionally also clear the NHL client's in-memory URL cache. |
+| `GET /api/admin/backfill-historical?from=&to=` | `admin.rs` | Re-run `playoff_ingest::ingest_playoff_games_for_range` over a date range. Use after filling a known gap in `playoff_skater_game_stats`. |
+| `GET /api/admin/rebackfill-carousel?season=` | `admin.rs` | Rebuild `playoff_game_results` for a past season via the playoff-carousel + series-games endpoints. |
 | `GET /api/admin/calibrate?...` | `admin.rs` | Single-run calibration report. See [`05-prediction-engine.md`](./05-prediction-engine.md). |
-| `GET /api/admin/calibrate-sweep?...` | `admin.rs:291-318` | Grid-search calibration. Capped at 200 cells. |
-| `GET /api/admin/prewarm` | `admin.rs:258-281` | Fire `edge_refresher::run(force=false)`, then `scheduler::prewarm_derived_payloads`. Runs in `tokio::spawn` so the HTTP response returns immediately; progress in server logs. |
-| `GET /api/admin/rehydrate` | `admin.rs:327-337` | Synchronous run of every mirror-poller step plus a boxscore backfill for every game in `nhl_games`. Returns a JSON summary of row counts. |
+| `GET /api/admin/calibrate-sweep?...` | `admin.rs` | Grid-search calibration. Capped at 200 cells. |
+| `GET /api/admin/prewarm` | `admin.rs` | Fire `edge_refresher::run(force=false)`, then `scheduler::prewarm_derived_payloads`. Runs in `tokio::spawn` so the HTTP response returns immediately; progress in server logs. |
+| `GET /api/admin/rehydrate` | `admin.rs` | Synchronous run of every `mirror_steps` step (the same code the meta poller runs) plus a boxscore backfill for every started game of the configured season. Returns a JSON summary of row counts and per-step errors. |
 
 ## Retention and pruning
 
-- `response_cache` - rows with `date` older than seven days are deleted by the 09:00 UTC cron ([`scheduler.rs:256-267`](../backend/src/infra/jobs/scheduler.rs)).
+- `response_cache` - rows with `date` older than seven days are deleted by the 09:00 UTC cron ([`scheduler.rs`](../backend/src/infra/jobs/scheduler.rs)).
 - `daily_rankings` - not pruned.
 - `nhl_player_game_stats` - not pruned.
 - NHL client in-memory URL cache - per-entry TTL is honoured by `start_cache_cleanup` (see [`04-nhl-integration.md`](./04-nhl-integration.md)); no disk state.

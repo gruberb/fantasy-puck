@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { getHockeyDateToday } from "@/utils/timezone";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 
 /**
  * Dashboard quick-links. Four targets:

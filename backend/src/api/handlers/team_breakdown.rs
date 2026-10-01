@@ -3,7 +3,7 @@
 //! One entry point — [`compose_team_breakdown`] — that both the
 //! fantasy-team detail handler and the Pulse handler call with a
 //! resolved roster. Returns the full per-player breakdown, team
-//! totals, and the descriptive diagnosis (including the Claude
+//! totals, and the descriptive diagnosis (including the LLM
 //! narrative) so the caller can embed it in whatever response shape
 //! they own.
 //!
@@ -20,19 +20,20 @@ use crate::api::dtos::teams::{
     TeamDiagnosis, TeamPointsResponse, TeamTotalsResponse, TeamYesterdayPlayerLine,
     TeamYesterdaySummary, TeamYesterdayTeamLine,
 };
-use crate::api::handlers::insights::hockey_today;
 use crate::api::routes::AppState;
 use crate::api::{current_date_window, game_type, season};
 use crate::domain::models::db::FantasyPlayer;
 use crate::domain::models::fantasy::PlayerStats;
+use crate::domain::models::nhl::GAME_TYPE_PLAYOFFS;
+use crate::domain::models::nhl::GAME_TYPE_REGULAR;
 use crate::domain::prediction::carousel::games_played_from_carousel;
-use crate::domain::prediction::grade::{
-    classify_bucket, grade, remaining_impact, PlayerBucket,
-};
+use crate::domain::prediction::grade::{classify_bucket, grade, remaining_impact, PlayerBucket};
 use crate::domain::prediction::player_projection::{PlayerInput, Projection};
 use crate::domain::prediction::race_sim::NhlTeamOdds;
 use crate::domain::prediction::series_projection::{classify, SeriesStateCode};
+use crate::domain::time::{day_before, hockey_today};
 use crate::error::Result;
+use crate::infra::db::cache_keys;
 use crate::infra::db::nhl_mirror::{
     self, LeagueTeamSeasonTotalsRow, PlayerPlayoffRollupRow, PlayerRecentGameRow,
 };
@@ -54,7 +55,7 @@ pub async fn compose_team_breakdown(
     let pool = state.db.pool();
     let season_num = season();
     let today = hockey_today();
-    let yesterday = previous_hockey_date(&today);
+    let yesterday = day_before(&today).unwrap_or_else(|| today.clone());
     let nhl_ids: Vec<i64> = players.iter().map(|p| p.nhl_id).collect();
 
     let (
@@ -74,12 +75,12 @@ pub async fn compose_team_breakdown(
         ),
         nhl_mirror::list_player_recent_games(pool, &nhl_ids, season_num as i32, 5),
         async { nhl_mirror::get_playoff_carousel(pool, season_num as i32).await },
-        nhl_mirror::list_skater_season_stats(pool, season_num as i32, 2),
+        nhl_mirror::list_skater_season_stats(pool, season_num as i32, GAME_TYPE_REGULAR as i16),
         nhl_mirror::list_league_team_season_totals(
             pool,
             league_id,
             season_num as i32,
-            3,
+            GAME_TYPE_PLAYOFFS as i16,
             current_date_window(),
         ),
         nhl_mirror::list_games_for_date(pool, &yesterday),
@@ -114,10 +115,14 @@ pub async fn compose_team_breakdown(
             rs_points: rs_points_by_id.get(&p.nhl_id).copied().unwrap_or(0),
         })
         .collect();
-    let projections =
-        project_players(&state.db, season_num, &projection_inputs, &team_games_played)
-            .await
-            .unwrap_or_default();
+    let projections = project_players(
+        &state.db,
+        season_num,
+        &projection_inputs,
+        &team_games_played,
+    )
+    .await
+    .unwrap_or_default();
 
     let nhl_team_odds =
         race_odds_cache::load_nhl_team_odds(state, league_id, season_num, game_type(), &today)
@@ -142,7 +147,10 @@ pub async fn compose_team_breakdown(
 
         let breakdown = build_player_breakdown(
             rollup,
-            recent_by_id.get(&p.nhl_id).map(|v| v.as_slice()).unwrap_or(&[]),
+            recent_by_id
+                .get(&p.nhl_id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]),
             projections.get(&p.nhl_id).copied(),
             nhl_team_odds.get(&p.nhl_team),
             team_games_played.get(&p.nhl_team).copied().unwrap_or(0),
@@ -170,8 +178,13 @@ pub async fn compose_team_breakdown(
         total_points: team_totals.total_points,
     };
 
-    let yesterday_summary =
-        build_yesterday_summary(&yesterday, team_id, &league_totals, &yesterday_games, &yesterday_rows);
+    let yesterday_summary = build_yesterday_summary(
+        &yesterday,
+        team_id,
+        &league_totals,
+        &yesterday_games,
+        &yesterday_rows,
+    );
     let diagnosis_stub = build_diagnosis_stub(
         team_name,
         team_id,
@@ -265,12 +278,12 @@ fn build_player_breakdown(
         team_games_played,
         eliminated,
     );
-    let bucket: PlayerBucket =
-        if games_played == 0 && projection.active_prob >= 1.0 && !eliminated {
-            PlayerBucket::TooEarly
-        } else {
-            classify_bucket(&grade_report, &projection, series)
-        };
+    let bucket: PlayerBucket = if games_played == 0 && projection.active_prob >= 1.0 && !eliminated
+    {
+        PlayerBucket::TooEarly
+    } else {
+        classify_bucket(&grade_report, &projection, series)
+    };
 
     let recent_games = recent
         .iter()
@@ -369,14 +382,6 @@ fn build_diagnosis_stub(
     }
 }
 
-fn previous_hockey_date(today: &str) -> String {
-    chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d")
-        .ok()
-        .and_then(|d| d.checked_sub_signed(chrono::Duration::days(1)))
-        .map(|d| d.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|| today.to_string())
-}
-
 fn build_yesterday_summary(
     date: &str,
     team_id: i64,
@@ -393,13 +398,15 @@ fn build_yesterday_summary(
     let mut team_daily: HashMap<i64, TeamYesterdayTeamLine> = HashMap::new();
 
     for r in rows {
-        let entry = team_daily.entry(r.team_id).or_insert(TeamYesterdayTeamLine {
-            team_id: r.team_id,
-            team_name: r.team_name.clone(),
-            goals: 0,
-            assists: 0,
-            points: 0,
-        });
+        let entry = team_daily
+            .entry(r.team_id)
+            .or_insert(TeamYesterdayTeamLine {
+                team_id: r.team_id,
+                team_name: r.team_name.clone(),
+                goals: 0,
+                assists: 0,
+                points: 0,
+            });
         entry.goals += r.goals;
         entry.assists += r.assists;
         entry.points += r.points;
@@ -476,22 +483,15 @@ async fn resolve_team_diagnosis_narrative(
     today: &str,
     response: &TeamPointsResponse,
 ) -> Option<String> {
-    let key = format!(
-        "team_diagnosis:{}:{}:{}:{}:{}:v2",
-        league_id,
-        team_id,
-        season(),
-        game_type(),
-        today
-    );
+    let key = cache_keys::team_diagnosis(league_id, team_id, season(), game_type(), today);
     if let Ok(Some(cached)) = state.db.cache().get_cached_response::<String>(&key).await {
         return Some(cached);
     }
     let generated = state.prediction.team_diagnosis(response).await?;
-    let _ = state
+    state
         .db
         .cache()
-        .store_response(&key, today, &generated)
+        .store_best_effort(&key, today, &generated)
         .await;
     Some(generated)
 }

@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 import type { GameMatchup } from "@/features/pulse/types";
 
 export interface LiveRankingRow {

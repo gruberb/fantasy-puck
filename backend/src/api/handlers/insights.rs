@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -12,17 +13,12 @@ use crate::api::dtos::insights::*;
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
+use crate::domain::prediction::carousel::series_winner;
 use crate::domain::prediction::season_phase::SeasonPhase;
+use crate::domain::time::{day_before, hockey_today};
 use crate::error::Result;
-
-/// Calculate the current NHL "hockey date" in Eastern Time (proper DST handling)
-pub fn hockey_today() -> String {
-    use chrono_tz::America::New_York;
-    Utc::now()
-        .with_timezone(&New_York)
-        .format("%Y-%m-%d")
-        .to_string()
-}
+use crate::infra::db::cache_keys;
+use crate::infra::prediction::openrouter::OpenRouterClient;
 
 /// Generate and cache insights for a given league. Used by both the API handler and the cron job.
 pub async fn generate_and_cache_insights(
@@ -30,13 +26,7 @@ pub async fn generate_and_cache_insights(
     league_id: &str,
 ) -> Result<InsightsResponse> {
     let today = hockey_today();
-    let cache_key = format!(
-        "insights:{}:{}:{}:{}",
-        league_id,
-        season(),
-        game_type(),
-        today
-    );
+    let cache_key = cache_keys::insights(league_id, season(), game_type(), &today);
 
     // Recap mode is gated on the bracket showing a Cup champion, not the
     // calendar — a Game 7 that ends past midnight Eastern shouldn't flip
@@ -47,7 +37,7 @@ pub async fn generate_and_cache_insights(
     // Check cache. Serve a cached payload that carries real content —
     // either a slate of games or, once the season's over, a recap. The
     // old check keyed only on games, which would regenerate (and re-hit
-    // Claude) on every request in recap mode, where there are no games.
+    // the LLM) on every request in recap mode, where there are no games.
     // Off-day responses (no games, no recap) still fall through so they
     // regenerate once the schedule appears.
     if let Some(cached) = state
@@ -72,8 +62,9 @@ pub async fn generate_and_cache_insights(
         None
     };
 
-    // 3. Call Claude for narratives
-    let narratives = generate_narratives(&signals, &phase, recap_ctx.as_ref()).await;
+    // 3. Call the LLM for narratives
+    let narratives =
+        generate_narratives(state.llm.as_deref(), &signals, &phase, recap_ctx.as_ref()).await;
 
     let response = InsightsResponse {
         generated_at: Utc::now().to_rfc3339(),
@@ -85,10 +76,10 @@ pub async fn generate_and_cache_insights(
     // hockey-date: a slate of games, or a season recap. The previous
     // version gated only on games; recap responses carry none.
     if !response.signals.todays_games.is_empty() || response.narratives.season_recap.is_some() {
-        let _ = state
+        state
             .db
             .cache()
-            .store_response(&cache_key, &today, &response)
+            .store_best_effort(&cache_key, &today, &response)
             .await;
     }
 
@@ -168,12 +159,8 @@ async fn compute_last_night(
     use crate::api::dtos::insights::{LastNightGame, LastNightScorer};
     use crate::infra::db::nhl_mirror;
 
-    let yesterday = match chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d") {
-        Ok(d) => match d.pred_opt() {
-            Some(p) => p.format("%Y-%m-%d").to_string(),
-            None => return Ok(Vec::new()),
-        },
-        Err(_) => return Ok(Vec::new()),
+    let Some(yesterday) = day_before(today) else {
+        return Ok(Vec::new());
     };
 
     // Clamp to the playoff window so pre-playoff days don't get recapped
@@ -276,7 +263,7 @@ async fn enrich_projections(
     .await
     {
         Ok(json) => {
-            if crate::api::game_type() == 3 {
+            if crate::api::is_playoffs() {
                 match crate::infra::prediction::compute_current_elo(
                     &state.db,
                     &json,
@@ -334,7 +321,7 @@ async fn enrich_projections(
                                     }
                                 })
                                 .collect();
-                            tags.sort_by(|a, b| b.count.cmp(&a.count));
+                            tags.sort_by_key(|x| std::cmp::Reverse(x.count));
                             (abbrev, tags)
                         })
                         .collect()
@@ -391,7 +378,7 @@ async fn compute_hot_players(
     // mirror. Previously this was 20 sequential NHL calls per cache
     // miss, which routinely tripped the per-IP rate limit and blocked
     // the daily prewarm from writing its cache — cascading into every
-    // user request re-running the whole pipeline including Claude.
+    // user request re-running the whole pipeline including the LLM call.
     let top_player_ids: Vec<i64> = top_players.iter().map(|p| p.player_id).collect();
     let form_rows = crate::infra::db::nhl_mirror::list_player_form(pool, &top_player_ids, 5)
         .await
@@ -439,7 +426,7 @@ async fn compute_hot_players(
     }
 
     // Sort by form points desc, take top 5
-    signals.sort_by(|a, b| b.1.form_points.cmp(&a.1.form_points));
+    signals.sort_by_key(|x| std::cmp::Reverse(x.1.form_points));
     signals.truncate(5);
 
     // Edge data (top skating speed, top shot speed) comes from the
@@ -486,17 +473,9 @@ async fn compute_todays_games(
         .await
         .unwrap_or_default();
 
-    let yesterday = {
-        let date =
-            chrono::NaiveDate::parse_from_str(hockey_today, "%Y-%m-%d").unwrap_or_else(|_| {
-                Utc::now()
-                    .with_timezone(&chrono_tz::America::New_York)
-                    .date_naive()
-            });
-        (date - chrono::Duration::days(1))
-            .format("%Y-%m-%d")
-            .to_string()
-    };
+    let yesterday = day_before(hockey_today)
+        .or_else(|| day_before(&crate::domain::time::hockey_today()))
+        .unwrap_or_default();
 
     // Standings context per team. In playoff mode the streak is
     // computed from `nhl_games` so it reflects this postseason — the
@@ -506,7 +485,7 @@ async fn compute_todays_games(
     // L10 is dropped in playoff mode for the same reason: it's a
     // regular-season concept and the series banner already conveys
     // recent form.
-    let is_playoffs = crate::api::game_type() == 3;
+    let is_playoffs = crate::api::is_playoffs();
     let standings_map: HashMap<String, (String, String)> = if is_playoffs {
         let streaks = crate::infra::db::nhl_mirror::list_team_playoff_streaks(
             pool,
@@ -577,7 +556,7 @@ async fn compute_todays_games(
             .unwrap_or_default();
 
         // Empty strings collapse to `None` so the API response and the
-        // Claude prompt builder both treat "no data" uniformly. In
+        // LLM prompt builder both treat "no data" uniformly. In
         // playoff mode the standings_map carries an empty L10 by
         // construction (see comment near `is_playoffs` above).
         let lift = |s: &String| (!s.is_empty()).then(|| s.clone());
@@ -728,7 +707,7 @@ pub async fn enrich_games_with_ownership(
                 }
             }
         }
-        tags.sort_by(|a, b| b.count.cmp(&a.count));
+        tags.sort_by_key(|x| std::cmp::Reverse(x.count));
         g.rostered_player_tags = tags;
     }
 }
@@ -857,7 +836,7 @@ async fn scrape_headlines() -> Result<Vec<String>> {
     let client = reqwest::Client::builder()
         .timeout(crate::tuning::http::HEADLINE_SCRAPER_TIMEOUT)
         .build()
-        .map_err(|e| crate::Error::Internal(format!("Failed to build HTTP client: {}", e)))?;
+        .context("failed to build HTTP client")?;
 
     let mut all_headlines: Vec<String> = Vec::new();
 
@@ -926,31 +905,35 @@ async fn build_ownership_map(state: &Arc<AppState>, league_id: &str) -> HashMap<
 }
 
 // ---------------------------------------------------------------------------
-// Narrative generation via Claude API
+// Narrative generation via OpenRouter
 // ---------------------------------------------------------------------------
 
 async fn generate_narratives(
+    llm: Option<&OpenRouterClient>,
     signals: &InsightsSignals,
     phase: &SeasonPhase,
     recap: Option<&SeasonRecapContext>,
 ) -> InsightsNarratives {
+    let Some(client) = llm else {
+        return fallback_narratives();
+    };
     // Once the Cup is decided there are no "today's games" to preview, so
     // the daily prompt would only ever emit "No games on the slate today."
     // Swap to a wrap-up of how the run played out instead.
     if phase.is_over() {
-        return match call_claude_recap(signals, phase, recap).await {
+        return match generate_season_recap(client, signals, phase, recap).await {
             Ok(n) => n,
             Err(e) => {
-                error!("Failed to generate season recap: {}", e);
+                error!("Failed to generate season recap: {e:#}");
                 fallback_narratives()
             }
         };
     }
 
-    match call_claude_api(signals, &phase.prompt_line()).await {
+    match generate_daily_narratives(client, signals, &phase.prompt_line()).await {
         Ok(n) => n,
         Err(e) => {
-            error!("Failed to generate narratives: {}", e);
+            error!("Failed to generate narratives: {e:#}");
             fallback_narratives()
         }
     }
@@ -1056,17 +1039,14 @@ fn fallback_narratives() -> InsightsNarratives {
     }
 }
 
-async fn call_claude_api(
+async fn generate_daily_narratives(
+    client: &OpenRouterClient,
     signals: &InsightsSignals,
     season_state: &str,
-) -> std::result::Result<InsightsNarratives, String> {
-    let api_key =
-        std::env::var("ANTHROPIC_API_KEY").map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
+) -> anyhow::Result<InsightsNarratives> {
+    let signals_json = serde_json::to_string(signals).context("failed to serialize signals")?;
 
-    let signals_json = serde_json::to_string(signals)
-        .map_err(|e| format!("Failed to serialize signals: {}", e))?;
-
-    // Build human-readable game summaries for Claude
+    // Build human-readable game summaries for the model
     let mut game_summaries = String::new();
     for g in &signals.todays_games {
         game_summaries.push_str(&format!(
@@ -1135,7 +1115,7 @@ async fn call_claude_api(
             ));
         }
     }
-    // Hot player edge data for Claude context
+    // Hot player edge data for model context
     let mut edge_summary = String::new();
     for p in &signals.hot_players {
         if p.top_speed.is_some() || p.top_shot_speed.is_some() {
@@ -1150,7 +1130,7 @@ async fn call_claude_api(
         }
     }
 
-    // Human-readable last-night recaps. We hand Claude the scores, the
+    // Human-readable last-night recaps. We hand the model the scores, the
     // post-game series state, and the top scorers; the narrator chooses
     // which games are worth a sub-heading and writes the prose.
     let mut last_night_summary = String::new();
@@ -1179,10 +1159,8 @@ async fn call_claude_api(
     let num_games = signals.todays_games.len();
     let num_last_night = signals.last_night.len();
 
-    let request_body = serde_json::json!({
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 3072,
-        "system": format!(r#"You are a veteran hockey columnist — think The Athletic, or a barstool analyst who actually watches every game. Dry, specific, opinionated, grounded in the numbers provided. You do NOT write like a marketing bot: no "dive in", "unleash", "game-changer", "exciting journey", hype adjectives, or bulleted listicles. Short punchy sentences mixed with longer analytical ones. Opinions should follow from the data — state them flatly, not breathlessly.
+    let system = format!(
+        r#"You are a veteran hockey columnist — think The Athletic, or a barstool analyst who actually watches every game. Dry, specific, opinionated, grounded in the numbers provided. You do NOT write like a marketing bot: no "dive in", "unleash", "game-changer", "exciting journey", hype adjectives, or bulleted listicles. Short punchy sentences mixed with longer analytical ones. Opinions should follow from the data — state them flatly, not breathlessly.
 
 HARD RULES:
 - Only reference stats, player names, records, and facts from the data provided below.
@@ -1205,62 +1183,27 @@ Return JSON with exactly these fields:
 
 - **bracket**: 3–4 sentences on the playoff picture — who's favored, where the upsets could come from, which team's Stanley Cup path looks easiest or hardest. Lean on series state + team ratings from the data. This is the one field where full-bracket / season-long talk belongs — everything else should stay game-scoped or player-scoped.
 
-- **last_night**: Daily Faceoff-style recap of the {num_last_night} completed games under "LAST NIGHT". Format: one `### Headline` per game (name the story, not the teams — e.g. "Andersen slams the door on Ottawa" not "Hurricanes beat Senators"), followed by one 2–4 sentence paragraph covering what actually happened — final score, the turning moment, the top scorer, and the resulting series state. Voice is a veteran beat writer filing at midnight: specific, direct, no hype. Wrap player names in **double asterisks**. Skip hot takes about the whole series; this is a Day N recap, not a prediction. If `{num_last_night}` is 0, return an empty string for this field (not "No games last night", just `""`)."#),
-        "messages": [
-            {
-                "role": "user",
-                "content": format!(
-                    "Generate insights as JSON.\n\n=== SEASON STATE ===\n{}\n\n=== LAST NIGHT ({num_last_night} completed games) ==={}\n\n=== TODAY'S GAMES ({num_games} games — generate exactly {num_games} game_narratives in this order) ==={}\n\n=== NHL EDGE DATA ===\n{}\n\n=== FULL DATA ===\n{}",
-                    season_state, last_night_summary, game_summaries, edge_summary, signals_json
-                )
-            }
-        ]
-    });
+- **last_night**: Daily Faceoff-style recap of the {num_last_night} completed games under "LAST NIGHT". Format: one `### Headline` per game (name the story, not the teams — e.g. "Andersen slams the door on Ottawa" not "Hurricanes beat Senators"), followed by one 2–4 sentence paragraph covering what actually happened — final score, the turning moment, the top scorer, and the resulting series state. Voice is a veteran beat writer filing at midnight: specific, direct, no hype. Wrap player names in **double asterisks**. Skip hot takes about the whole series; this is a Day N recap, not a prediction. If `{num_last_night}` is 0, return an empty string for this field (not "No games last night", just `""`)."#
+    );
 
-    let client = reqwest::Client::builder()
-        .timeout(crate::tuning::http::CLAUDE_TIMEOUT)
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let user = format!(
+        "Generate insights as JSON.\n\n=== SEASON STATE ===\n{}\n\n=== LAST NIGHT ({num_last_night} completed games) ==={}\n\n=== TODAY'S GAMES ({num_games} games — generate exactly {num_games} game_narratives in this order) ==={}\n\n=== NHL EDGE DATA ===\n{}\n\n=== FULL DATA ===\n{}",
+        season_state, last_night_summary, game_summaries, edge_summary, signals_json
+    );
 
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|e| format!("Claude API request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("Claude API returned {}: {}", status, body));
-    }
-
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse Claude API response: {}", e))?;
-
-    // Extract text content from the response
-    let text = body
-        .get("content")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|block| block.get("text"))
-        .and_then(|t| t.as_str())
-        .ok_or_else(|| "No text content in Claude API response".to_string())?;
+    let text = client
+        .complete(
+            &system,
+            &user,
+            crate::tuning::llm::DAILY_INSIGHTS_MAX_TOKENS,
+        )
+        .await?;
 
     // Try to extract JSON from the response (it may be wrapped in markdown code blocks)
-    let json_str = extract_json_from_text(text);
+    let json_str = extract_json_from_text(&text);
 
-    let parsed: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
-        format!(
-            "Failed to parse Claude response as JSON: {} — raw: {}",
-            e, text
-        )
-    })?;
+    let parsed: serde_json::Value = serde_json::from_str(&json_str)
+        .with_context(|| format!("failed to parse model response as JSON, raw: {text}"))?;
 
     let game_narratives: Vec<String> = parsed
         .get("game_narratives")
@@ -1331,17 +1274,15 @@ Return markdown (no JSON, no code fences) with these sections, each a `### Headi
 ### Standout Skaters
 2–4 sentences on the top fantasy scorers provided — who they were, which NHL team they played for, how many playoff points, and which fantasy roster owned them. Cite the numbers."#;
 
-/// Season wrap-up narrator. Distinct from `call_claude_api`: there are no
+/// Season wrap-up narrator. Distinct from `generate_daily_narratives`: there are no
 /// games to preview once the Cup is decided, so this returns a single
 /// markdown `season_recap` and leaves the daily fields empty.
-async fn call_claude_recap(
+async fn generate_season_recap(
+    client: &OpenRouterClient,
     signals: &InsightsSignals,
     phase: &SeasonPhase,
     recap: Option<&SeasonRecapContext>,
-) -> std::result::Result<InsightsNarratives, String> {
-    let api_key =
-        std::env::var("ANTHROPIC_API_KEY").map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
-
+) -> anyhow::Result<InsightsNarratives> {
     let mut context = format!("=== SEASON STATE ===\n{}\n", phase.prompt_line());
     let mut has_league = false;
 
@@ -1393,48 +1334,10 @@ async fn call_claude_recap(
         SEASON_RECAP_NHL_SYSTEM_PROMPT
     };
 
-    let request_body = serde_json::json!({
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 1600,
-        "system": system,
-        "messages": [
-            { "role": "user", "content": format!("Write the season recap as markdown.\n\n{}", context) }
-        ]
-    });
-
-    let client = reqwest::Client::builder()
-        .timeout(crate::tuning::http::CLAUDE_TIMEOUT)
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|e| format!("Claude API request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("Claude API returned {}: {}", status, body));
-    }
-
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse Claude API response: {}", e))?;
-
-    let text = body
-        .get("content")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|block| block.get("text"))
-        .and_then(|t| t.as_str())
-        .ok_or_else(|| "No text content in Claude API response".to_string())?;
+    let user = format!("Write the season recap as markdown.\n\n{}", context);
+    let text = client
+        .complete(system, &user, crate::tuning::llm::SEASON_RECAP_MAX_TOKENS)
+        .await?;
 
     Ok(InsightsNarratives {
         todays_watch: String::new(),
@@ -1442,7 +1345,7 @@ async fn call_claude_recap(
         hot_players: String::new(),
         bracket: String::new(),
         last_night: String::new(),
-        season_recap: Some(text.trim().to_string()),
+        season_recap: Some(text),
     })
 }
 
@@ -1470,8 +1373,8 @@ fn extract_json_from_text(text: &str) -> String {
     }
 
     // Last resort: try to find a JSON object in the text
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if start < end {
             return trimmed[start..=end].to_string();
         }
     }
@@ -1599,7 +1502,7 @@ fn active_round_projections(
         }
 
         for series in &round.series {
-            if !series_has_two_known_teams(series) || series_is_complete(series) {
+            if !series_has_two_known_teams(series) || series_winner(series).is_some() {
                 continue;
             }
 
@@ -1669,11 +1572,6 @@ fn series_has_two_known_teams(series: &crate::domain::models::nhl::Series) -> bo
 
 fn seed_is_known(id: i64, abbrev: &str) -> bool {
     id > 0 && !abbrev.trim().is_empty() && abbrev != "TBD"
-}
-
-fn series_is_complete(series: &crate::domain::models::nhl::Series) -> bool {
-    let needed = series.needed_to_win.max(1);
-    series.top_seed.wins >= needed || series.bottom_seed.wins >= needed
 }
 
 fn display_round_label(label: &str, round_number: u32) -> String {

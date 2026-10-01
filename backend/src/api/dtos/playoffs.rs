@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::domain::models::nhl::PlayoffCarousel;
+use crate::domain::prediction::carousel::bracket_state;
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayoffCarouselResponse {
@@ -13,44 +16,43 @@ pub struct PlayoffCarouselResponse {
     pub advanced_teams: Vec<String>,
 }
 
-impl PlayoffCarouselResponse {
-    /// Compute derived playoff state from the rounds data.
-    pub fn with_computed_state(mut self) -> Self {
-        let mut eliminated = std::collections::HashSet::new();
-        let mut all_teams = std::collections::HashSet::new();
-        let mut advanced = std::collections::HashSet::new();
-
-        for round in &self.rounds {
-            for series in &round.series {
-                all_teams.insert(series.top_seed.abbrev.clone());
-                all_teams.insert(series.bottom_seed.abbrev.clone());
-
-                if series.top_seed.wins == 4 {
-                    eliminated.insert(series.bottom_seed.abbrev.clone());
-                    advanced.insert(series.top_seed.abbrev.clone());
-                } else if series.bottom_seed.wins == 4 {
-                    eliminated.insert(series.top_seed.abbrev.clone());
-                    advanced.insert(series.bottom_seed.abbrev.clone());
-                }
-            }
+impl From<PlayoffCarousel> for PlayoffCarouselResponse {
+    fn from(carousel: PlayoffCarousel) -> Self {
+        let state = bracket_state(&carousel);
+        Self {
+            current_round: carousel.current_round,
+            rounds: carousel
+                .rounds
+                .into_iter()
+                .map(|r| RoundResponse {
+                    round_number: r.round_number,
+                    round_label: r.round_label,
+                    round_abbrev: r.round_abbrev,
+                    series: r
+                        .series
+                        .into_iter()
+                        .map(|s| SeriesResponse {
+                            series_letter: s.series_letter,
+                            round_number: s.round_number,
+                            series_label: s.series_label,
+                            bottom_seed: Seed {
+                                id: s.bottom_seed.id,
+                                abbrev: s.bottom_seed.abbrev,
+                                wins: s.bottom_seed.wins,
+                            },
+                            top_seed: Seed {
+                                id: s.top_seed.id,
+                                abbrev: s.top_seed.abbrev,
+                                wins: s.top_seed.wins,
+                            },
+                        })
+                        .collect(),
+                })
+                .collect(),
+            eliminated_teams: state.eliminated.into_iter().collect(),
+            teams_in_playoffs: state.alive.into_iter().collect(),
+            advanced_teams: state.advanced.into_iter().collect(),
         }
-
-        // Teams in playoffs = all teams minus eliminated
-        let in_playoffs: std::collections::HashSet<_> = all_teams
-            .difference(&eliminated)
-            .cloned()
-            .collect();
-
-        // Advanced but not eliminated
-        let advanced_active: std::collections::HashSet<_> = advanced
-            .difference(&eliminated)
-            .cloned()
-            .collect();
-
-        self.eliminated_teams = eliminated.into_iter().collect();
-        self.teams_in_playoffs = in_playoffs.into_iter().collect();
-        self.advanced_teams = advanced_active.into_iter().collect();
-        self
     }
 }
 

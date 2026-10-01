@@ -12,8 +12,8 @@ use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{current_date_window, game_type, season};
 use crate::auth::middleware::AuthUser;
-use crate::error::Result;
 use crate::domain::models::db::{FantasyPlayer, FantasyTeam};
+use crate::error::Result;
 use crate::infra::db::nhl_mirror;
 
 // ---------------------------------------------------------------------------
@@ -168,7 +168,10 @@ pub async fn update_team_name(
     Json(body): Json<UpdateTeamRequest>,
 ) -> Result<Json<ApiResponse<()>>> {
     let league_id = state.db.get_league_id_for_team(team_id).await?;
-    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
+    state
+        .db
+        .verify_league_owner(&league_id, &auth_user.id)
+        .await?;
     state.db.update_team_name(team_id, &body.name).await?;
     Ok(json_success(()))
 }
@@ -181,10 +184,19 @@ pub async fn add_player_to_team(
     Json(body): Json<AddPlayerRequest>,
 ) -> Result<Json<ApiResponse<FantasyPlayer>>> {
     let league_id = state.db.get_league_id_for_team(team_id).await?;
-    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
+    state
+        .db
+        .verify_league_owner(&league_id, &auth_user.id)
+        .await?;
     let player = state
         .db
-        .add_player_to_team(team_id, body.nhl_id, &body.name, &body.position, &body.nhl_team)
+        .add_player_to_team(
+            team_id,
+            body.nhl_id,
+            &body.name,
+            &body.position,
+            &body.nhl_team,
+        )
         .await?;
     Ok(json_success(player))
 }
@@ -195,8 +207,14 @@ pub async fn remove_player(
     auth_user: AuthUser,
     Path(player_id): Path<i64>,
 ) -> Result<Json<ApiResponse<()>>> {
-    let league_id = state.db.get_league_id_for_player(player_id).await?;
-    state.db.verify_league_owner(&league_id, &auth_user.id).await?;
+    // Super admins manage rosters from the settings page too.
+    if !auth_user.is_admin {
+        let league_id = state.db.get_league_id_for_player(player_id).await?;
+        state
+            .db
+            .verify_league_owner(&league_id, &auth_user.id)
+            .await?;
+    }
     state.db.remove_player(player_id).await?;
     Ok(json_success(()))
 }

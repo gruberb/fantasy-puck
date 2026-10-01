@@ -1,4 +1,4 @@
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 
 import type { RosteredPlayerTag } from "@/features/insights";
 

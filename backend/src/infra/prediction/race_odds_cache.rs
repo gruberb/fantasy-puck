@@ -14,24 +14,6 @@ use crate::api::dtos::race_odds::RaceOddsResponse;
 use crate::api::routes::AppState;
 use crate::domain::prediction::race_sim::NhlTeamOdds;
 
-/// Cache key prefix shared by every consumer. Kept here so the
-/// live-poller's invalidation logic and the handlers that read it
-/// agree on the shape.
-pub const CACHE_KEY_PREFIX: &str = "race_odds:v4";
-
-/// Build the exact key used on a cache read. Mirrors the write side
-/// in `handlers::race_odds`.
-pub fn cache_key(league_id: &str, season: u32, game_type_num: u8, today: &str) -> String {
-    format!(
-        "{}:{}:{}:{}:{}",
-        CACHE_KEY_PREFIX,
-        if league_id.is_empty() { "global" } else { league_id },
-        season,
-        game_type_num,
-        today
-    )
-}
-
 /// Read the cached race-odds payload's per-NHL-team array. Returns an
 /// empty map if the cache is cold, the deserialize fails, or the
 /// Monte Carlo cron has not run against this league yet.
@@ -42,7 +24,7 @@ pub async fn load_nhl_team_odds(
     game_type_num: u8,
     today: &str,
 ) -> HashMap<String, NhlTeamOdds> {
-    let key = cache_key(league_id, season, game_type_num, today);
+    let key = crate::infra::db::cache_keys::race_odds(league_id, season, game_type_num, today);
     match state
         .db
         .cache()

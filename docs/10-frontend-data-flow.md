@@ -70,7 +70,7 @@ Each row: what the page calls, at what staleTime, and whether anything polls. "U
 
 ### How "poll only when something is live" works
 
-Both `useGamesData` and `usePulse` use React Query's `refetchInterval` as a function of the last response:
+Both the games query and `usePulse` use React Query's `refetchInterval` as a function of the last response. For games this is `useGamesQuery(date, leagueId, { pollWhile })` in `features/games`: each caller passes the condition (the Games page polls while a game is live, the home `LiveRankingsTable` does the same), and both share one cache entry under `gamesQueryKey`.
 
 ```ts
 refetchInterval: (query) => {
@@ -93,7 +93,7 @@ The sibling helper `toLocalDateString(date)` is kept for date-picker round-tripp
 
 ## Season window clamping
 
-Every surface that derives or picks a date routes the result through [`clampToSeasonWindow(date)`](../frontend/src/config.ts), which bounds it to `[VITE_NHL_PLAYOFF_START, VITE_NHL_SEASON_END]` (mirrors of the backend `NHL_PLAYOFF_START` / `NHL_SEASON_END` env vars). This is what stops the pickers and the default "yesterday" rankings date from rolling past the season's last game once the slate is over: the Games picker (`use-games-data`), the Daily Rankings default and nav (`use-rankings-data`, `DailyRankingsSection`), the home page's yesterday rankings (`use-home-page-data`), and the home live table (`LiveRankingsTable`) all clamp. `<DateHeader>` and `RankingTableHeader` additionally clamp their "Today"/"Yesterday" buttons inline against the same `APP_CONFIG` bounds. There is one helper, not per-call copies — extend it, don't fork it.
+Every surface that derives or picks a date routes the result through [`clampToSeasonWindow(date)`](../frontend/src/config.ts), which bounds it to `[VITE_NHL_PLAYOFF_START, VITE_NHL_SEASON_END]` (mirrors of the backend `NHL_PLAYOFF_START` / `NHL_SEASON_END` env vars). This is what stops the pickers and the default "yesterday" rankings date from rolling past the season's last game once the slate is over: the Games picker (`use-games-data`), the Daily Rankings default and nav (`use-rankings-data`), the home page's yesterday rankings (`use-home-page-data`), and the home live table (`LiveRankingsTable`) all clamp. `<DateHeader>` and `RankingTableHeader` additionally clamp their "Today"/"Yesterday" buttons inline against the same `APP_CONFIG` bounds. There is one helper, not per-call copies — extend it, don't fork it.
 
 ## Draft WebSocket
 
@@ -170,7 +170,9 @@ Keys are arrays. The first element is a namespace, subsequent elements are the r
 ["insights", activeLeagueId]
 ["race-odds", leagueKey, myTeamId ?? null]
 ["pulse", activeLeagueId]
-["games", selectedDate, activeLeagueId]
+["games", selectedDate, activeLeagueId]   // gamesQueryKey; shared by Games page and LiveRankingsTable
+["leagues", userId ?? "public"]          // leagueKeys.list; leagueKeys.all invalidates every viewer
+["memberships", userId]                  // membershipKeys.forUser
 ["dailyRankings", leagueId, selectedDate]
 ["playoffRankings", leagueId]
 ["draft", "session", leagueId]
@@ -180,7 +182,7 @@ Keys are arrays. The first element is a namespace, subsequent elements are the r
 ["draft", "sleeperPicks", sessionId]
 ```
 
-The convention lets a mutation invalidate a whole family with a prefix key: `invalidateQueries({ queryKey: ["draft"] })` would refetch every draft-scoped query, but in practice each hook invalidates only the keys it owns.
+Key factories (`gamesQueryKey`, `leagueKeys`, `membershipKeys`, the draft key helpers) are exported next to their hooks; invalidate through them rather than literal arrays. The convention lets a mutation invalidate a whole family with a prefix key: `invalidateQueries({ queryKey: ["draft"] })` would refetch every draft-scoped query, but in practice each hook invalidates only the keys it owns.
 
 ## Error handling
 
@@ -191,7 +193,7 @@ The backend's `{ success: false, error: "message" }` envelope is the source of t
 ## What the frontend does NOT poll
 
 - Leagues list - once per session.
-- Memberships - once per session, plus on explicit join/leave.
+- Memberships - once per session, plus on explicit join/leave and league deletion (league settings invalidates `leagueKeys.all` and `membershipKeys.all` after a delete so the picker and nav drop the league).
 - Team rosters - stale on DEFAULT (5 min).
 - Playoff bracket - stale on 15 min (via `useInsights` + `useRaceOdds`).
 - Draft state - pushed via WebSocket; no polling fallback.

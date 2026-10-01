@@ -1,5 +1,5 @@
 import { NHLTeamBet } from "@/types/fantasyTeams";
-import { getNHLTeamUrlSlug } from "@/utils/nhlTeams";
+import { nhlTeamUrl } from "@/utils/nhlTeams";
 import { usePlayoffsData } from "@/features/rankings";
 import RankingTable from "@/components/common/RankingTable";
 
@@ -34,7 +34,7 @@ export default function TeamBetsTable({ teamBets }: TeamBetsTableProps) {
         return (
           <div className={`${!isInPlayoffs ? "opacity-25" : ""}`}>
             <a
-              href={`https://www.nhl.com/${getNHLTeamUrlSlug(bet.nhlTeam)}`}
+              href={nhlTeamUrl(bet.nhlTeam)}
               target="_blank"
               rel="noopener noreferrer"
               className="text-gray-900 hover:text-[#2563EB] hover:underline flex items-center font-medium"

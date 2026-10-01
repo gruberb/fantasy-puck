@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { getHockeyDateToday } from "@/utils/timezone";
-import { useAuth } from "@/contexts/AuthContext";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useAuth } from "@/contexts/use-auth";
+import { useLeague } from "@/contexts/use-league";
 import { APP_CONFIG } from "@/config";
 
 const NavBar = () => {

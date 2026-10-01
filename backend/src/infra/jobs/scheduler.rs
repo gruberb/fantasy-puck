@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use chrono::{Duration, NaiveDate, Utc};
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info};
@@ -8,12 +9,12 @@ use crate::api::handlers::insights::generate_and_cache_insights;
 use crate::api::handlers::race_odds::generate_and_cache_race_odds;
 use crate::api::routes::AppState;
 use crate::api::{game_type, season};
-use crate::infra::db::{nhl_mirror, FantasyDb};
+use crate::domain::time::{day_before, hockey_today};
 use crate::error::{Error, Result};
-use crate::tuning::scheduler as tuning;
+use crate::infra::db::{nhl_mirror, FantasyDb};
 use crate::infra::jobs::player_pool::refresh_playoff_roster_cache;
 use crate::infra::jobs::playoff_ingest::ingest_playoff_games_for_date;
-use crate::ws::draft_hub::DraftHub;
+use crate::tuning::scheduler as tuning;
 use crate::NhlClient;
 
 /// Process and store daily rankings for a specific date and league
@@ -45,65 +46,18 @@ pub async fn process_daily_rankings(
         return Ok(());
     }
 
-    // Read finalised per-team totals from the view. One query.
-    let rows: Vec<(i64, i32, i32, i32)> = sqlx::query_as(
-        r#"
-        SELECT team_id, goals::int, assists::int, points::int
-          FROM v_daily_fantasy_totals
-         WHERE league_id = $1::uuid
-           AND date       = $2::date
-           AND points > 0
-         ORDER BY points DESC, team_id
-        "#,
-    )
-    .bind(league_id)
-    .bind(date)
-    .fetch_all(pool)
-    .await?;
-
-    if rows.is_empty() {
-        info!(date = %date, "process_daily_rankings: no scoring in league today");
-        return Ok(());
-    }
-
-    for (rank, (team_id, goals, assists, points)) in rows.iter().enumerate() {
-        sqlx::query(
-            r#"
-            INSERT INTO daily_rankings (date, team_id, league_id, rank, points, goals, assists)
-            VALUES ($1, $2, $3::uuid, $4, $5, $6, $7)
-            ON CONFLICT (team_id, date, league_id) DO UPDATE SET
-                rank = EXCLUDED.rank,
-                points = EXCLUDED.points,
-                goals = EXCLUDED.goals,
-                assists = EXCLUDED.assists
-            "#,
-        )
-        .bind(date)
-        .bind(team_id)
-        .bind(league_id)
-        .bind(rank as i64 + 1)
-        .bind(points)
-        .bind(goals)
-        .bind(assists)
-        .execute(pool)
-        .await?;
-    }
-
+    let rows = db.snapshot_daily_rankings(league_id, date).await?;
     info!(
         date = %date,
         league = %league_id,
-        rows = rows.len(),
+        rows,
         "process_daily_rankings: snapshot written from v_daily_fantasy_totals"
     );
     Ok(())
 }
 
 /// Process daily rankings for all leagues
-async fn process_daily_rankings_all_leagues(
-    db: &FantasyDb,
-    nhl_client: &NhlClient,
-    date: &str,
-) {
+async fn process_daily_rankings_all_leagues(db: &FantasyDb, nhl_client: &NhlClient, date: &str) {
     match db.get_all_league_ids().await {
         Ok(league_ids) => {
             for league_id in &league_ids {
@@ -125,12 +79,8 @@ async fn process_daily_rankings_all_leagues(
 /// `playoff_skater_game_stats`. Runs before the prewarm step so the
 /// downstream player-projection model sees fresh data.
 async fn ingest_yesterdays_playoff_games(db: &FantasyDb, nhl_client: &NhlClient) {
-    let yesterday = match Utc::now().checked_sub_signed(Duration::days(1)) {
-        Some(t) => t.naive_utc().format("%Y-%m-%d").to_string(),
-        None => {
-            error!("Failed to compute yesterday's date for playoff ingest");
-            return;
-        }
+    let Some(yesterday) = day_before(&hockey_today()) else {
+        return;
     };
     let nhl_arc = Arc::new(nhl_client.clone());
     match ingest_playoff_games_for_date(db, &nhl_arc, &yesterday).await {
@@ -151,30 +101,15 @@ async fn ingest_yesterdays_playoff_games(db: &FantasyDb, nhl_client: &NhlClient)
 /// when users visit. Runs once per day from the 10am-UTC scheduler job
 /// and on-demand via `GET /api/admin/prewarm` (usually after a cache
 /// invalidation or a model-version bump that emptied the cache).
-pub async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
-    // Prewarm builds its own AppState so it can call the same
-    // handler entry points a real HTTP request would. The
-    // prediction adapter gets rebuilt here because the scheduler
-    // doesn't receive one from outside — this mirrors the main.rs
-    // composition root.
-    let prediction: Arc<dyn crate::domain::ports::prediction::PredictionService> =
-        match crate::infra::prediction::claude::ClaudeNarrator::from_env() {
-            Some(n) => Arc::new(n),
-            None => Arc::new(crate::infra::prediction::claude::NullNarrator),
-        };
-    let state = Arc::new(AppState {
-        db: db.clone(),
-        nhl_client: nhl_client.clone(),
-        config: Arc::new(crate::config::Config::from_env()),
-        draft_hub: DraftHub::new(),
-        prediction,
-    });
+pub async fn prewarm_derived_payloads(state: &Arc<AppState>) {
+    let db = &state.db;
+    let nhl_client = &state.nhl_client;
 
     // Playoff roster pool — 16 team rosters written into Postgres so
     // every downstream cold read is one SELECT instead of a paced NHL
     // fan-out. Failures are logged but non-fatal; the cached fetch path
     // falls back to the NHL fan-out on first read.
-    if game_type() == 3 {
+    if crate::api::is_playoffs() {
         match refresh_playoff_roster_cache(db, nhl_client, season(), game_type()).await {
             Ok(n) => info!("Playoff roster cache ready ({} players)", n),
             Err(e) => error!("Failed to pre-warm playoff roster cache: {}", e),
@@ -182,11 +117,11 @@ pub async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
     }
 
     // Global (no-league) payloads.
-    match generate_and_cache_insights(&state, "").await {
+    match generate_and_cache_insights(state, "").await {
         Ok(_) => info!("Pre-warmed global insights"),
         Err(e) => error!("Failed to pre-warm global insights: {}", e),
     }
-    match generate_and_cache_race_odds(&state, "", None).await {
+    match generate_and_cache_race_odds(state, "", None).await {
         Ok(_) => info!("Pre-warmed global race-odds (Fantasy Champion)"),
         Err(e) => error!("Failed to pre-warm global race-odds: {}", e),
     }
@@ -200,14 +135,14 @@ pub async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
         }
     };
     for league_id in &league_ids {
-        match generate_and_cache_insights(&state, league_id).await {
+        match generate_and_cache_insights(state, league_id).await {
             Ok(_) => info!("Pre-warmed insights for league {}", league_id),
             Err(e) => error!(
                 "Failed to pre-warm insights for league {}: {}",
                 league_id, e
             ),
         }
-        match generate_and_cache_race_odds(&state, league_id, None).await {
+        match generate_and_cache_race_odds(state, league_id, None).await {
             Ok(_) => info!("Pre-warmed race-odds for league {}", league_id),
             Err(e) => error!(
                 "Failed to pre-warm race-odds for league {}: {}",
@@ -218,8 +153,8 @@ pub async fn prewarm_derived_payloads(db: &FantasyDb, nhl_client: &NhlClient) {
         // `compose_team_breakdown` reads a warm `race_odds:v4:*`
         // cache when it builds remaining-points figures. Order
         // matters; don't invert these two calls.
-        if game_type() == 3 {
-            prewarm_league_team_diagnoses(&state, league_id).await;
+        if crate::api::is_playoffs() {
+            prewarm_league_team_diagnoses(state, league_id).await;
         }
     }
 }
@@ -228,17 +163,17 @@ async fn prewarm_league_team_diagnoses(state: &Arc<AppState>, league_id: &str) {
     let teams = match state.db.get_all_teams(league_id).await {
         Ok(ts) => ts,
         Err(e) => {
-            error!("Failed to list teams for diagnosis prewarm ({}): {}", league_id, e);
+            error!(
+                "Failed to list teams for diagnosis prewarm ({}): {}",
+                league_id, e
+            );
             return;
         }
     };
-    let today = crate::api::handlers::insights::hockey_today();
+    let today = hockey_today();
     for team in teams {
         match crate::api::handlers::pulse::resolve_my_team_diagnosis(
-            state,
-            league_id,
-            team.id,
-            &today,
+            state, league_id, team.id, &today,
         )
         .await
         {
@@ -256,14 +191,13 @@ async fn prewarm_league_team_diagnoses(state: &Arc<AppState>, league_id: &str) {
 }
 
 /// Initialize the rankings scheduler
-pub async fn init_rankings_scheduler(
-    db: Arc<FantasyDb>,
-    nhl_client: Arc<NhlClient>,
-) -> Result<JobScheduler> {
+pub async fn init_rankings_scheduler(state: Arc<AppState>) -> Result<JobScheduler> {
+    let db = Arc::new(state.db.clone());
+    let nhl_client = Arc::new(state.nhl_client.clone());
     // Create a new scheduler
     let scheduler = JobScheduler::new()
         .await
-        .map_err(|e| Error::Internal(format!("Failed to create job scheduler: {}", e)))?;
+        .context("failed to create job scheduler")?;
 
     let db_clone_morning = db.clone();
     let nhl_client_clone_morning = nhl_client.clone();
@@ -271,6 +205,7 @@ pub async fn init_rankings_scheduler(
     let nhl_client_clone_afternoon = nhl_client.clone();
     let db_clone_insights = db.clone();
     let nhl_client_clone_insights = nhl_client.clone();
+    let state_clone_insights = state.clone();
     let db_clone_edge = db.clone();
     let nhl_client_clone_edge = nhl_client.clone();
 
@@ -280,12 +215,9 @@ pub async fn init_rankings_scheduler(
         let nhl_client = nhl_client_clone_morning.clone();
         Box::pin(async move {
             // Calculate yesterday's date
-            let yesterday = Utc::now()
-                .checked_sub_signed(Duration::days(1))
-                .unwrap()
-                .naive_utc()
-                .format("%Y-%m-%d")
-                .to_string();
+            let Some(yesterday) = day_before(&hockey_today()) else {
+                return;
+            };
 
             if crate::api::past_season_end(&yesterday) {
                 info!(date = %yesterday, "Morning rankings: past season end, skipping");
@@ -299,10 +231,11 @@ pub async fn init_rankings_scheduler(
             let week_ago = (Utc::now() - Duration::days(retention_days))
                 .format("%Y-%m-%d")
                 .to_string();
-            if let Err(e) = sqlx::query("DELETE FROM response_cache WHERE date IS NOT NULL AND date < $1")
-                .bind(&week_ago)
-                .execute(db.pool())
-                .await
+            if let Err(e) =
+                sqlx::query("DELETE FROM response_cache WHERE date IS NOT NULL AND date < $1")
+                    .bind(&week_ago)
+                    .execute(db.pool())
+                    .await
             {
                 error!("Failed to clean up old cache entries: {}", e);
             } else {
@@ -310,7 +243,7 @@ pub async fn init_rankings_scheduler(
             }
         })
     })
-    .map_err(|e| Error::Internal(format!("Failed to create morning job: {}", e)))?;
+    .context("failed to create morning job")?;
 
     // Schedule job for 3pm UTC
     let afternoon_job = Job::new_async(tuning::AFTERNOON_RANKINGS_CRON, move |_, _| {
@@ -318,12 +251,9 @@ pub async fn init_rankings_scheduler(
         let nhl_client = nhl_client_clone_afternoon.clone();
         Box::pin(async move {
             // Calculate yesterday's date
-            let yesterday = Utc::now()
-                .checked_sub_signed(Duration::days(1))
-                .unwrap()
-                .naive_utc()
-                .format("%Y-%m-%d")
-                .to_string();
+            let Some(yesterday) = day_before(&hockey_today()) else {
+                return;
+            };
 
             if crate::api::past_season_end(&yesterday) {
                 info!(date = %yesterday, "Afternoon rankings: past season end, skipping");
@@ -333,7 +263,7 @@ pub async fn init_rankings_scheduler(
             process_daily_rankings_all_leagues(&db, &nhl_client, &yesterday).await;
         })
     })
-    .map_err(|e| Error::Internal(format!("Failed to create afternoon job: {}", e)))?;
+    .context("failed to create afternoon job")?;
 
     // Schedule derived-payload pre-warming at 10am UTC daily. Ingest
     // yesterday's completed playoff box scores first so the downstream
@@ -341,13 +271,11 @@ pub async fn init_rankings_scheduler(
     let insights_job = Job::new_async(tuning::DAILY_PREWARM_CRON, move |_, _| {
         let db = db_clone_insights.clone();
         let nhl_client = nhl_client_clone_insights.clone();
+        let state = state_clone_insights.clone();
         Box::pin(async move {
-            let yesterday = Utc::now()
-                .checked_sub_signed(Duration::days(1))
-                .unwrap()
-                .naive_utc()
-                .format("%Y-%m-%d")
-                .to_string();
+            let Some(yesterday) = day_before(&hockey_today()) else {
+                return;
+            };
 
             if crate::api::past_season_end(&yesterday) {
                 info!(date = %yesterday, "Daily prewarm: past season end, skipping");
@@ -356,10 +284,10 @@ pub async fn init_rankings_scheduler(
 
             info!("Running daily pre-warming job (playoff ingest + insights + race-odds)");
             ingest_yesterdays_playoff_games(&db, &nhl_client).await;
-            prewarm_derived_payloads(&db, &nhl_client).await;
+            prewarm_derived_payloads(&state).await;
         })
     })
-    .map_err(|e| Error::Internal(format!("Failed to create pre-warming job: {}", e)))?;
+    .context("failed to create pre-warming job")?;
 
     // Schedule the nightly NHL Edge refresh at 09:30 UTC. Runs 30 min
     // ahead of the daily prewarm so the insights pre-warm reads fresh
@@ -368,7 +296,7 @@ pub async fn init_rankings_scheduler(
         let db = db_clone_edge.clone();
         let nhl_client = nhl_client_clone_edge.clone();
         Box::pin(async move {
-            let today = Utc::now().naive_utc().format("%Y-%m-%d").to_string();
+            let today = hockey_today();
             if crate::api::past_season_end(&today) {
                 info!(date = %today, "Edge refresh: past season end, skipping");
                 return;
@@ -378,34 +306,34 @@ pub async fn init_rankings_scheduler(
             let _ = crate::infra::jobs::edge_refresher::run(&db, nhl_client, false).await;
         })
     })
-    .map_err(|e| Error::Internal(format!("Failed to create edge refresh job: {}", e)))?;
+    .context("failed to create edge refresh job")?;
 
     // Add jobs to the scheduler
     scheduler
         .add(morning_job)
         .await
-        .map_err(|e| Error::Internal(format!("Failed to add morning job: {}", e)))?;
+        .context("failed to add morning job")?;
 
     scheduler
         .add(afternoon_job)
         .await
-        .map_err(|e| Error::Internal(format!("Failed to add afternoon job: {}", e)))?;
+        .context("failed to add afternoon job")?;
 
     scheduler
         .add(insights_job)
         .await
-        .map_err(|e| Error::Internal(format!("Failed to add insights job: {}", e)))?;
+        .context("failed to add insights job")?;
 
     scheduler
         .add(edge_job)
         .await
-        .map_err(|e| Error::Internal(format!("Failed to add edge refresh job: {}", e)))?;
+        .context("failed to add edge refresh job")?;
 
     // Start the scheduler
     scheduler
         .start()
         .await
-        .map_err(|e| Error::Internal(format!("Failed to start scheduler: {}", e)))?;
+        .context("failed to start scheduler")?;
 
     info!("Scheduler initialized: rankings at 9am/3pm UTC, edge at 09:30 UTC, insights + race-odds at 10am UTC");
     Ok(scheduler)

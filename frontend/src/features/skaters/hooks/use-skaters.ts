@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { APP_CONFIG } from "@/config";
 import { usePlayoffsData } from "@/features/rankings/hooks/use-playoffs-data";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useLeague } from "@/contexts/use-league";
 
 export function useSkaters() {
   const { isTeamInPlayoffs } = usePlayoffsData();

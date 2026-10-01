@@ -23,7 +23,7 @@ Status values on `draft_sessions.status`: `pending` → `active` → `picks_done
 
 ## HTTP endpoints
 
-All draft endpoints require authentication. Full route listing in [`03-api.md`](./03-api.md). Relevant handlers are in [`backend/src/api/handlers/draft.rs`](../backend/src/api/handlers/draft.rs).
+All draft endpoints require authentication. Reads and picks require league membership; pool, order, start/pause/resume, and sleeper-round controls require the league owner (global admins pass both). Full route listing in [`03-api.md`](./03-api.md). Relevant handlers are in [`backend/src/api/handlers/draft.rs`](../backend/src/api/handlers/draft.rs).
 
 | Endpoint | Method | What it writes | Broadcasts |
 | --- | --- | --- | --- |
@@ -43,7 +43,7 @@ All draft endpoints require authentication. Full route listing in [`03-api.md`](
 
 Canonical snake: in round 1, member 1 picks first, member N picks last. In round 2, member N picks first and member 1 picks last. Pattern alternates across all rounds.
 
-Implementation in [`handlers/draft.rs:309-321`](../backend/src/api/handlers/draft.rs):
+Implementation in [`handlers/draft.rs`](../backend/src/api/handlers/draft.rs):
 
 ```rust
 // current_pick_index is a GLOBAL counter: 0, 1, 2, ..., total_rounds*num_members - 1
@@ -71,6 +71,10 @@ member:      0  1  2  3  3  2  1  0  0  1  2  3  ← order reverses on round 1
 
 The pick row stores `pick_number = pick_index` (0-based global) and `round = round + 1` (1-based, for display). Finalize happens automatically when `current_pick_index >= total_rounds * num_members` - the handler flips `status` to `picks_done` and waits for an explicit `POST /finalize` from the admin.
 
+### Concurrency
+
+A pick is one database transaction (`FantasyDb::make_draft_pick`, and `make_sleeper_pick` for the sleeper round) that starts with `SELECT ... FROM draft_sessions ... FOR UPDATE`. Every check (status, slot, player already taken, team in league, one sleeper per team, sleeper exclusive per league) and every write (pick insert, index advance, status flip) happens under that row lock, so two clients picking at once serialize: the second sees the first's pick and gets a 400. Unique indexes on `draft_picks (draft_session_id, pick_number)` and `(draft_session_id, nhl_id)` back this up. The snake-order maths lives in `domain::services::draft::pick_slot`.
+
 ## Player pool
 
 File: [`backend/src/infra/jobs/player_pool.rs`](../backend/src/infra/jobs/player_pool.rs).
@@ -96,7 +100,7 @@ The 16 team abbreviations come from `playoff_team_abbrevs` ([`player_pool.rs:161
 
 File: [`backend/src/ws/draft_hub.rs`](../backend/src/ws/draft_hub.rs).
 
-`DraftHub` holds one `tokio::sync::broadcast::Sender<String>` per active draft session, inside an `RwLock<HashMap<String, Sender<String>>>`. Channel capacity is 64 messages ([`draft_hub.rs:54`](../backend/src/ws/draft_hub.rs)).
+`DraftHub` holds one `tokio::sync::broadcast::Sender<String>` per active draft session, inside an `RwLock<HashMap<String, Sender<String>>>`. Channel capacity is `tuning::http::WS_BROADCAST_CAPACITY` (64 messages).
 
 Subscribe logic uses double-checked locking to avoid write contention ([`draft_hub.rs:38-57`](../backend/src/ws/draft_hub.rs)): read-lock first, only acquire the write lock if the channel has to be created. Broadcast takes a read lock, serialises the event to JSON, and ignores send errors - there is no backpressure on the handlers.
 
@@ -135,11 +139,15 @@ Serialised shape on the wire (camelCase):
 
 File: [`backend/src/ws/handler.rs`](../backend/src/ws/handler.rs).
 
-Route: `GET /ws/draft/{session_id}` ([`routes.rs:276-279`](../backend/src/api/routes.rs)).
+Route: `GET /ws/draft/{session_id}?token=<jwt>` (see [`routes.rs`](../backend/src/api/routes.rs)).
 
-`handle_draft_ws` runs one `tokio::select!` loop with three arms ([`ws/handler.rs:36-89`](../backend/src/ws/handler.rs)):
+Browsers can't set an `Authorization` header on a WebSocket upgrade, so the JWT travels in the query string. `ws_draft` authorizes *before* upgrading, with the same rule as the draft read endpoints: 401 without a valid token, 404 for an unknown session, 403 unless the caller is a league member or a global admin. Rejecting unknown sessions up front also means arbitrary ids can't create hub channels.
 
-1. **Ping** - every `WS_PING_INTERVAL` (30 s, [`tuning.rs:241`](../backend/src/tuning.rs)) send a WebSocket Ping to keep the connection alive through proxies.
+When a connection ends, the handler drops its receiver and calls `DraftHub::release`, which removes the session's channel once no subscribers remain, so the hub only holds sessions with live connections.
+
+`handle_draft_ws` runs one `tokio::select!` loop with three arms:
+
+1. **Ping** - every `WS_PING_INTERVAL` (30 s, `tuning::http`) send a WebSocket Ping to keep the connection alive through proxies.
 2. **Broadcast → client** - messages arriving on the `broadcast::Receiver<String>` are forwarded as `Message::Text`. On `Lagged(n)`, the client has missed `n` messages (buffer size 64); log and continue. On `Closed`, break the loop.
 3. **Client → server** - Ping/Pong are echoed; Close ends the loop; Text and Binary messages are silently ignored. The protocol is server-push only.
 

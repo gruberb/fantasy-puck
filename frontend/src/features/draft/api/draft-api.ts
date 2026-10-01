@@ -1,5 +1,5 @@
 import { fetchApi } from '@/lib/api-client';
-import type { DraftSession, DraftPick, PlayerPoolEntry, LeagueMember } from '../types';
+import type { DraftSession, DraftPick, PlayerPoolEntry, LeagueMember } from '@/features/draft/types';
 
 // ── Response shapes ───────────────────────────────────────────────────────
 

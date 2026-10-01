@@ -11,6 +11,7 @@
 //! simulation on a blocking thread → cache → return. All heavy math lives
 //! in [`crate::domain::prediction::race_sim`], a pure-domain module.
 
+use anyhow::Context;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -21,16 +22,13 @@ use axum::{
 use chrono::Utc;
 use tracing::debug;
 
-use crate::api::dtos::race_odds::{
-    RaceOddsMode, RaceOddsResponse, RivalryCard,
-};
-use crate::api::handlers::insights::hockey_today;
+use crate::api::dtos::race_odds::{RaceOddsMode, RaceOddsResponse, RivalryCard};
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
 use crate::api::{current_date_window, game_type, season};
-use crate::error::Result;
 use crate::domain::models::fantasy::FantasyTeamInGame;
-use crate::domain::models::nhl::{PlayoffCarousel, StatsLeaders};
+use crate::domain::models::nhl::PlayoffCarousel;
+use crate::domain::models::nhl::GAME_TYPE_REGULAR;
 use crate::domain::prediction::carousel::games_played_from_carousel;
 use crate::domain::prediction::player_projection::{PlayerInput, Projection};
 use crate::domain::prediction::race_sim::{
@@ -38,6 +36,9 @@ use crate::domain::prediction::race_sim::{
     SimPlayer, TeamOdds, TeamRating, DEFAULT_K_FACTOR, DEFAULT_PPG, DEFAULT_TRIALS,
 };
 use crate::domain::prediction::team_ratings;
+use crate::domain::time::hockey_today;
+use crate::error::Result;
+use crate::infra::db::cache_keys;
 use crate::infra::db::nhl_mirror;
 use crate::infra::prediction::{compute_current_elo, project_players};
 
@@ -49,6 +50,14 @@ use crate::infra::prediction::{compute_current_elo, project_players};
 /// ratings are ~40-point-spread; using 0.010 against Elo would pin
 /// every series outcome to the favorite.
 const ELO_K_FACTOR: f32 = std::f32::consts::LN_10 / 400.0;
+
+/// Fantasy Champion mode simulates the top N regular-season scorers.
+const CHAMPION_POOL_SIZE: usize = 40;
+
+/// Below this many team playoff games, playoff PPG is too noisy to use.
+const MIN_PLAYOFF_GAMES_FOR_PPG: u32 = 3;
+
+const REGULAR_SEASON_GAMES: f32 = 82.0;
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -85,20 +94,7 @@ pub async fn generate_and_cache_race_odds(
     my_team_id: Option<i64>,
 ) -> Result<RaceOddsResponse> {
     let today = hockey_today();
-    // Model version in the cache key: v4 replaces the skater-stats
-    // leaderboard source for `playoff_points_so_far` (which only
-    // returned the top 25 per category and undercounted every
-    // depth scorer) with `nhl_mirror::sum_player_points`, which
-    // sums over the full per-game mirror. Bump when the projection
-    // model changes so a deploy doesn't serve stale same-day odds
-    // under the old model.
-    let cache_key = format!(
-        "race_odds:v4:{}:{}:{}:{}",
-        if league_id.is_empty() { "global" } else { league_id },
-        season(),
-        game_type(),
-        today
-    );
+    let cache_key = cache_keys::race_odds(league_id, season(), game_type(), &today);
 
     if let Some(mut cached) = state
         .db
@@ -122,10 +118,10 @@ pub async fn generate_and_cache_race_odds(
 
     let response = build_response(state, league_id, my_team_id).await?;
 
-    let _ = state
+    state
         .db
         .cache()
-        .store_response(&cache_key, &today, &clone_without_rivalry(&response))
+        .store_best_effort(&cache_key, &today, &clone_without_rivalry(&response))
         .await;
 
     Ok(response)
@@ -159,7 +155,7 @@ async fn build_response(
     let sim_input = input.clone();
     let output: RaceSimOutput = tokio::task::spawn_blocking(move || simulate(&sim_input, trials))
         .await
-        .map_err(|e| crate::Error::Internal(format!("race sim join error: {}", e)))?;
+        .context("race sim join error")?;
 
     let mode = if league_id.is_empty() {
         RaceOddsMode::Champion
@@ -243,29 +239,24 @@ async fn build_response(
 // Input builders
 // ---------------------------------------------------------------------------
 
-async fn build_league_input(
-    state: &Arc<AppState>,
-    league_id: &str,
-) -> Result<RaceSimInput> {
+async fn build_league_input(state: &Arc<AppState>, league_id: &str) -> Result<RaceSimInput> {
     // Bind season to a local so the reference we hand to `get_skater_stats`
     // outlives the `tokio::join!`-produced future. The functions `season()`
     // and `game_type()` return primitives by value, so the `&season()` form
     // used elsewhere only works in synchronous contexts.
     let season_val = season();
     let game_type_val = game_type();
-    let (teams_res, carousel_res, playoff_stats_res, regular_stats_res, standings_res) = tokio::join!(
+    let (teams, nhl) = tokio::try_join!(
         state.db.get_all_teams_with_players(league_id),
-        state.nhl_client.get_playoff_carousel(season_val.to_string()),
-        state.nhl_client.get_skater_stats(&season_val, game_type_val),
-        state.nhl_client.get_skater_stats(&season_val, 2),
-        state.nhl_client.get_standings_raw(),
-    );
-
-    let teams = teams_res?;
-    let carousel = carousel_res.ok().flatten();
-    let playoff_stats = playoff_stats_res.ok();
-    let regular_stats = regular_stats_res.ok();
-    let standings_json = standings_res.ok();
+        load_nhl_inputs(state.db.pool(), season_val, game_type_val),
+    )?;
+    let NhlInputs {
+        carousel,
+        playoff_points,
+        regular_points,
+        standings,
+        ..
+    } = nhl;
 
     let bracket = bracket_from_carousel(carousel.as_ref());
     // Still needed by the pre-playoff `player_ppg` path and as the team-
@@ -273,15 +264,9 @@ async fn build_league_input(
     // the sim's remaining-games logic, which derives from the bracket.
     let games_played_so_far = games_played_from_carousel(carousel.as_ref());
 
-    let is_playoffs = game_type_val == 3;
-    let (ratings, k_factor, home_ice_bonus) = resolve_ratings(
-        &state.db,
-        &state.nhl_client,
-        season_val,
-        is_playoffs,
-        standings_json.as_ref(),
-    )
-    .await;
+    let is_playoffs = crate::api::is_playoffs();
+    let (ratings, k_factor, home_ice_bonus) =
+        resolve_ratings(&state.db, season_val, is_playoffs, standings.as_ref()).await;
 
     // Points-so-far comes from the per-game mirror, not the NHL
     // stats-leaders leaderboard. See `playoff_points_for` for the
@@ -298,17 +283,17 @@ async fn build_league_input(
         &all_player_ids,
         season_val as i32,
         game_type_val as i16,
+        current_date_window(),
     )
-    .await
-    .unwrap_or_default();
+    .await?;
 
     let fantasy_teams = if is_playoffs {
         build_fantasy_teams_playoff(
             &state.db,
             season_val,
             teams,
-            playoff_stats.as_ref(),
-            regular_stats.as_ref(),
+            &playoff_points,
+            &regular_points,
             &games_played_so_far,
             &points_by_player,
         )
@@ -319,8 +304,8 @@ async fn build_league_input(
             .map(|t| {
                 fantasy_team_to_sim(
                     t,
-                    playoff_stats.as_ref(),
-                    regular_stats.as_ref(),
+                    &playoff_points,
+                    &regular_points,
                     &games_played_so_far,
                     &points_by_player,
                 )
@@ -345,7 +330,6 @@ async fn build_league_input(
 /// principled home-ice offset without its own calibration).
 async fn resolve_ratings(
     db: &crate::infra::db::FantasyDb,
-    nhl: &crate::NhlClient,
     season_val: u32,
     is_playoffs: bool,
     standings_json: Option<&serde_json::Value>,
@@ -359,13 +343,16 @@ async fn resolve_ratings(
                     // alongside the base Elo. `simulate_series` prefers
                     // this per-team value when non-zero, falling back
                     // to the league-constant bonus below.
-                    let home_bonus_map = crate::domain::prediction::playoff_elo::home_bonus_from_standings(standings);
+                    let home_bonus_map =
+                        crate::domain::prediction::playoff_elo::home_bonus_from_standings(
+                            standings,
+                        );
                     // Goalie component — each team's starter SV% from
                     // the *regular season* leaderboard is the pre-
                     // playoff signal. Failures fall back to a zero
                     // bonus; the simulator already tolerates missing
                     // entries in the ratings map.
-                    let goalie_bonuses = fetch_goalie_bonuses(nhl, season_val).await;
+                    let goalie_bonuses = goalie_bonuses(db.pool(), season_val).await;
                     let mut map: HashMap<String, TeamRating> = elo
                         .into_iter()
                         .map(|(k, base)| {
@@ -374,10 +361,8 @@ async fn resolve_ratings(
                         })
                         .collect();
                     for (abbrev, rating) in map.iter_mut() {
-                        rating.goalie_bonus = goalie_bonuses
-                            .get(abbrev.as_str())
-                            .copied()
-                            .unwrap_or(0.0);
+                        rating.goalie_bonus =
+                            goalie_bonuses.get(abbrev.as_str()).copied().unwrap_or(0.0);
                     }
                     let fallback_ice_bonus = ELO_K_FACTOR * race_sim::HOME_ICE_ELO;
                     return (map, ELO_K_FACTOR, fallback_ice_bonus);
@@ -393,50 +378,87 @@ async fn resolve_ratings(
             tracing::warn!("standings fetch empty; cannot compute playoff Elo");
         }
     }
-    (ratings_from_standings(standings_json), DEFAULT_K_FACTOR, 0.0)
+    (
+        ratings_from_standings(standings_json),
+        DEFAULT_K_FACTOR,
+        0.0,
+    )
 }
 
-/// Fetch the regular-season goalie leaderboard for `season_val` and
-/// compute each team's goalie-bonus Elo via
-/// `goalie_rating::compute_bonuses`. Returns an empty map on any error
-/// (logged), so callers can unconditionally merge the result without
-/// blocking on goalie data being available.
-async fn fetch_goalie_bonuses(
-    nhl: &crate::NhlClient,
-    season_val: u32,
-) -> HashMap<String, f32> {
+/// Each team's goalie-bonus Elo from the mirrored *regular-season*
+/// goalie leaderboard (playoff SV% is part of what the model predicts, so
+/// using it would be circular). Returns an empty map on any error, logged,
+/// so callers can merge it unconditionally.
+async fn goalie_bonuses(pool: &sqlx::PgPool, season_val: u32) -> HashMap<String, f32> {
     use crate::domain::prediction::goalie_rating::{self, GoalieEntry};
-    // Regular-season SV% is the pre-playoff signal. Playoff SV% is
-    // itself part of what we're predicting — circular to use it.
-    let leaders = match nhl.get_goalie_stats(&season_val, 2).await {
-        Ok(l) => l,
+    let rows = match nhl_mirror::list_goalie_season_stats(
+        pool,
+        season_val as i32,
+        GAME_TYPE_REGULAR as i16,
+    )
+    .await
+    {
+        Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, season = season_val, "goalie-stats fetch failed");
+            tracing::warn!(season = season_val, "goalie-stats read failed: {e}");
             return HashMap::new();
         }
     };
-
-    // Build a lookup from player_id → save_pct so we can zip it onto
-    // the wins leaderboard. Callers use `wins` as the "primary
-    // starter" signal; `save_pctg` is the quality signal.
-    let sv_lookup: HashMap<i64, f32> = leaders
-        .save_pctg
-        .iter()
-        .map(|p| (p.id as i64, p.value as f32))
-        .collect();
-
-    let entries: Vec<GoalieEntry> = leaders
-        .wins
-        .iter()
-        .map(|p| GoalieEntry {
-            player_id: p.id as i64,
-            team_abbrev: p.team_abbrev.clone(),
-            wins: p.value as f32,
-            save_pct: sv_lookup.get(&(p.id as i64)).copied(),
+    // `wins` is the "primary starter" signal; goalies outside the wins
+    // leaderboard can't be ranked as starters.
+    let entries: Vec<GoalieEntry> = rows
+        .into_iter()
+        .filter_map(|r| {
+            Some(GoalieEntry {
+                player_id: r.player_id,
+                team_abbrev: r.team_abbrev,
+                wins: r.wins? as f32,
+                save_pct: r.save_pctg,
+            })
         })
         .collect();
-
     goalie_rating::compute_bonuses(&entries)
+}
+
+/// NHL-side inputs to the race sim, all read from the mirror so a cache
+/// miss never fans out to the NHL API on the request path.
+struct NhlInputs {
+    carousel: Option<PlayoffCarousel>,
+    /// Season points for the configured game type, keyed by NHL id.
+    playoff_points: HashMap<i64, i32>,
+    /// Regular-season lines (club stats: every skater who dressed),
+    /// ordered by points descending.
+    regular: Vec<nhl_mirror::SkaterSeasonRow>,
+    regular_points: HashMap<i64, i32>,
+    standings: Option<serde_json::Value>,
+}
+
+async fn load_nhl_inputs(
+    pool: &sqlx::PgPool,
+    season_val: u32,
+    game_type_val: u8,
+) -> Result<NhlInputs> {
+    let season = season_val as i32;
+    let (carousel, current, regular, standings) = tokio::try_join!(
+        nhl_mirror::get_playoff_carousel(pool, season),
+        nhl_mirror::list_skater_season_stats(pool, season, game_type_val as i16),
+        nhl_mirror::list_skater_season_stats(pool, season, GAME_TYPE_REGULAR as i16),
+        nhl_mirror::load_standings_payload(pool, season),
+    )?;
+    let points = |rows: &[nhl_mirror::SkaterSeasonRow]| -> HashMap<i64, i32> {
+        rows.iter().map(|r| (r.player_id, r.points)).collect()
+    };
+    let has_standings = standings
+        .get("standings")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| !a.is_empty());
+    Ok(NhlInputs {
+        carousel,
+        playoff_points: points(&current),
+        regular_points: points(&regular),
+        regular,
+        standings: has_standings.then_some(standings),
+    })
 }
 
 /// Build SimFantasyTeams using the Bayesian `player_projection` path.
@@ -446,8 +468,8 @@ async fn build_fantasy_teams_playoff(
     db: &crate::infra::db::FantasyDb,
     season_val: u32,
     teams: Vec<FantasyTeamInGame>,
-    playoff_stats: Option<&StatsLeaders>,
-    regular_stats: Option<&StatsLeaders>,
+    playoff_points: &HashMap<i64, i32>,
+    regular_points: &HashMap<i64, i32>,
     games_played_so_far: &HashMap<String, u32>,
     points_by_player: &HashMap<i64, i32>,
 ) -> Result<Vec<SimFantasyTeam>> {
@@ -464,10 +486,7 @@ async fn build_fantasy_teams_playoff(
             if !seen.insert(p.nhl_id) {
                 continue;
             }
-            let rs_points = regular_stats
-                .and_then(|s| s.points.iter().find(|x| x.id as i64 == p.nhl_id))
-                .map(|x| x.value as i32)
-                .unwrap_or(0);
+            let rs_points = regular_points.get(&p.nhl_id).copied().unwrap_or(0);
             inputs.push(PlayerInput {
                 nhl_id: p.nhl_id,
                 player_name: p.player_name.clone(),
@@ -501,7 +520,7 @@ async fn build_fantasy_teams_playoff(
                         position: p.position.clone(),
                         playoff_points_so_far: playoff_points_for(
                             points_by_player,
-                            playoff_stats,
+                            playoff_points,
                             p.nhl_id,
                         ),
                         ppg,
@@ -521,65 +540,40 @@ async fn build_fantasy_teams_playoff(
 async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
     let season_val = season();
     let game_type_val = game_type();
-    let (carousel_res, playoff_stats_res, regular_stats_res, standings_res) = tokio::join!(
-        state.nhl_client.get_playoff_carousel(season_val.to_string()),
-        state.nhl_client.get_skater_stats(&season_val, game_type_val),
-        state.nhl_client.get_skater_stats(&season_val, 2),
-        state.nhl_client.get_standings_raw(),
-    );
-
-    let carousel = carousel_res.ok().flatten();
-    let playoff_stats = playoff_stats_res.ok();
-    let regular_stats = regular_stats_res.ok();
-    let standings_json = standings_res.ok();
+    let NhlInputs {
+        carousel,
+        playoff_points,
+        regular,
+        regular_points,
+        standings,
+    } = load_nhl_inputs(state.db.pool(), season_val, game_type_val).await?;
 
     let bracket = bracket_from_carousel(carousel.as_ref());
     let games_played_so_far = games_played_from_carousel(carousel.as_ref());
 
-    let is_playoffs = game_type_val == 3;
-    let (ratings, k_factor, home_ice_bonus) = resolve_ratings(
-        &state.db,
-        &state.nhl_client,
-        season_val,
-        is_playoffs,
-        standings_json.as_ref(),
-    )
-    .await;
+    let is_playoffs = crate::api::is_playoffs();
+    let (ratings, k_factor, home_ice_bonus) =
+        resolve_ratings(&state.db, season_val, is_playoffs, standings.as_ref()).await;
 
     // Build a flat Fantasy Champion pool: top 40 regular-season skaters by
     // points. Treat each as its own one-player "team" so the simulator's
     // per-team outputs map one-to-one to players.
-    let Some(regular) = regular_stats.as_ref() else {
-        return Ok(RaceSimInput {
-            bracket,
-            ratings,
-            k_factor,
-            home_ice_bonus,
-            fantasy_teams: Vec::new(),
-        });
-    };
-
-    // Skip goalies — this app drafts skaters only.
-    let mut leaders: Vec<_> = regular
-        .points
+    // Skaters only (this app doesn't draft goalies); `regular` is
+    // already ordered by points descending.
+    let leaders: Vec<&nhl_mirror::SkaterSeasonRow> = regular
         .iter()
         .filter(|p| !p.position.eq_ignore_ascii_case("G"))
+        .take(CHAMPION_POOL_SIZE)
         .collect();
-    leaders.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
-    leaders.truncate(40);
-
-    // Mirror-backed points map for the top-40, same rationale as
-    // the league path: the stats-leaders leaderboard tops out at
-    // 25 per category.
-    let leader_ids: Vec<i64> = leaders.iter().map(|p| p.id as i64).collect();
+    let leader_ids: Vec<i64> = leaders.iter().map(|p| p.player_id).collect();
     let points_by_player = nhl_mirror::sum_player_points(
         state.db.pool(),
         &leader_ids,
         season_val as i32,
         game_type_val as i16,
+        current_date_window(),
     )
-    .await
-    .unwrap_or_default();
+    .await?;
 
     // Playoff path: batch-project all 40 leaders through the Bayesian
     // blend. Off-playoff path retains the legacy `player_ppg` fallback.
@@ -587,14 +581,10 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
         let inputs: Vec<PlayerInput> = leaders
             .iter()
             .map(|p| PlayerInput {
-                nhl_id: p.id as i64,
-                player_name: format!(
-                    "{} {}",
-                    p.first_name.get("default").cloned().unwrap_or_default(),
-                    p.last_name.get("default").cloned().unwrap_or_default(),
-                ),
+                nhl_id: p.player_id,
+                player_name: format!("{} {}", p.first_name, p.last_name),
                 nhl_team: p.team_abbrev.clone(),
-                rs_points: p.value as i32,
+                rs_points: p.points,
             })
             .collect();
         project_players(&state.db, season_val, &inputs, &games_played_so_far).await?
@@ -605,14 +595,10 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
     let fantasy_teams = leaders
         .into_iter()
         .map(|p| {
-            let nhl_id = p.id as i64;
-            let name = format!(
-                "{} {}",
-                p.first_name.get("default").cloned().unwrap_or_default(),
-                p.last_name.get("default").cloned().unwrap_or_default(),
-            );
+            let nhl_id = p.player_id;
+            let name = format!("{} {}", p.first_name, p.last_name);
             let playoff_points_so_far =
-                playoff_points_for(&points_by_player, playoff_stats.as_ref(), nhl_id);
+                playoff_points_for(&points_by_player, &playoff_points, nhl_id);
             let ppg = if is_playoffs {
                 projections
                     .get(&nhl_id)
@@ -622,8 +608,8 @@ async fn build_champion_input(state: &Arc<AppState>) -> Result<RaceSimInput> {
                 player_ppg(
                     nhl_id,
                     &p.team_abbrev,
-                    playoff_stats.as_ref(),
-                    regular_stats.as_ref(),
+                    &playoff_points,
+                    &regular_points,
                     &games_played_so_far,
                 )
             };
@@ -722,7 +708,6 @@ fn bracket_from_carousel(carousel: Option<&PlayoffCarousel>) -> BracketState {
     BracketState { rounds }
 }
 
-
 fn ratings_from_standings(standings: Option<&serde_json::Value>) -> HashMap<String, TeamRating> {
     let Some(root) = standings else {
         return HashMap::new();
@@ -737,8 +722,8 @@ fn ratings_from_standings(standings: Option<&serde_json::Value>) -> HashMap<Stri
 
 fn fantasy_team_to_sim(
     team: FantasyTeamInGame,
-    playoff_stats: Option<&StatsLeaders>,
-    regular_stats: Option<&StatsLeaders>,
+    playoff_points: &HashMap<i64, i32>,
+    regular_points: &HashMap<i64, i32>,
     games_played_so_far: &HashMap<String, u32>,
     points_by_player: &HashMap<i64, i32>,
 ) -> SimFantasyTeam {
@@ -754,16 +739,12 @@ fn fantasy_team_to_sim(
             name: p.player_name.clone(),
             nhl_team: p.nhl_team.clone(),
             position: p.position.clone(),
-            playoff_points_so_far: playoff_points_for(
-                points_by_player,
-                playoff_stats,
-                p.nhl_id,
-            ),
+            playoff_points_so_far: playoff_points_for(points_by_player, playoff_points, p.nhl_id),
             ppg: player_ppg(
                 p.nhl_id,
                 &p.nhl_team,
-                playoff_stats,
-                regular_stats,
+                playoff_points,
+                regular_points,
                 games_played_so_far,
             ),
             image_url: None,
@@ -777,59 +758,45 @@ fn fantasy_team_to_sim(
     }
 }
 
-/// Look up a player's playoff points so far from the mirror-derived
-/// map (sum over `nhl_player_game_stats`). Falls back to the NHL
-/// skater leaderboard for any player not present in the mirror —
-/// which happens early in the playoffs when a rostered depth
-/// player hasn't taken an ice shift yet and
-/// `nhl_player_game_stats` has no row for them.
+/// A player's playoff points so far: the per-game mirror sum first, then
+/// the mirrored season line for anyone the per-game table doesn't have
+/// yet (early in the playoffs, before a depth player's first shift).
 fn playoff_points_for(
     map: &HashMap<i64, i32>,
-    leaderboard: Option<&StatsLeaders>,
+    season_points: &HashMap<i64, i32>,
     nhl_id: i64,
 ) -> i32 {
-    if let Some(&p) = map.get(&nhl_id) {
-        return p;
-    }
-    let Some(s) = leaderboard else { return 0 };
-    s.points
-        .iter()
-        .find(|p| p.id as i64 == nhl_id)
-        .map(|p| p.value as i32)
+    map.get(&nhl_id)
+        .or_else(|| season_points.get(&nhl_id))
+        .copied()
         .unwrap_or(0)
 }
 
 /// Estimate fantasy points-per-game for a skater.
 ///
 /// Priority:
-/// 1. Playoff PPG if the player's NHL team has played ≥3 playoff games and
-///    the player is in the playoff points leaderboard. Grounded in current
-///    form, noisy early.
-/// 2. Regular-season PPG using `points / 82` from the regular-season leader
-///    list.
+/// 1. Playoff PPG once the player's NHL team has played
+///    `MIN_PLAYOFF_GAMES_FOR_PPG` playoff games. Current form, noisy early.
+/// 2. Regular-season PPG (`points / REGULAR_SEASON_GAMES`).
 /// 3. `DEFAULT_PPG` prior.
 fn player_ppg(
     nhl_id: i64,
     nhl_team: &str,
-    playoff_stats: Option<&StatsLeaders>,
-    regular_stats: Option<&StatsLeaders>,
+    playoff_points: &HashMap<i64, i32>,
+    regular_points: &HashMap<i64, i32>,
     games_played_so_far: &HashMap<String, u32>,
 ) -> f32 {
     let team_games = games_played_so_far.get(nhl_team).copied().unwrap_or(0);
-    if team_games >= 3 {
-        if let Some(pts) = playoff_stats
-            .and_then(|s| s.points.iter().find(|p| p.id as i64 == nhl_id))
-        {
-            let ppg = pts.value as f32 / team_games as f32;
+    if team_games >= MIN_PLAYOFF_GAMES_FOR_PPG {
+        if let Some(&pts) = playoff_points.get(&nhl_id) {
+            let ppg = pts as f32 / team_games as f32;
             if ppg > 0.0 {
                 return ppg;
             }
         }
     }
-    if let Some(pts) = regular_stats
-        .and_then(|s| s.points.iter().find(|p| p.id as i64 == nhl_id))
-    {
-        let ppg = pts.value as f32 / 82.0;
+    if let Some(&pts) = regular_points.get(&nhl_id) {
+        let ppg = pts as f32 / REGULAR_SEASON_GAMES;
         if ppg > 0.0 {
             return ppg;
         }
@@ -877,20 +844,16 @@ fn compute_rivalry(my_team_id: i64, teams: &[TeamOdds]) -> Option<RivalryCard> {
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         })?;
 
-    let h2h = me
-        .head_to_head
-        .get(&rival.team_id)
-        .copied()
-        .unwrap_or_else(|| {
-            // Shouldn't happen — MC always populates pairwise for every
-            // other team — but fall back to the sort-based winner rather
-            // than a mystery 0%.
-            if me.projected_final_mean >= rival.projected_final_mean {
-                1.0
-            } else {
-                0.0
-            }
-        });
+    let h2h = me.head_to_head.get(&rival.team_id).copied().unwrap_or({
+        // Shouldn't happen — MC always populates pairwise for every
+        // other team — but fall back to the sort-based winner rather
+        // than a mystery 0%.
+        if me.projected_final_mean >= rival.projected_final_mean {
+            1.0
+        } else {
+            0.0
+        }
+    });
 
     Some(RivalryCard {
         my_team_name: me.team_name.clone(),
@@ -903,6 +866,112 @@ fn compute_rivalry(my_team_id: i64, teams: &[TeamOdds]) -> Option<RivalryCard> {
     })
 }
 
+/// Splice fresh per-team / per-player current-point totals from the
+/// mirror onto a cached `RaceOddsResponse`. The Monte Carlo outputs
+/// (win%, top-3%, likely range) stay exactly as the simulator
+/// produced them — re-simulating on every request is a tens-of-ms
+/// CPU hit per league and unnecessary just to refresh the Current
+/// column. But shifting `projected_final_mean` / `p10` / `p90` by
+/// `(fresh_current - cached_current)` keeps the projection anchored
+/// at the correct starting point: a team that scored 9 points since
+/// the cache was written will see its projected total shift up by 9
+/// without having to re-run the sim.
+async fn overlay_current_from_mirror(
+    state: &Arc<AppState>,
+    league_id: &str,
+    response: &mut RaceOddsResponse,
+) {
+    let season_val = season() as i32;
+    let gt_val = game_type() as i16;
+    let pool = state.db.pool();
+
+    if !league_id.is_empty() && !response.team_odds.is_empty() {
+        let totals = match nhl_mirror::list_league_team_season_totals(
+            pool,
+            league_id,
+            season_val,
+            gt_val,
+            current_date_window(),
+        )
+        .await
+        {
+            Ok(rows) => rows,
+            Err(_) => return,
+        };
+        let fresh_by_team: HashMap<i64, i32> = totals
+            .into_iter()
+            .map(|r| (r.team_id, r.points as i32))
+            .collect();
+        for entry in response.team_odds.iter_mut() {
+            let Some(&fresh) = fresh_by_team.get(&entry.team_id) else {
+                continue;
+            };
+            let delta = fresh - entry.current_points;
+            if delta == 0 {
+                continue;
+            }
+            let delta_f = delta as f32;
+            entry.current_points = fresh;
+            entry.projected_final_mean += delta_f;
+            entry.projected_final_median += delta_f;
+            entry.p10 += delta_f;
+            entry.p90 += delta_f;
+        }
+        // Re-sort because projections may have shifted on overlay
+        // and the rank-by-projected order matters more than the
+        // cached layout.
+        response.team_odds.sort_by(|a, b| {
+            b.projected_final_mean
+                .partial_cmp(&a.projected_final_mean)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    b.win_prob
+                        .partial_cmp(&a.win_prob)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| a.team_name.cmp(&b.team_name))
+        });
+    }
+
+    if !response.champion_leaderboard.is_empty() {
+        let ids: Vec<i64> = response
+            .champion_leaderboard
+            .iter()
+            .map(|p| p.nhl_id)
+            .collect();
+        let fresh = match nhl_mirror::sum_player_points(
+            pool,
+            &ids,
+            season_val,
+            gt_val,
+            current_date_window(),
+        )
+        .await
+        {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!("race odds: champion overlay read failed: {e}");
+                return;
+            }
+        };
+        for p in response.champion_leaderboard.iter_mut() {
+            let Some(&fresh_pts) = fresh.get(&p.nhl_id) else {
+                continue;
+            };
+            let delta = fresh_pts - p.current_points;
+            if delta == 0 {
+                continue;
+            }
+            let delta_f = delta as f32;
+            p.current_points = fresh_pts;
+            p.projected_final_mean += delta_f;
+            p.projected_final_median += delta_f;
+            p.p10 += delta_f;
+            p.p90 += delta_f;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -910,8 +979,8 @@ fn compute_rivalry(my_team_id: i64, teams: &[TeamOdds]) -> Option<RivalryCard> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::prediction::race_sim::TeamOdds;
     use crate::domain::models::nhl::{BottomSeed, PlayoffCarousel, Round, Series, TopSeed};
+    use crate::domain::prediction::race_sim::TeamOdds;
     use std::collections::HashMap;
 
     fn mk_series(letter: &str, top: &str, top_w: i64, bot: &str, bot_w: i64) -> Series {
@@ -1024,7 +1093,10 @@ mod tests {
         }
         // Third entry is 0-0 but both teams populated → InProgress (about
         // to start), not Future.
-        assert!(matches!(bracket.rounds[0][2], SeriesState::InProgress { .. }));
+        assert!(matches!(
+            bracket.rounds[0][2],
+            SeriesState::InProgress { .. }
+        ));
         // Remaining R1 slots padded with Future.
         for i in 3..8 {
             assert!(
@@ -1113,97 +1185,9 @@ mod tests {
             }),
         };
         let out = attach_rivalry(response, Some(1));
-        assert!(out.rivalry.is_none(), "champion mode must not carry rivalry");
-    }
-
-}
-
-/// Splice fresh per-team / per-player current-point totals from the
-/// mirror onto a cached `RaceOddsResponse`. The Monte Carlo outputs
-/// (win%, top-3%, likely range) stay exactly as the simulator
-/// produced them — re-simulating on every request is a tens-of-ms
-/// CPU hit per league and unnecessary just to refresh the Current
-/// column. But shifting `projected_final_mean` / `p10` / `p90` by
-/// `(fresh_current - cached_current)` keeps the projection anchored
-/// at the correct starting point: a team that scored 9 points since
-/// the cache was written will see its projected total shift up by 9
-/// without having to re-run the sim.
-async fn overlay_current_from_mirror(
-    state: &Arc<AppState>,
-    league_id: &str,
-    response: &mut RaceOddsResponse,
-) {
-    let season_val = season() as i32;
-    let gt_val = game_type() as i16;
-    let pool = state.db.pool();
-
-    if !league_id.is_empty() && !response.team_odds.is_empty() {
-        let totals = match nhl_mirror::list_league_team_season_totals(
-            pool, league_id, season_val, gt_val, current_date_window(),
-        )
-        .await
-        {
-            Ok(rows) => rows,
-            Err(_) => return,
-        };
-        let fresh_by_team: HashMap<i64, i32> = totals
-            .into_iter()
-            .map(|r| (r.team_id, r.points as i32))
-            .collect();
-        for entry in response.team_odds.iter_mut() {
-            let Some(&fresh) = fresh_by_team.get(&entry.team_id) else {
-                continue;
-            };
-            let delta = fresh - entry.current_points;
-            if delta == 0 {
-                continue;
-            }
-            let delta_f = delta as f32;
-            entry.current_points = fresh;
-            entry.projected_final_mean += delta_f;
-            entry.projected_final_median += delta_f;
-            entry.p10 += delta_f;
-            entry.p90 += delta_f;
-        }
-        // Re-sort because projections may have shifted on overlay
-        // and the rank-by-projected order matters more than the
-        // cached layout.
-        response.team_odds.sort_by(|a, b| {
-            b.projected_final_mean
-                .partial_cmp(&a.projected_final_mean)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    b.win_prob
-                        .partial_cmp(&a.win_prob)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| a.team_name.cmp(&b.team_name))
-        });
-    }
-
-    if !response.champion_leaderboard.is_empty() {
-        let ids: Vec<i64> = response
-            .champion_leaderboard
-            .iter()
-            .map(|p| p.nhl_id)
-            .collect();
-        let fresh = nhl_mirror::sum_player_points(pool, &ids, season_val, gt_val)
-            .await
-            .unwrap_or_default();
-        for p in response.champion_leaderboard.iter_mut() {
-            let Some(&fresh_pts) = fresh.get(&p.nhl_id) else {
-                continue;
-            };
-            let delta = fresh_pts - p.current_points;
-            if delta == 0 {
-                continue;
-            }
-            let delta_f = delta as f32;
-            p.current_points = fresh_pts;
-            p.projected_final_mean += delta_f;
-            p.projected_final_median += delta_f;
-            p.p10 += delta_f;
-            p.p90 += delta_f;
-        }
+        assert!(
+            out.rivalry.is_none(),
+            "champion mode must not carry rivalry"
+        );
     }
 }

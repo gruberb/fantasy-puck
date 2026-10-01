@@ -1,5 +1,8 @@
 import type { Column } from "@/components/common/RankingTable/types";
-import type { PlayerBucket, PlayerGrade, SkaterStats } from "@/types/skaters";
+import type { SkaterStats } from "@/types/skaters";
+import { BucketPill, GradeBadge } from "@/components/common/PlayerBreakdownBadges";
+import { nhlPlayerProfileUrl } from "@/utils/nhlTeams";
+import { formatToi } from "@/utils/format";
 
 export function useTeamBreakdownColumns(): Column[] {
   return [
@@ -12,7 +15,7 @@ export function useTeamBreakdownColumns(): Column[] {
         const s = row as unknown as SkaterStats;
         return (
           <a
-            href={`https://www.nhl.com/player/${s.nhlId}`}
+            href={nhlPlayerProfileUrl(s.nhlId)}
             target="_blank"
             rel="noopener noreferrer"
             className="font-bold text-sm text-[#1A1A1A] hover:text-[#2563EB] whitespace-nowrap"
@@ -80,7 +83,7 @@ export function useTeamBreakdownColumns(): Column[] {
       responsive: "lg",
       render: (_v, row) => {
         const s = (row as SkaterStats).breakdown?.toiSecondsPerGame ?? 0;
-        return <span className="tabular-nums">{formatToi(s)}</span>;
+        return <span className="tabular-nums">{s > 0 ? formatToi(s) : "—"}</span>;
       },
     },
     {
@@ -134,80 +137,6 @@ export function useTeamBreakdownColumns(): Column[] {
       },
     },
   ];
-}
-
-// -- primitives ------------------------------------------------------
-
-const GRADE_COLORS: Record<PlayerGrade, string> = {
-  a: "bg-[#22C55E] text-white",
-  b: "bg-[#84CC16] text-[#1A1A1A]",
-  c: "bg-[#FACC15] text-[#1A1A1A]",
-  d: "bg-[#F97316] text-white",
-  f: "bg-[#EF4444] text-white",
-  notEnoughData: "bg-gray-200 text-gray-600",
-};
-
-const GRADE_LABEL: Record<PlayerGrade, string> = {
-  a: "A",
-  b: "B",
-  c: "C",
-  d: "D",
-  f: "F",
-  notEnoughData: "—",
-};
-
-function GradeBadge({ grade }: { grade: PlayerGrade }) {
-  return (
-    <span
-      className={`inline-block border-2 border-[#1A1A1A] px-2 py-0.5 text-xs font-bold tracking-wider uppercase ${GRADE_COLORS[grade]}`}
-    >
-      {GRADE_LABEL[grade]}
-    </span>
-  );
-}
-
-// Descriptive labels only — the roster is locked for the playoffs, so
-// these describe the player's situation rather than prescribe an
-// action. "On expected" replaces "On pace"; "Due" replaces "Keep
-// faith"; "Fading" replaces "Need a miracle"; "Not in lineup"
-// replaces "Problem asset".
-const BUCKET_LABEL: Record<PlayerBucket, string> = {
-  tooEarly: "TOO EARLY",
-  outperforming: "AHEAD",
-  onPace: "ON EXPECTED",
-  keepFaith: "DUE",
-  fineButFragile: "BELOW EXPECTED",
-  needMiracle: "FADING",
-  problemAsset: "NOT IN LINEUP",
-  teamEliminated: "TEAM OUT",
-};
-
-const BUCKET_COLORS: Record<PlayerBucket, string> = {
-  tooEarly: "bg-gray-200 text-gray-700",
-  outperforming: "bg-[#22C55E] text-white",
-  onPace: "bg-[#84CC16] text-[#1A1A1A]",
-  keepFaith: "bg-[#FACC15] text-[#1A1A1A]",
-  fineButFragile: "bg-[#FACC15] text-[#1A1A1A]",
-  needMiracle: "bg-[#F97316] text-white",
-  problemAsset: "bg-[#EF4444] text-white",
-  teamEliminated: "bg-gray-300 text-gray-700",
-};
-
-function BucketPill({ bucket }: { bucket: PlayerBucket }) {
-  return (
-    <span
-      className={`inline-block border-2 border-[#1A1A1A] px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase whitespace-nowrap ${BUCKET_COLORS[bucket]}`}
-    >
-      {BUCKET_LABEL[bucket]}
-    </span>
-  );
-}
-
-function formatToi(seconds: number): string {
-  if (!seconds || seconds <= 0) return "—";
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 /** "Alex Tuch" → "A. Tuch"; "Sebastian Aho" → "S. Aho". Keeps accents

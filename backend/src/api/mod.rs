@@ -9,9 +9,6 @@ use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 
 use crate::config::Config;
-use crate::domain::ports::prediction::PredictionService;
-use crate::infra::nhl::client::NhlClient;
-use crate::FantasyDb;
 
 pub mod dtos;
 pub mod handlers;
@@ -35,17 +32,47 @@ pub fn init_season_config(config: &Config) {
     SEASON_END_CELL.get_or_init(|| config.nhl_season_end.clone());
 }
 
-pub fn season() -> u32 { *SEASON_CELL.get().expect("season config not initialized") }
-pub fn game_type() -> u8 { *GAME_TYPE_CELL.get().expect("game_type config not initialized") }
-pub fn playoff_start() -> &'static str { PLAYOFF_START_CELL.get().expect("playoff_start config not initialized") }
-pub fn season_end() -> &'static str { SEASON_END_CELL.get().expect("season_end config not initialized") }
+pub fn season() -> u32 {
+    *SEASON_CELL.get().expect("season config not initialized")
+}
+pub fn game_type() -> u8 {
+    *GAME_TYPE_CELL
+        .get()
+        .expect("game_type config not initialized")
+}
+pub fn playoff_start() -> &'static str {
+    PLAYOFF_START_CELL
+        .get()
+        .expect("playoff_start config not initialized")
+}
+pub fn is_playoffs() -> bool {
+    game_type() == crate::domain::models::nhl::GAME_TYPE_PLAYOFFS
+}
+pub fn season_end() -> &'static str {
+    SEASON_END_CELL
+        .get()
+        .expect("season_end config not initialized")
+}
+
+/// Validates a `YYYY-MM-DD` query parameter. The length check rejects
+/// unpadded dates that chrono would otherwise accept, because cache keys
+/// and SQL text comparisons rely on the zero-padded form.
+pub fn parse_date_param(date: &str) -> crate::error::Result<String> {
+    use crate::domain::time::DATE_FORMAT;
+    match chrono::NaiveDate::parse_from_str(date, DATE_FORMAT) {
+        Ok(_) if date.len() == 10 => Ok(date.to_string()),
+        _ => Err(crate::error::Error::Validation(
+            "Invalid date format. Use YYYY-MM-DD".into(),
+        )),
+    }
+}
 
 /// True once `date` (YYYY-MM-DD) falls past the configured season end.
 /// ISO dates are zero-padded, so a lexicographic compare is chronological.
 ///
 /// The daily cron jobs gate on this so they stop doing work once the
 /// season is over rather than churning `daily_rankings`, the response
-/// cache, and the Anthropic API every day through the off-season. Each
+/// cache, and the OpenRouter API every day through the off-season. Each
 /// job feeds in the date it actually operates on (the rankings and
 /// prewarm jobs work against *yesterday*, so the final game day is still
 /// captured the morning after before they go quiet).
@@ -61,30 +88,34 @@ pub fn past_season_end(date: &str) -> bool {
 /// (`daily_rankings`, `nhl_player_game_stats`) so a mode flip doesn't
 /// leave old rows visible in the new surface.
 pub fn current_date_window() -> crate::infra::db::DateWindow<'static> {
-    if game_type() == 3 {
+    if is_playoffs() {
         crate::infra::db::DateWindow::between(playoff_start(), season_end())
     } else {
         crate::infra::db::DateWindow::unbounded()
     }
 }
 
-pub async fn run_server(
-    db: FantasyDb,
-    nhl_client: NhlClient,
-    config: Arc<Config>,
-    prediction: Arc<dyn PredictionService>,
-) -> anyhow::Result<()> {
+pub async fn run_server(state: Arc<routes::AppState>) -> anyhow::Result<()> {
+    let config = state.config.clone();
     let port = config.port;
 
     // Create CORS middleware — use explicit origins in production, any in development
     let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
     let cors = if config.cors_origins.is_empty() {
         cors.allow_origin(Any)
     } else {
-        let origins: Vec<_> = config.cors_origins.iter()
+        let origins: Vec<_> = config
+            .cors_origins
+            .iter()
             .filter_map(|o| o.parse().ok())
             .collect();
         cors.allow_origin(AllowOrigin::list(origins))
@@ -92,7 +123,7 @@ pub async fn run_server(
 
     // Build our application with routes and middleware stack.
     // Layers wrap in reverse order: the last .layer() is the outermost.
-    let app = routes::create_router(db, nhl_client, config, prediction)
+    let app = routes::create_router(state)
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(1024 * 1024)) // 1 MB
         .layer(TimeoutLayer::new(crate::tuning::http::AXUM_REQUEST_TIMEOUT))

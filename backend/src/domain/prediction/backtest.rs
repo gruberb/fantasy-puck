@@ -76,7 +76,10 @@ pub struct CalibrationBucket {
 /// the per-bucket (avg predicted, observed rate). `bucket_count = 10`
 /// gives the standard 0.0–0.1, 0.1–0.2, … split. Empty buckets are
 /// omitted.
-pub fn calibration_curve(predictions: &[(f32, bool)], bucket_count: usize) -> Vec<CalibrationBucket> {
+pub fn calibration_curve(
+    predictions: &[(f32, bool)],
+    bucket_count: usize,
+) -> Vec<CalibrationBucket> {
     if predictions.is_empty() || bucket_count == 0 {
         return Vec::new();
     }
@@ -206,8 +209,10 @@ pub fn reconstruct_bracket_from_results(results: &[ResultRow]) -> BracketState {
     }
 
     // 2. Build list of series, sorted by first-game date.
-    let mut series_list: Vec<SeriesAgg> =
-        series_order.iter().map(|k| series_data[k].clone()).collect();
+    let mut series_list: Vec<SeriesAgg> = series_order
+        .iter()
+        .map(|k| series_data[k].clone())
+        .collect();
     series_list.sort_by(|a, b| a.first_date.cmp(&b.first_date));
 
     // 3. R1: walk series in date order; a series is R1-eligible the
@@ -218,11 +223,10 @@ pub fn reconstruct_bracket_from_results(results: &[ResultRow]) -> BracketState {
     let mut consumed = vec![false; series_list.len()];
     let mut seen_teams: HashSet<String> = HashSet::new();
     let mut r1_indices: Vec<usize> = Vec::new();
-    for i in 0..series_list.len() {
+    for (i, s) in series_list.iter().enumerate() {
         if r1_indices.len() >= SLOT_COUNTS[0] {
             break;
         }
-        let s = &series_list[i];
         let introduces_new_team =
             !seen_teams.contains(&s.team_a) || !seen_teams.contains(&s.team_b);
         if introduces_new_team {
@@ -241,16 +245,15 @@ pub fn reconstruct_bracket_from_results(results: &[ResultRow]) -> BracketState {
     // 4. R2, R3, Cup Final: each round takes the next date-ordered
     //    unclaimed series whose both participants are winners of the
     //    previous round.
-    for r in 1..SLOT_COUNTS.len() {
+    for &slots in &SLOT_COUNTS[1..] {
         let mut picks: Vec<usize> = Vec::new();
-        for i in 0..series_list.len() {
+        for (i, s) in series_list.iter().enumerate() {
             if consumed[i] {
                 continue;
             }
-            let s = &series_list[i];
             if prev_winners.contains(&s.team_a) && prev_winners.contains(&s.team_b) {
                 picks.push(i);
-                if picks.len() >= SLOT_COUNTS[r] {
+                if picks.len() >= slots {
                     break;
                 }
             }
@@ -259,7 +262,7 @@ pub fn reconstruct_bracket_from_results(results: &[ResultRow]) -> BracketState {
             consumed[i] = true;
         }
         prev_winners = collect_winners(&series_list, &picks);
-        rounds.push(materialize_round(&series_list, &picks, SLOT_COUNTS[r]));
+        rounds.push(materialize_round(&series_list, &picks, slots));
     }
 
     BracketState { rounds }
@@ -568,38 +571,20 @@ mod tests {
         ];
         for (i, (w, l)) in r1_pairs.iter().enumerate() {
             for g in 0..4 {
-                rows.push(row(
-                    &format!("2023-04-{:02}", 15 + i * 2 + g),
-                    w,
-                    l,
-                    4,
-                    0,
-                ));
+                rows.push(row(&format!("2023-04-{:02}", 15 + i * 2 + g), w, l, 4, 0));
             }
         }
         // R2 — 4 series: AA beats AC, AE beats AG, BA beats BC, BE beats BG.
         let r2_pairs = [("AA", "AC"), ("AE", "AG"), ("BA", "BC"), ("BE", "BG")];
         for (i, (w, l)) in r2_pairs.iter().enumerate() {
             for g in 0..4 {
-                rows.push(row(
-                    &format!("2023-05-{:02}", 1 + i * 2 + g),
-                    w,
-                    l,
-                    4,
-                    0,
-                ));
+                rows.push(row(&format!("2023-05-{:02}", 1 + i * 2 + g), w, l, 4, 0));
             }
         }
         // R3 — 2 series: AA beats AE, BA beats BE.
         for (i, (w, l)) in [("AA", "AE"), ("BA", "BE")].iter().enumerate() {
             for g in 0..4 {
-                rows.push(row(
-                    &format!("2023-05-{:02}", 15 + i * 2 + g),
-                    w,
-                    l,
-                    4,
-                    0,
-                ));
+                rows.push(row(&format!("2023-05-{:02}", 15 + i * 2 + g), w, l, 4, 0));
             }
         }
         // Cup Final — AA beats BA.

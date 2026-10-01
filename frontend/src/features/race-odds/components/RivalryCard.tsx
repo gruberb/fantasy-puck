@@ -1,4 +1,4 @@
-import type { RivalryCard as RivalryCardData } from "../types";
+import type { RivalryCard as RivalryCardData } from "@/features/race-odds/types";
 
 interface RivalryCardProps {
   rivalry: RivalryCardData;

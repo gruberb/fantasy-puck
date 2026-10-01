@@ -1,4 +1,4 @@
-import { useRaceOdds } from "../hooks/use-race-odds";
+import { useRaceOdds } from "@/features/race-odds/hooks/use-race-odds";
 import {
   getNHLTeamLogoUrl,
   getNHLTeamShortName,
@@ -8,7 +8,7 @@ import type {
   FantasyTeamForecast,
   PlayerForecastCell,
 } from "@/features/pulse";
-import type { NhlTeamOdds } from "../types";
+import type { NhlTeamOdds } from "@/features/race-odds/types";
 
 interface MyStakesProps {
   /** The Series Forecast entry for the caller's fantasy team. */

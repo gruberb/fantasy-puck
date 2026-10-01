@@ -1,15 +1,23 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchApi } from '@/lib/api-client';
-import type { League } from '@/types/league';
+import { api } from '@/api/client';
 
-const leaguesQueryKey = ['leagues'] as const;
+export const leagueKeys = {
+  all: ['leagues'] as const,
+  // Anonymous visitors get the public-only listing, so the viewer is part of the key.
+  list: (userId: string | null | undefined) => ['leagues', userId ?? 'public'] as const,
+};
+
+export const membershipKeys = {
+  all: ['memberships'] as const,
+  forUser: (userId: string | undefined) => ['memberships', userId] as const,
+};
 
 export function useLeagues(ownerId?: string | null, isSuperAdmin?: boolean) {
   const queryClient = useQueryClient();
 
   const query = useQuery({
-    queryKey: leaguesQueryKey,
-    queryFn: () => fetchApi<League[]>('leagues', { fallback: [] }),
+    queryKey: leagueKeys.list(ownerId),
+    queryFn: () => api.getLeagues(!ownerId),
   });
 
   // Filter client-side if not super admin
@@ -23,9 +31,9 @@ export function useLeagues(ownerId?: string | null, isSuperAdmin?: boolean) {
 
   const createLeagueMutation = useMutation({
     mutationFn: (args: { name: string; season: string }) =>
-      fetchApi<League>('leagues', { method: 'POST', body: { name: args.name, season: args.season } }),
+      api.createLeague(args.name, args.season),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: leaguesQueryKey });
+      queryClient.invalidateQueries({ queryKey: leagueKeys.all });
     },
   });
 

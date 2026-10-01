@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
 use serde_json::Value;
 use tracing::{info, warn};
 
-use crate::api::dtos::PlayoffCarouselResponse;
+use crate::domain::prediction::carousel::bracket_state;
 use crate::error::{Error, Result};
 use crate::infra::db::FantasyDb;
 use crate::infra::nhl::client::NhlClient;
@@ -27,7 +28,7 @@ pub async fn fetch_stats_leader_pool(
     let stats = client
         .get_skater_stats(&season, game_type)
         .await
-        .map_err(|e| Error::NhlApi(format!("Failed to fetch skater stats: {}", e)))?;
+        .map_err(|e| e.context("failed to fetch skater stats"))?;
 
     let categories = [
         &stats.goals,
@@ -46,7 +47,11 @@ pub async fn fetch_stats_leader_pool(
         for player in category {
             let player_id = player.id as i64;
             map.entry(player_id).or_insert_with(|| {
-                let first = player.first_name.get("default").cloned().unwrap_or_default();
+                let first = player
+                    .first_name
+                    .get("default")
+                    .cloned()
+                    .unwrap_or_default();
                 let last = player.last_name.get("default").cloned().unwrap_or_default();
                 (
                     format!("{} {}", first, last),
@@ -74,11 +79,15 @@ pub async fn fetch_playoff_roster_pool(client: &NhlClient, season: u32) -> Resul
         let roster = client
             .get_team_roster(abbrev)
             .await
-            .map_err(|e| Error::NhlApi(format!("Failed to fetch playoff team roster: {}", e)))?;
+            .map_err(|e| e.context("failed to fetch playoff team roster"))?;
         for player in roster {
             let player_id = player.id as i64;
             map.entry(player_id).or_insert_with(|| {
-                let first = player.first_name.get("default").cloned().unwrap_or_default();
+                let first = player
+                    .first_name
+                    .get("default")
+                    .cloned()
+                    .unwrap_or_default();
                 let last = player.last_name.get("default").cloned().unwrap_or_default();
                 (
                     format!("{} {}", first, last),
@@ -165,8 +174,7 @@ pub async fn refresh_playoff_roster_cache(
             return Err(fetch_err);
         }
     };
-    let value = serde_json::to_value(&map)
-        .map_err(|e| Error::Internal(format!("Failed to serialize roster pool: {}", e)))?;
+    let value = serde_json::to_value(&map).context("failed to serialize roster pool")?;
     db.upsert_playoff_roster_cache(season as i32, game_type as i16, &value)
         .await?;
     info!(
@@ -184,13 +192,11 @@ pub async fn refresh_playoff_roster_cache(
 /// when the NHL posts Round 1 matchups).
 async fn playoff_team_abbrevs(client: &NhlClient, season: u32) -> Result<Vec<String>> {
     if let Ok(Some(carousel)) = client.get_playoff_carousel(season.to_string()).await {
-        if let Ok(val) = serde_json::to_value(&carousel) {
-            if let Ok(resp) = serde_json::from_value::<PlayoffCarouselResponse>(val) {
-                let computed = resp.with_computed_state();
-                if computed.teams_in_playoffs.len() >= 16 {
-                    return Ok(computed.teams_in_playoffs);
-                }
-            }
+        // Participants, not alive teams: once round 1 ends only 8 remain
+        // alive, but the pool still covers every team that made the bracket.
+        let teams = bracket_state(&carousel).participants;
+        if teams.len() >= 16 {
+            return Ok(teams.into_iter().collect());
         }
     }
 
@@ -208,11 +214,11 @@ async fn standings_top_16(client: &NhlClient) -> Result<Vec<String>> {
     let raw = client
         .get_standings_raw()
         .await
-        .map_err(|e| Error::NhlApi(format!("Failed to fetch standings: {}", e)))?;
+        .map_err(|e| e.context("failed to fetch standings"))?;
 
     let Some(teams) = raw.get("standings").and_then(Value::as_array) else {
-        return Err(Error::NhlApi(
-            "Standings response missing 'standings' array".into(),
+        return Err(Error::nhl_api(
+            "standings response missing 'standings' array",
         ));
     };
 
@@ -224,14 +230,15 @@ async fn standings_top_16(client: &NhlClient) -> Result<Vec<String>> {
                 .and_then(|a| a.get("default"))
                 .and_then(Value::as_str)?
                 .to_string();
-            let point_pctg = team
-                .get("pointPctg")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0);
+            let point_pctg = team.get("pointPctg").and_then(Value::as_f64).unwrap_or(0.0);
             Some((abbrev, point_pctg))
         })
         .collect();
 
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(ranked.into_iter().take(16).map(|(abbrev, _)| abbrev).collect())
+    Ok(ranked
+        .into_iter()
+        .take(16)
+        .map(|(abbrev, _)| abbrev)
+        .collect())
 }

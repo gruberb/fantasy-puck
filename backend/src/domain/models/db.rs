@@ -19,6 +19,7 @@ pub struct NhlTeamPlayers {
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct PlayerWithTeam {
+    pub id: i64,
     pub nhl_id: i64,
     pub name: String,
     pub fantasy_team_id: i64,

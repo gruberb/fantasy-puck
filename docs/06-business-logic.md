@@ -6,15 +6,10 @@ What the app is actually computing for its users: fantasy points, daily rankings
 
 Goals plus assists. No weights for shots, plus-minus, TOI, or any other stat.
 
-The rule lives in one place, [`backend/src/domain/services/fantasy_points.rs:20`](../backend/src/domain/services/fantasy_points.rs):
+There is no per-league scoring code: points are stored per player per game in `nhl_player_game_stats.points` when a boxscore is mirrored (`nhl_mirror::upsert_boxscore_players`, and `playoff_ingest.rs` for historical backfill, which falls back to `goals + assists` when the NHL omits `points`). Every fantasy total is a sum over those rows:
 
-```rust
-let (goals, assists) =
-    find_player_stats_by_name(boxscore, &player.nhl_team, &player.player_name, Some(player.nhl_id));
-let points = goals + assists;
-```
-
-`process_game_performances` ([`fantasy_points.rs:5-51`](../backend/src/domain/services/fantasy_points.rs)) takes a list of fantasy teams and one NHL boxscore, resolves every rostered player's stats in that boxscore, and produces a `TeamDailyPerformance` per team. Teams with zero points are filtered out.
+- `v_daily_fantasy_totals` (migration `20260420000000_nhl_mirror.sql`) sums per team per game date for Pulse and live daily rankings.
+- `domain::services::rankings` sums goals and assists per fantasy team for the rankings pages.
 
 Goalies are not drafted, so the rule never applies to a goalie. See the [No Goalies in Fantasy Format](../../.claude/projects/-Users-bastian-CodingIsFun-fun-fantasy-puck/memory/project_no_goalies.md) memory and the [`CLAUDE.md`](../CLAUDE.md) under "Player-pool sourcing".
 
@@ -125,7 +120,7 @@ if was_live && is_final {
 }
 ```
 
-**Scores do not need to be invalidated.** They live in the mirror and are always fresh. Only the Claude-generated narrative text, which names the game and references in-progress stats, gets regenerated on the next Pulse visit. That's the expensive bit worth caching ([`handlers/pulse.rs:1-21`](../backend/src/api/handlers/pulse.rs)).
+**Scores do not need to be invalidated.** They live in the mirror and are always fresh. Only the LLM-generated narrative text, which names the game and references in-progress stats, gets regenerated on the next Pulse visit. That's the expensive bit worth caching ([`handlers/pulse.rs`](../backend/src/api/handlers/pulse.rs)).
 
 The sibling `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:bundle:v1` payload is **not** wiped on this transition. The bundle's projections, grades, recent-games rollup, and yesterday recap are stable through the evening, so wiping it would force every Pulse load until the next prewarm to re-run `compose_team_breakdown` (seven batched DB reads + projection fold) just to surface the same numbers. The bundle ages out naturally on the date roll, and the daily prewarm at 10:00 UTC rebuilds it with the freshly regenerated narrative nested inside.
 
@@ -145,7 +140,7 @@ From [`handlers/pulse.rs`](../backend/src/api/handlers/pulse.rs):
 | `state.prediction.team_diagnosis(...)` via `response_cache` | Structured "Your Read" narrative (`### Yesterday` / `### Where You Stand` / `### Player-by-Player` / `### What to Expect`) | Yes - `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:v2` |
 | `compose_team_breakdown(...)` result via `response_cache` | The full caller-specific breakdown (per-player projections, grades, recent games, yesterday recap, narrative) returned as `MyTeamDiagnosis` | Yes - `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:bundle:v1` |
 
-Everything except the narrative, the race-odds cross-read, and the per-caller breakdown bundle is recomputed on every request. The data sizes are small enough (one league × ~10 teams × ~30 players × a few live games) that this stays in the single-digit millisecond range. The bundle is what keeps the request path off Claude during the playoffs — a warm bundle turns the Pulse "Your Read" block into one SELECT.
+Everything except the narrative, the race-odds cross-read, and the per-caller breakdown bundle is recomputed on every request. The data sizes are small enough (one league × ~10 teams × ~30 players × a few live games) that this stays in the single-digit millisecond range. The bundle is what keeps the request path off the LLM during the playoffs — a warm bundle turns the Pulse "Your Read" block into one SELECT.
 
 ### Playoff window clamping
 
@@ -153,7 +148,7 @@ Aggregations across date-keyed history (daily wins/top-3, season totals) are sco
 
 ## Daily-rankings snapshot
 
-At 09:00 and 15:00 UTC, the scheduler locks in *yesterday's* totals. See [`07-background-jobs.md`](./07-background-jobs.md) for the cron definitions; the function is [`process_daily_rankings`](../backend/src/infra/jobs/scheduler.rs#L20) in `scheduler.rs:19-99`.
+At 09:00 and 15:00 UTC, the scheduler locks in *yesterday's* totals. See [`07-background-jobs.md`](./07-background-jobs.md) for the cron definitions; the function is [`process_daily_rankings`](../backend/src/infra/jobs/scheduler.rs#L20) in `scheduler.rs`.
 
 ```sql
 SELECT team_id, goals::int, assists::int, points::int
@@ -173,7 +168,7 @@ ON CONFLICT (team_id, date, league_id) DO UPDATE SET
     rank = EXCLUDED.rank, ...
 ```
 
-The **safety gate** (`scheduler.rs:38-46`) skips the write if any game on that date is still `LIVE` / `CRIT` / `PRE`. It almost never triggers during the scheduled runs (they operate on yesterday), but it matters for the manual admin trigger `GET /api/admin/process-rankings/{date}` which can be fired against today.
+The **safety gate** (`scheduler.rs`) skips the write if any game on that date is still `LIVE` / `CRIT` / `PRE`. It almost never triggers during the scheduled runs (they operate on yesterday), but it matters for the manual admin trigger `GET /api/admin/process-rankings/{date}` which can be fired against today.
 
 The 15:00 UTC run exists as a safety net for late-published NHL boxscores. The upsert means re-running does the right thing.
 

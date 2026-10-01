@@ -22,10 +22,14 @@
 //! so only one replica of the backend polls at a time. If the lock is
 //! not acquired the caller should skip the tick.
 
+use anyhow::Context;
 use serde_json::Value;
 use sqlx::{PgConnection, PgPool};
 
-use crate::domain::models::nhl::{BoxscorePlayer, GameBoxscore, Player, StatsLeaders, TodayGame};
+use crate::domain::models::nhl::{
+    default_name, BoxscorePlayer, GameBoxscore, GoalieStatsLeaders, Player, PlayoffCarousel,
+    StatsLeaders, TodayGame,
+};
 use crate::error::{Error, Result};
 
 // ---------------------------------------------------------------------
@@ -85,10 +89,6 @@ async fn release_lock(conn: &mut PgConnection, key: i64) -> Result<()> {
     Ok(())
 }
 
-// PgPool is re-exported here so poller call sites don't have to
-// import `sqlx::PgPool` directly just to type their signatures.
-pub use sqlx::PgPool as Pool;
-
 // ---------------------------------------------------------------------
 // nhl_games
 // ---------------------------------------------------------------------
@@ -97,7 +97,11 @@ pub use sqlx::PgPool as Pool;
 /// [`update_game_live_state`] for mid-game score/period updates; this
 /// function is the full-row writer used by the meta poller and the
 /// rehydrate admin endpoint.
-pub async fn upsert_game(pool: &PgPool, game: &TodayGame, game_date: &str) -> Result<()> {
+///
+/// Returns `true` when the game is new or its `game_state` changed. The
+/// meta poller re-writes every game each tick, so this is what tells it
+/// whether date-scoped caches actually went stale.
+pub async fn upsert_game(pool: &PgPool, game: &TodayGame, game_date: &str) -> Result<bool> {
     let period_number = game
         .period_descriptor
         .as_ref()
@@ -115,16 +119,14 @@ pub async fn upsert_game(pool: &PgPool, game: &TodayGame, game_date: &str) -> Re
         Some(s) => (Some(s.home), Some(s.away)),
         None => (game.home_team.score, game.away_team.score),
     };
-    // GameState has a Display impl via serde; round-trip through
-    // serde_json to get the canonical upstream spelling.
-    let game_state = serde_json::to_value(&game.game_state)
-        .ok()
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "FUT".into());
+    let game_state = game.game_state.as_str().to_string();
     let final_state_detected = matches!(game_state.as_str(), "FINAL" | "OFF");
 
-    sqlx::query(
+    // The `prev` CTE reads the pre-statement snapshot, so it sees the
+    // state before this upsert lands.
+    let changed: bool = sqlx::query_scalar(
         r#"
+        WITH prev AS (SELECT game_state FROM nhl_games WHERE game_id = $1)
         INSERT INTO nhl_games (
             game_id, season, game_type, game_date, start_time_utc, game_state,
             home_team, away_team, home_score, away_score,
@@ -154,6 +156,7 @@ pub async fn upsert_game(pool: &PgPool, game: &TodayGame, game_date: &str) -> Re
                 ELSE nhl_games.final_state_detected_at
             END,
             updated_at = NOW()
+        RETURNING NOT EXISTS (SELECT 1 FROM prev WHERE prev.game_state = nhl_games.game_state)
         "#,
     )
     .bind(game.id as i64)
@@ -171,10 +174,10 @@ pub async fn upsert_game(pool: &PgPool, game: &TodayGame, game_date: &str) -> Re
     .bind(series_status)
     .bind(&game.venue.default)
     .bind(final_state_detected)
-    .execute(pool)
+    .fetch_one(pool)
     .await
     .map_err(Error::Database)?;
-    Ok(())
+    Ok(changed)
 }
 
 /// Mark unresolved schedule rows as cancelled when they disappeared
@@ -207,19 +210,6 @@ pub async fn reconcile_schedule_for_date(
     .await
     .map_err(Error::Database)?;
     Ok(result.rows_affected())
-}
-
-#[cfg(test)]
-fn stale_unresolved_game_ids(existing: &[(i64, &str)], fetched_ids: &[i64]) -> Vec<i64> {
-    let fetched: std::collections::HashSet<i64> = fetched_ids.iter().copied().collect();
-    existing
-        .iter()
-        .filter_map(|(id, state)| {
-            matches!(*state, "FUT" | "PRE")
-                .then_some(*id)
-                .filter(|id| !fetched.contains(id))
-        })
-        .collect()
 }
 
 /// Update the live-state columns of an existing `nhl_games` row.
@@ -304,20 +294,40 @@ pub async fn list_games_needing_poll(pool: &PgPool, today: &str) -> Result<Vec<i
     Ok(rows)
 }
 
-/// All game IDs on `date`, regardless of state. Used by rehydrate to
-/// rebuild `nhl_player_game_stats` from completed games.
-pub async fn list_all_game_ids_for_date(pool: &PgPool, date: &str) -> Result<Vec<i64>> {
-    let rows: Vec<i64> = sqlx::query_scalar(
-        "SELECT game_id FROM nhl_games WHERE game_date = $1::date AND game_state <> 'CANCELLED'",
-    )
-    .bind(date)
-    .fetch_all(pool)
-    .await
-    .map_err(Error::Database)?;
-    Ok(rows)
+/// Current state of a game, for transition detection.
+#[derive(Debug, sqlx::FromRow)]
+pub struct StartedGameRow {
+    pub game_id: i64,
+    pub home_team: String,
+    pub away_team: String,
+    pub game_state: String,
 }
 
-/// Current state of a game, for transition detection.
+/// Every game of `season` that has started (anything but FUT and
+/// CANCELLED), for the rehydrate boxscore backfill.
+pub async fn list_started_games(pool: &PgPool, season: i32) -> Result<Vec<StartedGameRow>> {
+    sqlx::query_as::<_, StartedGameRow>(
+        r#"
+        SELECT game_id, home_team, away_team, game_state
+          FROM nhl_games
+         WHERE season = $1
+           AND game_state NOT IN ('FUT', 'CANCELLED')
+        "#,
+    )
+    .bind(season)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)
+}
+
+pub async fn player_game_stats_is_empty(pool: &PgPool) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM nhl_player_game_stats)")
+        .fetch_one(pool)
+        .await
+        .map_err(Error::Database)?;
+    Ok(!exists)
+}
+
 pub async fn get_game_state(pool: &PgPool, game_id: i64) -> Result<Option<String>> {
     let state: Option<String> =
         sqlx::query_scalar("SELECT game_state FROM nhl_games WHERE game_id = $1")
@@ -374,11 +384,12 @@ pub async fn mark_game_stats_finalized(pool: &PgPool, game_id: i64) -> Result<()
 // ---------------------------------------------------------------------
 
 /// Replace every `nhl_player_game_stats` row for `game_id` from the
-/// boxscore. The boxscore is the full set of skaters + goalies from
-/// both teams; we upsert each one by `(game_id, player_id)`.
+/// boxscore (skaters and goalies, both teams) in one batched upsert, and
+/// derive the scoreboard line from the same payload. The schedule
+/// endpoint drops `game_score` for completed playoff games and
+/// `get_game_data` can 404 mid-game; the boxscore always has the goals.
 ///
-/// Returns the list of `player_id` values that were written, so the
-/// caller can log coverage.
+/// Returns the number of player rows written.
 pub async fn upsert_boxscore_players(
     pool: &PgPool,
     game_id: i64,
@@ -388,91 +399,66 @@ pub async fn upsert_boxscore_players(
 ) -> Result<usize> {
     let home = &boxscore.player_by_game_stats.home_team;
     let away = &boxscore.player_by_game_stats.away_team;
+    let players: Vec<(&str, &BoxscorePlayer)> = home
+        .all_players()
+        .map(|p| (home_abbrev, p))
+        .chain(away.all_players().map(|p| (away_abbrev, p)))
+        .collect();
 
-    let iter_home = home
-        .forwards
-        .iter()
-        .chain(home.defense.iter())
-        .chain(home.goalies.iter())
-        .map(|p| (home_abbrev, p));
-    let iter_away = away
-        .forwards
-        .iter()
-        .chain(away.defense.iter())
-        .chain(away.goalies.iter())
-        .map(|p| (away_abbrev, p));
-
-    let mut count = 0;
-    let mut tx = pool.begin().await.map_err(Error::Database)?;
-    for (team_abbrev, p) in iter_home.chain(iter_away) {
-        upsert_boxscore_player(&mut tx, game_id, team_abbrev, p).await?;
-        count += 1;
+    let n = players.len();
+    let (mut ids, mut teams, mut positions, mut names) = (
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+    );
+    let (mut goals, mut assists, mut points) = (
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+    );
+    let (mut sog, mut pim, mut plus_minus, mut hits, mut toi) = (
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+    );
+    for (team, p) in &players {
+        let g = p.goals.unwrap_or(0);
+        let a = p.assists.unwrap_or(0);
+        ids.push(p.player_id as i64);
+        teams.push(team.to_string());
+        positions.push(p.position.clone());
+        names.push(
+            p.name
+                .get("default")
+                .cloned()
+                .unwrap_or_else(|| format!("Player {}", p.player_id)),
+        );
+        goals.push(g);
+        assists.push(a);
+        points.push(p.points.unwrap_or(g + a));
+        sog.push(p.sog);
+        pim.push(p.pim);
+        plus_minus.push(p.plus_minus);
+        hits.push(p.hits);
+        toi.push(p.toi.as_deref().and_then(parse_toi_seconds));
     }
 
-    // Derive the scoreboard line from the boxscore itself. The NHL
-    // schedule endpoint drops `game_score` for completed playoff
-    // games, and `get_game_data` can 404 mid-game — both would leave
-    // nhl_games.home_score / away_score NULL even though the boxscore
-    // we just wrote has every skater's goal tally. Summing skater +
-    // defense goals per side produces the team total, which is the
-    // same number the NHL scoreboard shows (goalies score 0).
-    let home_goals: i32 = home
-        .forwards
-        .iter()
-        .chain(home.defense.iter())
-        .map(|p| p.goals.unwrap_or(0))
-        .sum();
-    let away_goals: i32 = away
-        .forwards
-        .iter()
-        .chain(away.defense.iter())
-        .map(|p| p.goals.unwrap_or(0))
-        .sum();
-    sqlx::query(
-        r#"
-        UPDATE nhl_games
-           SET home_score = $2,
-               away_score = $3,
-               updated_at = NOW()
-         WHERE game_id = $1
-        "#,
-    )
-    .bind(game_id)
-    .bind(home_goals)
-    .bind(away_goals)
-    .execute(&mut *tx)
-    .await
-    .map_err(Error::Database)?;
-
-    tx.commit().await.map_err(Error::Database)?;
-    Ok(count)
-}
-
-async fn upsert_boxscore_player(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    game_id: i64,
-    team_abbrev: &str,
-    p: &BoxscorePlayer,
-) -> Result<()> {
-    let name = p
-        .name
-        .get("default")
-        .cloned()
-        .unwrap_or_else(|| format!("Player {}", p.player_id));
-    let points = p
-        .points
-        .unwrap_or_else(|| p.goals.unwrap_or(0) + p.assists.unwrap_or(0));
-
-    let toi_seconds = p.toi.as_deref().and_then(parse_toi_seconds);
-
+    let mut tx = pool.begin().await.map_err(Error::Database)?;
     sqlx::query(
         r#"
         INSERT INTO nhl_player_game_stats (
             game_id, player_id, team_abbrev, position, name,
             goals, assists, points, sog, pim, plus_minus, hits, toi_seconds, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5,
-                $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+        SELECT $1, u.*, NOW()
+          FROM UNNEST($2::bigint[], $3::text[], $4::text[], $5::text[],
+                      $6::int[], $7::int[], $8::int[], $9::int[], $10::int[],
+                      $11::int[], $12::int[], $13::int[])
+            AS u(player_id, team_abbrev, position, name, goals, assists, points,
+                 sog, pim, plus_minus, hits, toi_seconds)
         ON CONFLICT (game_id, player_id) DO UPDATE SET
             team_abbrev = EXCLUDED.team_abbrev,
             position = EXCLUDED.position,
@@ -489,22 +475,34 @@ async fn upsert_boxscore_player(
         "#,
     )
     .bind(game_id)
-    .bind(p.player_id as i64)
-    .bind(team_abbrev)
-    .bind(&p.position)
-    .bind(&name)
-    .bind(p.goals.unwrap_or(0))
-    .bind(p.assists.unwrap_or(0))
-    .bind(points)
-    .bind(p.sog)
-    .bind(p.pim)
-    .bind(p.plus_minus)
-    .bind(p.hits)
-    .bind(toi_seconds)
-    .execute(&mut **tx)
+    .bind(&ids)
+    .bind(&teams)
+    .bind(&positions)
+    .bind(&names)
+    .bind(&goals)
+    .bind(&assists)
+    .bind(&points)
+    .bind(&sog)
+    .bind(&pim)
+    .bind(&plus_minus)
+    .bind(&hits)
+    .bind(&toi)
+    .execute(&mut *tx)
     .await
     .map_err(Error::Database)?;
-    Ok(())
+
+    sqlx::query(
+        "UPDATE nhl_games SET home_score = $2, away_score = $3, updated_at = NOW() WHERE game_id = $1",
+    )
+    .bind(game_id)
+    .bind(home.skater_goals())
+    .bind(away.skater_goals())
+    .execute(&mut *tx)
+    .await
+    .map_err(Error::Database)?;
+
+    tx.commit().await.map_err(Error::Database)?;
+    Ok(n)
 }
 
 /// Parse `"MM:SS"` (as emitted by the NHL boxscore) into total seconds.
@@ -519,7 +517,7 @@ fn parse_toi_seconds(toi: &str) -> Option<i32> {
     let (m, s) = trimmed.split_once(':')?;
     let minutes: i32 = m.trim().parse().ok()?;
     let seconds: i32 = s.trim().parse().ok()?;
-    if minutes < 0 || seconds < 0 || seconds >= 60 {
+    if minutes < 0 || !(0..60).contains(&seconds) {
         return None;
     }
     Some(minutes * 60 + seconds)
@@ -551,13 +549,119 @@ mod parse_toi_tests {
 // nhl_skater_season_stats
 // ---------------------------------------------------------------------
 
-/// Materialize the skater leaderboard response into
-/// `nhl_skater_season_stats`. The NHL response groups players by
-/// category (goals, assists, points, plus_minus, faceoff, toi, ...);
-/// we flatten into a single row per `(player_id, season, game_type)`
-/// where each category's metric is stored in its canonical column,
-/// using the *points* list's `value` for `points`, the *goals* list's
-/// `value` for `goals`, and so on.
+/// One skater's season line. `None` counting stats mean "this source
+/// doesn't know", not zero: the leaderboard only lists a player in the
+/// categories where they rank top-N, while club stats carries every
+/// number. Unknown values never overwrite known ones.
+#[derive(Debug, Default)]
+pub struct SkaterSeasonUpsert {
+    pub player_id: i64,
+    pub first_name: String,
+    pub last_name: String,
+    pub team_abbrev: String,
+    pub position: String,
+    pub goals: Option<i32>,
+    pub assists: Option<i32>,
+    pub points: Option<i32>,
+    pub plus_minus: Option<i32>,
+    pub faceoff_pct: Option<f32>,
+    pub toi_per_game: Option<i32>,
+    pub sog: Option<i32>,
+}
+
+/// Batched writer shared by the leaderboard and club-stats sources.
+/// One statement: the CTE updates existing rows with
+/// `COALESCE(new, old)` and the INSERT adds the rest. `ON CONFLICT DO
+/// NOTHING` covers a concurrent insert of the same key, which the next
+/// tick reconciles.
+async fn upsert_skater_season_rows(
+    pool: &PgPool,
+    season: i32,
+    game_type: i16,
+    rows: &[SkaterSeasonUpsert],
+) -> Result<usize> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let col = |f: fn(&SkaterSeasonUpsert) -> String| rows.iter().map(f).collect::<Vec<_>>();
+    let opt = |f: fn(&SkaterSeasonUpsert) -> Option<i32>| rows.iter().map(f).collect::<Vec<_>>();
+    let ids: Vec<i64> = rows.iter().map(|r| r.player_id).collect();
+    let faceoff: Vec<Option<f32>> = rows.iter().map(|r| r.faceoff_pct).collect();
+    let headshots: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            format!(
+                "https://assets.nhle.com/mugs/nhl/{season}/{}/{}.png",
+                r.team_abbrev, r.player_id
+            )
+        })
+        .collect();
+
+    sqlx::query(
+        r#"
+        WITH u AS (
+            SELECT * FROM UNNEST($3::bigint[], $4::text[], $5::text[], $6::text[], $7::text[],
+                                 $8::int[], $9::int[], $10::int[], $11::int[], $12::real[],
+                                 $13::int[], $14::int[], $15::text[])
+              AS u(player_id, first_name, last_name, team_abbrev, position,
+                   goals, assists, points, plus_minus, faceoff_pct,
+                   toi_per_game, sog, headshot_url)
+        ),
+        updated AS (
+            UPDATE nhl_skater_season_stats s SET
+                first_name = u.first_name,
+                last_name = u.last_name,
+                team_abbrev = u.team_abbrev,
+                position = u.position,
+                goals = COALESCE(u.goals, s.goals),
+                assists = COALESCE(u.assists, s.assists),
+                points = COALESCE(u.points, s.points),
+                plus_minus = COALESCE(u.plus_minus, s.plus_minus),
+                faceoff_pct = COALESCE(u.faceoff_pct, s.faceoff_pct),
+                toi_per_game = COALESCE(u.toi_per_game, s.toi_per_game),
+                sog = COALESCE(u.sog, s.sog),
+                headshot_url = u.headshot_url,
+                updated_at = NOW()
+              FROM u
+             WHERE s.player_id = u.player_id AND s.season = $1 AND s.game_type = $2
+            RETURNING s.player_id
+        )
+        INSERT INTO nhl_skater_season_stats (
+            player_id, season, game_type, first_name, last_name,
+            team_abbrev, position, goals, assists, points,
+            plus_minus, faceoff_pct, toi_per_game, sog, headshot_url, updated_at
+        )
+        SELECT u.player_id, $1, $2, u.first_name, u.last_name, u.team_abbrev, u.position,
+               COALESCE(u.goals, 0), COALESCE(u.assists, 0), COALESCE(u.points, 0),
+               u.plus_minus, u.faceoff_pct, u.toi_per_game, u.sog, u.headshot_url, NOW()
+          FROM u
+         WHERE u.player_id NOT IN (SELECT player_id FROM updated)
+        ON CONFLICT (player_id, season, game_type) DO NOTHING
+        "#,
+    )
+    .bind(season)
+    .bind(game_type)
+    .bind(&ids)
+    .bind(col(|r| r.first_name.clone()))
+    .bind(col(|r| r.last_name.clone()))
+    .bind(col(|r| r.team_abbrev.clone()))
+    .bind(col(|r| r.position.clone()))
+    .bind(opt(|r| r.goals))
+    .bind(opt(|r| r.assists))
+    .bind(opt(|r| r.points))
+    .bind(opt(|r| r.plus_minus))
+    .bind(&faceoff)
+    .bind(opt(|r| r.toi_per_game))
+    .bind(opt(|r| r.sog))
+    .bind(&headshots)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(rows.len())
+}
+
+/// Flatten the per-category skater leaderboard into one row per player.
+/// A category the player isn't ranked in stays `None`.
 pub async fn upsert_skater_leaderboard(
     pool: &PgPool,
     season: i32,
@@ -566,140 +670,40 @@ pub async fn upsert_skater_leaderboard(
 ) -> Result<usize> {
     use std::collections::HashMap;
 
-    // Aggregate: player_id → (first_name, last_name, team, position, goals, assists, points, plus_minus, faceoff_pct, toi, sog)
-    struct Row {
-        first_name: String,
-        last_name: String,
-        team: String,
-        position: String,
-        goals: i32,
-        assists: i32,
-        points: i32,
-        plus_minus: Option<i32>,
-        faceoff_pct: Option<f32>,
-        toi_per_game: Option<i32>,
-        sog: Option<i32>,
-    }
-    let mut map: HashMap<i64, Row> = HashMap::new();
-
-    let seed = |map: &mut HashMap<i64, Row>, p: &Player| {
-        map.entry(p.id as i64).or_insert_with(|| Row {
-            first_name: p.first_name.get("default").cloned().unwrap_or_default(),
-            last_name: p.last_name.get("default").cloned().unwrap_or_default(),
-            team: p.team_abbrev.clone(),
-            position: p.position.clone(),
-            goals: 0,
-            assists: 0,
-            points: 0,
-            plus_minus: None,
-            faceoff_pct: None,
-            toi_per_game: None,
-            sog: None,
-        });
+    let mut map: HashMap<i64, SkaterSeasonUpsert> = HashMap::new();
+    let mut apply = |list: &[Player], set: fn(&mut SkaterSeasonUpsert, f64)| {
+        for p in list {
+            let row = map
+                .entry(p.id as i64)
+                .or_insert_with(|| SkaterSeasonUpsert {
+                    player_id: p.id as i64,
+                    first_name: default_name(&p.first_name),
+                    last_name: default_name(&p.last_name),
+                    team_abbrev: p.team_abbrev.clone(),
+                    position: p.position.clone(),
+                    ..Default::default()
+                });
+            set(row, p.value);
+        }
     };
+    apply(&leaders.goals, |r, v| r.goals = Some(v as i32));
+    apply(&leaders.assists, |r, v| r.assists = Some(v as i32));
+    apply(&leaders.points, |r, v| r.points = Some(v as i32));
+    apply(&leaders.plus_minus, |r, v| r.plus_minus = Some(v as i32));
+    apply(&leaders.faceoff_leaders, |r, v| {
+        r.faceoff_pct = Some(v as f32)
+    });
+    // TOI arrives as seconds per game.
+    apply(&leaders.toi, |r, v| r.toi_per_game = Some(v as i32));
 
-    for p in &leaders.goals {
-        seed(&mut map, p);
-        if let Some(r) = map.get_mut(&(p.id as i64)) {
-            r.goals = p.value as i32;
-        }
-    }
-    for p in &leaders.assists {
-        seed(&mut map, p);
-        if let Some(r) = map.get_mut(&(p.id as i64)) {
-            r.assists = p.value as i32;
-        }
-    }
-    for p in &leaders.points {
-        seed(&mut map, p);
-        if let Some(r) = map.get_mut(&(p.id as i64)) {
-            r.points = p.value as i32;
-        }
-    }
-    for p in &leaders.plus_minus {
-        seed(&mut map, p);
-        if let Some(r) = map.get_mut(&(p.id as i64)) {
-            r.plus_minus = Some(p.value as i32);
-        }
-    }
-    for p in &leaders.faceoff_leaders {
-        seed(&mut map, p);
-        if let Some(r) = map.get_mut(&(p.id as i64)) {
-            r.faceoff_pct = Some(p.value as f32);
-        }
-    }
-    for p in &leaders.toi {
-        seed(&mut map, p);
-        if let Some(r) = map.get_mut(&(p.id as i64)) {
-            // TOI comes as seconds-per-game.
-            r.toi_per_game = Some(p.value as i32);
-        }
-    }
-
-    let mut tx = pool.begin().await.map_err(Error::Database)?;
-    let mut count = 0;
-    for (player_id, row) in &map {
-        let headshot_url = format!(
-            "https://assets.nhle.com/mugs/nhl/{}/{}/{}.png",
-            season, row.team, player_id
-        );
-        sqlx::query(
-            r#"
-            INSERT INTO nhl_skater_season_stats (
-                player_id, season, game_type, first_name, last_name,
-                team_abbrev, position, goals, assists, points,
-                plus_minus, faceoff_pct, toi_per_game, sog, headshot_url, updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                    $11, $12, $13, $14, $15, NOW())
-            ON CONFLICT (player_id, season, game_type) DO UPDATE SET
-                first_name = EXCLUDED.first_name,
-                last_name = EXCLUDED.last_name,
-                team_abbrev = EXCLUDED.team_abbrev,
-                position = EXCLUDED.position,
-                goals = EXCLUDED.goals,
-                assists = EXCLUDED.assists,
-                points = EXCLUDED.points,
-                plus_minus = COALESCE(EXCLUDED.plus_minus, nhl_skater_season_stats.plus_minus),
-                faceoff_pct = COALESCE(EXCLUDED.faceoff_pct, nhl_skater_season_stats.faceoff_pct),
-                toi_per_game = COALESCE(EXCLUDED.toi_per_game, nhl_skater_season_stats.toi_per_game),
-                sog = COALESCE(EXCLUDED.sog, nhl_skater_season_stats.sog),
-                headshot_url = EXCLUDED.headshot_url,
-                updated_at = NOW()
-            "#,
-        )
-        .bind(player_id)
-        .bind(season)
-        .bind(game_type)
-        .bind(&row.first_name)
-        .bind(&row.last_name)
-        .bind(&row.team)
-        .bind(&row.position)
-        .bind(row.goals)
-        .bind(row.assists)
-        .bind(row.points)
-        .bind(row.plus_minus)
-        .bind(row.faceoff_pct)
-        .bind(row.toi_per_game)
-        .bind(row.sog)
-        .bind(&headshot_url)
-        .execute(&mut *tx)
-        .await
-        .map_err(Error::Database)?;
-        count += 1;
-    }
-    tx.commit().await.map_err(Error::Database)?;
-    Ok(count)
+    let rows: Vec<SkaterSeasonUpsert> = map.into_values().collect();
+    upsert_skater_season_rows(pool, season, game_type, &rows).await
 }
 
-/// Upsert the full per-team skater season line from the
-/// `/v1/club-stats/{team}/{season}/{gt}` payload. Writes every skater
-/// the team has dressed — no top-N filter — so the projection model
-/// has complete RS coverage for depth players.
-///
-/// `avgTimeOnIcePerGame` arrives as a float of seconds per game
-/// (e.g. `1132.5732` ≈ 18:52). We round to integer seconds before
-/// persisting.
+/// Upsert the full per-team skater season line from
+/// `/v1/club-stats/{team}/{season}/{gt}`: every skater the team has
+/// dressed, so the projection model covers depth players.
+/// `avgTimeOnIcePerGame` is float seconds per game; rounded on write.
 pub async fn upsert_team_club_stats(
     pool: &PgPool,
     season: i32,
@@ -707,203 +711,121 @@ pub async fn upsert_team_club_stats(
     team_abbrev: &str,
     skaters: &[crate::domain::models::nhl::ClubStatsSkater],
 ) -> Result<usize> {
-    if skaters.is_empty() {
-        return Ok(0);
-    }
-    let mut tx = pool.begin().await.map_err(Error::Database)?;
-    let mut count = 0;
-
-    for s in skaters {
-        let first = s.first_name.get("default").cloned().unwrap_or_default();
-        let last = s.last_name.get("default").cloned().unwrap_or_default();
-        let toi_seconds: Option<i32> = s.avg_time_on_ice_per_game.map(|f| f.round() as i32);
-        let headshot_url = format!(
-            "https://assets.nhle.com/mugs/nhl/{}/{}/{}.png",
-            season, team_abbrev, s.player_id
-        );
-
-        sqlx::query(
-            r#"
-            INSERT INTO nhl_skater_season_stats (
-                player_id, season, game_type, first_name, last_name,
-                team_abbrev, position, goals, assists, points,
-                plus_minus, faceoff_pct, toi_per_game, sog, headshot_url, updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                    $11, $12, $13, $14, $15, NOW())
-            ON CONFLICT (player_id, season, game_type) DO UPDATE SET
-                first_name = EXCLUDED.first_name,
-                last_name = EXCLUDED.last_name,
-                team_abbrev = EXCLUDED.team_abbrev,
-                position = EXCLUDED.position,
-                goals = EXCLUDED.goals,
-                assists = EXCLUDED.assists,
-                points = EXCLUDED.points,
-                plus_minus = COALESCE(EXCLUDED.plus_minus, nhl_skater_season_stats.plus_minus),
-                faceoff_pct = COALESCE(EXCLUDED.faceoff_pct, nhl_skater_season_stats.faceoff_pct),
-                toi_per_game = COALESCE(EXCLUDED.toi_per_game, nhl_skater_season_stats.toi_per_game),
-                sog = COALESCE(EXCLUDED.sog, nhl_skater_season_stats.sog),
-                headshot_url = EXCLUDED.headshot_url,
-                updated_at = NOW()
-            "#,
-        )
-        .bind(s.player_id)
-        .bind(season)
-        .bind(game_type)
-        .bind(&first)
-        .bind(&last)
-        .bind(team_abbrev)
-        .bind(&s.position_code)
-        .bind(s.goals)
-        .bind(s.assists)
-        .bind(s.points)
-        .bind(s.plus_minus)
-        .bind(s.faceoff_winning_pctg)
-        .bind(toi_seconds)
-        .bind(s.shots)
-        .bind(&headshot_url)
-        .execute(&mut *tx)
-        .await
-        .map_err(Error::Database)?;
-        count += 1;
-    }
-
-    tx.commit().await.map_err(Error::Database)?;
-    Ok(count)
+    let rows: Vec<SkaterSeasonUpsert> = skaters
+        .iter()
+        .map(|s| SkaterSeasonUpsert {
+            player_id: s.player_id,
+            first_name: default_name(&s.first_name),
+            last_name: default_name(&s.last_name),
+            team_abbrev: team_abbrev.to_string(),
+            position: s.position_code.clone(),
+            goals: Some(s.goals),
+            assists: Some(s.assists),
+            points: Some(s.points),
+            plus_minus: s.plus_minus,
+            faceoff_pct: s.faceoff_winning_pctg,
+            toi_per_game: s.avg_time_on_ice_per_game.map(|f| f.round() as i32),
+            sog: s.shots,
+        })
+        .collect();
+    upsert_skater_season_rows(pool, season, game_type, &rows).await
 }
 
 // ---------------------------------------------------------------------
-// nhl_goalie_season_stats (from raw goalie-stats-leaders payload)
+// nhl_goalie_season_stats
 // ---------------------------------------------------------------------
 
-/// Upsert the goalie leaderboard. The payload shape is a loose
-/// JSON; we consume the fields we care about by path and fall back
-/// to defaults for missing ones.
 pub async fn upsert_goalie_leaderboard(
     pool: &PgPool,
     season: i32,
     game_type: i16,
-    payload: &Value,
+    leaders: &GoalieStatsLeaders,
 ) -> Result<usize> {
     use std::collections::HashMap;
+
+    #[derive(Default)]
     struct Row {
         team: String,
         name: String,
+        wins: Option<i32>,
         gaa: Option<f32>,
         save_pctg: Option<f32>,
         shutouts: Option<i32>,
     }
     let mut map: HashMap<i64, Row> = HashMap::new();
-
-    let seed_from = |map: &mut HashMap<i64, Row>, list_name: &str| {
-        if let Some(list) = payload.get(list_name).and_then(Value::as_array) {
-            for p in list {
-                let Some(id) = p.get("id").and_then(Value::as_i64) else {
-                    continue;
-                };
-                let first = p
-                    .get("firstName")
-                    .and_then(|v| v.get("default"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let last = p
-                    .get("lastName")
-                    .and_then(|v| v.get("default"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let team = p
-                    .get("teamAbbrev")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let name = format!("{} {}", first, last).trim().to_string();
-                map.entry(id).or_insert_with(|| Row {
-                    team,
-                    name,
-                    gaa: None,
-                    save_pctg: None,
-                    shutouts: None,
-                });
-            }
+    let mut apply = |list: &[Player], set: fn(&mut Row, f64)| {
+        for p in list {
+            let row = map.entry(p.id as i64).or_insert_with(|| Row {
+                team: p.team_abbrev.clone(),
+                name: format!(
+                    "{} {}",
+                    default_name(&p.first_name),
+                    default_name(&p.last_name)
+                )
+                .trim()
+                .to_string(),
+                ..Default::default()
+            });
+            set(row, p.value);
         }
     };
+    apply(&leaders.wins, |r, v| r.wins = Some(v as i32));
+    apply(&leaders.goals_against_average, |r, v| {
+        r.gaa = Some(v as f32)
+    });
+    apply(&leaders.save_pctg, |r, v| r.save_pctg = Some(v as f32));
+    apply(&leaders.shutouts, |r, v| r.shutouts = Some(v as i32));
 
-    seed_from(&mut map, "wins");
-    seed_from(&mut map, "savePctg");
-    seed_from(&mut map, "goalsAgainstAverage");
-    seed_from(&mut map, "shutouts");
-
-    if let Some(list) = payload.get("goalsAgainstAverage").and_then(Value::as_array) {
-        for p in list {
-            if let (Some(id), Some(v)) = (
-                p.get("id").and_then(Value::as_i64),
-                p.get("value").and_then(Value::as_f64),
-            ) {
-                if let Some(row) = map.get_mut(&id) {
-                    row.gaa = Some(v as f32);
-                }
-            }
-        }
-    }
-    if let Some(list) = payload.get("savePctg").and_then(Value::as_array) {
-        for p in list {
-            if let (Some(id), Some(v)) = (
-                p.get("id").and_then(Value::as_i64),
-                p.get("value").and_then(Value::as_f64),
-            ) {
-                if let Some(row) = map.get_mut(&id) {
-                    row.save_pctg = Some(v as f32);
-                }
-            }
-        }
-    }
-    if let Some(list) = payload.get("shutouts").and_then(Value::as_array) {
-        for p in list {
-            if let (Some(id), Some(v)) = (
-                p.get("id").and_then(Value::as_i64),
-                p.get("value").and_then(Value::as_f64),
-            ) {
-                if let Some(row) = map.get_mut(&id) {
-                    row.shutouts = Some(v as i32);
-                }
-            }
-        }
+    let n = map.len();
+    let mut ids = Vec::with_capacity(n);
+    let mut teams = Vec::with_capacity(n);
+    let mut names = Vec::with_capacity(n);
+    let mut wins = Vec::with_capacity(n);
+    let mut gaa = Vec::with_capacity(n);
+    let mut save = Vec::with_capacity(n);
+    let mut shutouts = Vec::with_capacity(n);
+    for (id, r) in map {
+        ids.push(id);
+        teams.push(r.team);
+        names.push(r.name);
+        wins.push(r.wins);
+        gaa.push(r.gaa);
+        save.push(r.save_pctg);
+        shutouts.push(r.shutouts);
     }
 
-    let mut tx = pool.begin().await.map_err(Error::Database)?;
-    let mut count = 0;
-    for (player_id, row) in &map {
-        sqlx::query(
-            r#"
-            INSERT INTO nhl_goalie_season_stats (
-                player_id, season, game_type, team_abbrev, name,
-                record, gaa, save_pctg, shutouts, updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, NOW())
-            ON CONFLICT (player_id, season, game_type) DO UPDATE SET
-                team_abbrev = EXCLUDED.team_abbrev,
-                name = EXCLUDED.name,
-                gaa = COALESCE(EXCLUDED.gaa, nhl_goalie_season_stats.gaa),
-                save_pctg = COALESCE(EXCLUDED.save_pctg, nhl_goalie_season_stats.save_pctg),
-                shutouts = COALESCE(EXCLUDED.shutouts, nhl_goalie_season_stats.shutouts),
-                updated_at = NOW()
-            "#,
+    sqlx::query(
+        r#"
+        INSERT INTO nhl_goalie_season_stats (
+            player_id, season, game_type, team_abbrev, name,
+            record, wins, gaa, save_pctg, shutouts, updated_at
         )
-        .bind(player_id)
-        .bind(season)
-        .bind(game_type)
-        .bind(&row.team)
-        .bind(&row.name)
-        .bind(row.gaa)
-        .bind(row.save_pctg)
-        .bind(row.shutouts)
-        .execute(&mut *tx)
-        .await
-        .map_err(Error::Database)?;
-        count += 1;
-    }
-    tx.commit().await.map_err(Error::Database)?;
-    Ok(count)
+        SELECT u.player_id, $1, $2, u.team_abbrev, u.name, NULL, u.wins, u.gaa, u.save_pctg, u.shutouts, NOW()
+          FROM UNNEST($3::bigint[], $4::text[], $5::text[], $6::int[], $7::real[], $8::real[], $9::int[])
+            AS u(player_id, team_abbrev, name, wins, gaa, save_pctg, shutouts)
+        ON CONFLICT (player_id, season, game_type) DO UPDATE SET
+            team_abbrev = EXCLUDED.team_abbrev,
+            name = EXCLUDED.name,
+            wins = COALESCE(EXCLUDED.wins, nhl_goalie_season_stats.wins),
+            gaa = COALESCE(EXCLUDED.gaa, nhl_goalie_season_stats.gaa),
+            save_pctg = COALESCE(EXCLUDED.save_pctg, nhl_goalie_season_stats.save_pctg),
+            shutouts = COALESCE(EXCLUDED.shutouts, nhl_goalie_season_stats.shutouts),
+            updated_at = NOW()
+        "#,
+    )
+    .bind(season)
+    .bind(game_type)
+    .bind(&ids)
+    .bind(&teams)
+    .bind(&names)
+    .bind(&wins)
+    .bind(&gaa)
+    .bind(&save)
+    .bind(&shutouts)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(n)
 }
 
 // ---------------------------------------------------------------------
@@ -911,93 +833,108 @@ pub async fn upsert_goalie_leaderboard(
 // ---------------------------------------------------------------------
 
 pub async fn upsert_standings(pool: &PgPool, season: i32, payload: &Value) -> Result<usize> {
-    let rows = payload
+    let entries = payload
         .get("standings")
         .and_then(Value::as_array)
-        .ok_or_else(|| Error::NhlApi("standings payload missing 'standings' array".into()))?;
+        .ok_or_else(|| Error::nhl_api("standings payload missing 'standings' array"))?;
 
-    let mut tx = pool.begin().await.map_err(Error::Database)?;
-    let mut count = 0;
-    for row in rows {
+    let int = |row: &Value, key: &str| row.get(key).and_then(Value::as_i64).map(|v| v as i32);
+    let (mut teams, mut points, mut gp, mut wins, mut losses, mut otl) = (
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let (mut pct, mut streak_code, mut streak_count, mut l10_w, mut l10_l, mut l10_otl) = (
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let mut raw = Vec::new();
+    for row in entries {
         let team = row
             .get("teamAbbrev")
             .and_then(|v| v.get("default"))
             .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+            .unwrap_or("");
         if team.is_empty() {
             continue;
         }
-        let points = row.get("points").and_then(Value::as_i64).unwrap_or(0) as i32;
-        let gp = row.get("gamesPlayed").and_then(Value::as_i64).unwrap_or(0) as i32;
-        let wins = row.get("wins").and_then(Value::as_i64).unwrap_or(0) as i32;
-        let losses = row.get("losses").and_then(Value::as_i64).unwrap_or(0) as i32;
-        let otl = row.get("otLosses").and_then(Value::as_i64).unwrap_or(0) as i32;
-        let pct = row
-            .get("pointPctg")
-            .and_then(Value::as_f64)
-            .map(|v| v as f32);
-        let streak_code = row
-            .get("streakCode")
-            .and_then(Value::as_str)
-            .map(String::from);
-        let streak_count = row
-            .get("streakCount")
-            .and_then(Value::as_i64)
-            .map(|v| v as i32);
-        let l10_w = row.get("l10Wins").and_then(Value::as_i64).map(|v| v as i32);
-        let l10_l = row
-            .get("l10Losses")
-            .and_then(Value::as_i64)
-            .map(|v| v as i32);
-        let l10_otl = row
-            .get("l10OtLosses")
-            .and_then(Value::as_i64)
-            .map(|v| v as i32);
-
-        sqlx::query(
-            r#"
-            INSERT INTO nhl_standings (
-                season, team_abbrev, points, games_played, wins, losses, ot_losses,
-                point_pctg, streak_code, streak_count, l10_wins, l10_losses, l10_ot_losses,
-                updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
-            ON CONFLICT (season, team_abbrev) DO UPDATE SET
-                points = EXCLUDED.points,
-                games_played = EXCLUDED.games_played,
-                wins = EXCLUDED.wins,
-                losses = EXCLUDED.losses,
-                ot_losses = EXCLUDED.ot_losses,
-                point_pctg = EXCLUDED.point_pctg,
-                streak_code = EXCLUDED.streak_code,
-                streak_count = EXCLUDED.streak_count,
-                l10_wins = EXCLUDED.l10_wins,
-                l10_losses = EXCLUDED.l10_losses,
-                l10_ot_losses = EXCLUDED.l10_ot_losses,
-                updated_at = NOW()
-            "#,
-        )
-        .bind(season)
-        .bind(&team)
-        .bind(points)
-        .bind(gp)
-        .bind(wins)
-        .bind(losses)
-        .bind(otl)
-        .bind(pct)
-        .bind(streak_code)
-        .bind(streak_count)
-        .bind(l10_w)
-        .bind(l10_l)
-        .bind(l10_otl)
-        .execute(&mut *tx)
-        .await
-        .map_err(Error::Database)?;
-        count += 1;
+        teams.push(team.to_string());
+        points.push(int(row, "points").unwrap_or(0));
+        gp.push(int(row, "gamesPlayed").unwrap_or(0));
+        wins.push(int(row, "wins").unwrap_or(0));
+        losses.push(int(row, "losses").unwrap_or(0));
+        otl.push(int(row, "otLosses").unwrap_or(0));
+        pct.push(
+            row.get("pointPctg")
+                .and_then(Value::as_f64)
+                .map(|v| v as f32),
+        );
+        streak_code.push(
+            row.get("streakCode")
+                .and_then(Value::as_str)
+                .map(String::from),
+        );
+        streak_count.push(int(row, "streakCount"));
+        l10_w.push(int(row, "l10Wins"));
+        l10_l.push(int(row, "l10Losses"));
+        l10_otl.push(int(row, "l10OtLosses"));
+        raw.push(row.clone());
     }
-    tx.commit().await.map_err(Error::Database)?;
-    Ok(count)
+
+    sqlx::query(
+        r#"
+        INSERT INTO nhl_standings (
+            season, team_abbrev, points, games_played, wins, losses, ot_losses,
+            point_pctg, streak_code, streak_count, l10_wins, l10_losses, l10_ot_losses,
+            raw, updated_at
+        )
+        SELECT $1, u.*, NOW()
+          FROM UNNEST($2::text[], $3::int[], $4::int[], $5::int[], $6::int[], $7::int[],
+                      $8::real[], $9::text[], $10::int[], $11::int[], $12::int[], $13::int[],
+                      $14::jsonb[])
+            AS u(team_abbrev, points, games_played, wins, losses, ot_losses,
+                 point_pctg, streak_code, streak_count, l10_wins, l10_losses, l10_ot_losses, raw)
+        ON CONFLICT (season, team_abbrev) DO UPDATE SET
+            points = EXCLUDED.points,
+            games_played = EXCLUDED.games_played,
+            wins = EXCLUDED.wins,
+            losses = EXCLUDED.losses,
+            ot_losses = EXCLUDED.ot_losses,
+            point_pctg = EXCLUDED.point_pctg,
+            streak_code = EXCLUDED.streak_code,
+            streak_count = EXCLUDED.streak_count,
+            l10_wins = EXCLUDED.l10_wins,
+            l10_losses = EXCLUDED.l10_losses,
+            l10_ot_losses = EXCLUDED.l10_ot_losses,
+            raw = EXCLUDED.raw,
+            updated_at = NOW()
+        "#,
+    )
+    .bind(season)
+    .bind(&teams)
+    .bind(&points)
+    .bind(&gp)
+    .bind(&wins)
+    .bind(&losses)
+    .bind(&otl)
+    .bind(&pct)
+    .bind(&streak_code)
+    .bind(&streak_count)
+    .bind(&l10_w)
+    .bind(&l10_l)
+    .bind(&l10_otl)
+    .bind(&raw)
+    .execute(pool)
+    .await
+    .map_err(Error::Database)?;
+    Ok(teams.len())
 }
 
 // ---------------------------------------------------------------------
@@ -1010,7 +947,8 @@ pub async fn upsert_team_roster(
     season: i32,
     roster: &[Player],
 ) -> Result<()> {
-    let json = serde_json::to_value(roster).unwrap_or(Value::Null);
+    // Serialization failure must not overwrite a good roster with NULL.
+    let json = serde_json::to_value(roster).context("failed to serialize roster")?;
     sqlx::query(
         r#"
         INSERT INTO nhl_team_rosters (team_abbrev, season, roster, updated_at)
@@ -1029,11 +967,36 @@ pub async fn upsert_team_roster(
     Ok(())
 }
 
+/// The mirrored roster for `team_abbrev`, or `None` if it hasn't been
+/// captured for `season` yet.
+pub async fn get_team_roster(
+    pool: &PgPool,
+    team_abbrev: &str,
+    season: i32,
+) -> Result<Option<Vec<Player>>> {
+    let raw: Option<Value> = sqlx::query_scalar(
+        "SELECT roster FROM nhl_team_rosters WHERE team_abbrev = $1 AND season = $2",
+    )
+    .bind(team_abbrev)
+    .bind(season)
+    .fetch_optional(pool)
+    .await
+    .map_err(Error::Database)?;
+    raw.map(|v| serde_json::from_value(v).context("failed to decode mirrored roster"))
+        .transpose()
+        .map_err(Error::from)
+}
+
 // ---------------------------------------------------------------------
 // nhl_playoff_bracket
 // ---------------------------------------------------------------------
 
-pub async fn upsert_playoff_bracket(pool: &PgPool, season: i32, carousel: &Value) -> Result<()> {
+pub async fn upsert_playoff_bracket(
+    pool: &PgPool,
+    season: i32,
+    carousel: &PlayoffCarousel,
+) -> Result<()> {
+    let json = serde_json::to_value(carousel).context("failed to serialize playoff carousel")?;
     sqlx::query(
         r#"
         INSERT INTO nhl_playoff_bracket (season, carousel, updated_at)
@@ -1044,7 +1007,7 @@ pub async fn upsert_playoff_bracket(pool: &PgPool, season: i32, carousel: &Value
         "#,
     )
     .bind(season)
-    .bind(carousel)
+    .bind(json)
     .execute(pool)
     .await
     .map_err(Error::Database)?;
@@ -1254,14 +1217,16 @@ pub async fn list_team_playoff_streaks(
     pool: &PgPool,
     season: i32,
 ) -> Result<std::collections::HashMap<String, String>> {
-    let rows: Vec<(
+    // (game_id, home_team, away_team, home_score, away_score, period_type)
+    type FinalGameRow = (
         i64,
         String,
         String,
         Option<i32>,
         Option<i32>,
         Option<String>,
-    )> = sqlx::query_as(
+    );
+    let rows: Vec<FinalGameRow> = sqlx::query_as(
         r#"
         SELECT game_id, home_team, away_team, home_score, away_score, period_type
           FROM nhl_games
@@ -1309,12 +1274,21 @@ pub async fn list_team_playoff_streaks(
     Ok(out)
 }
 
-/// Reconstruct the NHL-shaped standings JSON from the mirror for
-/// functions that still take the raw payload shape
+/// The NHL-shaped standings payload for functions that still take it
 /// (`team_ratings::from_standings`, `playoff_elo::seed_from_standings`,
-/// `compute_current_elo`). Avoids a second NHL fetch path now that
-/// we mirror every field those functions read.
+/// `compute_current_elo`). Served from the mirrored raw entries; rows
+/// written before `raw` existed fall back to a reconstruction from the
+/// typed columns, which lacks the home/road splits.
 pub async fn load_standings_payload(pool: &PgPool, season: i32) -> Result<Value> {
+    let raw: Vec<Value> =
+        sqlx::query_scalar("SELECT raw FROM nhl_standings WHERE season = $1 AND raw IS NOT NULL")
+            .bind(season)
+            .fetch_all(pool)
+            .await
+            .map_err(Error::Database)?;
+    if !raw.is_empty() {
+        return Ok(serde_json::json!({ "standings": raw }));
+    }
     let rows = list_team_standings_context(pool, season).await?;
     let arr: Vec<Value> = rows
         .into_iter()
@@ -1403,27 +1377,6 @@ pub async fn list_skater_edge(pool: &PgPool, player_ids: &[i64]) -> Result<Vec<S
     Ok(rows)
 }
 
-#[cfg(test)]
-mod schedule_reconcile_tests {
-    use super::stale_unresolved_game_ids;
-
-    #[test]
-    fn only_missing_unresolved_games_are_cancel_candidates() {
-        let existing = vec![
-            (2025030177, "FUT"),
-            (2025030127, "LIVE"),
-            (2025030241, "PRE"),
-            (2025030116, "OFF"),
-        ];
-        let fetched = vec![2025030127, 2025030241];
-
-        assert_eq!(
-            stale_unresolved_game_ids(&existing, &fetched),
-            vec![2025030177]
-        );
-    }
-}
-
 /// All skaters on the season leaderboard for `(season, game_type)`,
 /// ordered by points desc then goals desc. Handlers that only need
 /// the subset rostered in a given league filter in memory.
@@ -1448,6 +1401,72 @@ pub async fn list_skater_season_stats(
     .await
     .map_err(Error::Database)?;
     Ok(rows)
+}
+
+#[derive(Debug, FromRow)]
+pub struct SkaterLeaderRow {
+    pub player_id: i64,
+    pub first_name: String,
+    pub last_name: String,
+    pub team_abbrev: String,
+    pub position: String,
+    pub goals: i32,
+    pub assists: i32,
+    pub points: i32,
+    pub plus_minus: Option<i32>,
+    pub toi_per_game: Option<i32>,
+}
+
+/// Top `limit` skaters by points from the mirrored season lines.
+pub async fn list_skater_leaders(
+    pool: &PgPool,
+    season: i32,
+    game_type: i16,
+    limit: i64,
+) -> Result<Vec<SkaterLeaderRow>> {
+    sqlx::query_as::<_, SkaterLeaderRow>(
+        r#"
+        SELECT player_id, first_name, last_name, team_abbrev, position,
+               goals, assists, points, plus_minus, toi_per_game
+          FROM nhl_skater_season_stats
+         WHERE season = $1 AND game_type = $2
+         ORDER BY points DESC, goals DESC
+         LIMIT $3
+        "#,
+    )
+    .bind(season)
+    .bind(game_type)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)
+}
+
+#[derive(Debug, FromRow)]
+pub struct GoalieSeasonRow {
+    pub player_id: i64,
+    pub team_abbrev: String,
+    pub wins: Option<i32>,
+    pub save_pctg: Option<f32>,
+}
+
+pub async fn list_goalie_season_stats(
+    pool: &PgPool,
+    season: i32,
+    game_type: i16,
+) -> Result<Vec<GoalieSeasonRow>> {
+    sqlx::query_as::<_, GoalieSeasonRow>(
+        r#"
+        SELECT player_id, team_abbrev, wins, save_pctg
+          FROM nhl_goalie_season_stats
+         WHERE season = $1 AND game_type = $2
+        "#,
+    )
+    .bind(season)
+    .bind(game_type)
+    .fetch_all(pool)
+    .await
+    .map_err(Error::Database)
 }
 
 /// Full mirror row for `nhl_games` as the games/match-day handlers
@@ -1974,7 +1993,7 @@ pub async fn get_playoff_carousel(
             .map_err(Error::Database)?;
     let Some(v) = raw else { return Ok(None) };
     let c: crate::domain::models::nhl::PlayoffCarousel =
-        serde_json::from_value(v).map_err(|e| Error::Internal(format!("carousel decode: {e}")))?;
+        serde_json::from_value(v).context("carousel decode")?;
     Ok(Some(c))
 }
 
@@ -2098,17 +2117,20 @@ pub fn is_stale(last: Option<chrono::DateTime<chrono::Utc>>, max_age: std::time:
 }
 
 /// Sum points per player from `nhl_player_game_stats` for the given
-/// (season, game_type). Returns a map keyed by nhl_id — zero-point
-/// players are omitted, so callers treat a missing key as "0
-/// points in this phase". Unlike the NHL stats-leaders endpoint
-/// this counts every scorer, not just the top 25 per category —
-/// fixes the same depth-scorer undercount that was biting
-/// get_rankings before the earlier switch.
+/// (season, game_type) and date window. Zero-point players are omitted,
+/// so callers treat a missing key as 0. Counts every scorer, unlike the
+/// NHL stats-leaders endpoint's top 25 per category.
+///
+/// Same rule as every other fantasy aggregate (Rankings included): only
+/// games whose boxscore has been post-buzzer-synced
+/// (`stats_finalized_at IS NOT NULL`) count, so Race Odds "Current" and
+/// Rankings never disagree mid-evening.
 pub async fn sum_player_points(
     pool: &PgPool,
     player_ids: &[i64],
     season: i32,
     game_type: i16,
+    window: crate::infra::db::DateWindow<'_>,
 ) -> Result<std::collections::HashMap<i64, i32>> {
     if player_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
@@ -2121,12 +2143,17 @@ pub async fn sum_player_points(
          WHERE pgs.player_id = ANY($1)
            AND g.season      = $2
            AND g.game_type   = $3
+           AND g.stats_finalized_at IS NOT NULL
+           AND ($4::date IS NULL OR g.game_date >= $4::date)
+           AND ($5::date IS NULL OR g.game_date <= $5::date)
          GROUP BY pgs.player_id
         "#,
     )
     .bind(player_ids)
     .bind(season)
     .bind(game_type)
+    .bind(window.min_date)
+    .bind(window.max_date)
     .fetch_all(pool)
     .await
     .map_err(Error::Database)?;

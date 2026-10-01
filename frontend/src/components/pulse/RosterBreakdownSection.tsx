@@ -1,4 +1,5 @@
 import RankingTable from "@/components/common/RankingTable";
+import InsightCard from "@/components/common/InsightCard";
 import { useTeamBreakdownColumns } from "@/components/rankingsPageTableColumns/teamBreakdownColumns";
 import type { SkaterStats } from "@/types/skaters";
 
@@ -33,23 +34,16 @@ export default function RosterBreakdownSection({ players }: Props) {
   }));
 
   return (
-    <section className="bg-white border-2 border-[#1A1A1A] overflow-hidden">
-      <header className="bg-[#1A1A1A] text-white px-6 py-3">
-        <h2 className="font-extrabold uppercase tracking-wider text-sm">
-          Roster Breakdown
-        </h2>
-      </header>
-      <div className="overflow-x-auto">
-        <RankingTable
-          data={rows}
-          columns={columns}
-          keyField="nhlId"
-          initialSortKey="totalPoints"
-          initialSortDirection="desc"
-          showRankColors={false}
-          className="bg-transparent shadow-none border-0"
-        />
-      </div>
-    </section>
+    <InsightCard accent="#1A1A1A" title="Roster Breakdown" bodyClassName="overflow-x-auto">
+      <RankingTable
+        data={rows}
+        columns={columns}
+        keyField="nhlId"
+        initialSortKey="totalPoints"
+        initialSortDirection="desc"
+        showRankColors={false}
+        className="bg-transparent shadow-none border-0"
+      />
+    </InsightCard>
   );
 }

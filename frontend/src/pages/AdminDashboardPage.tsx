@@ -1,18 +1,21 @@
 import { useState } from "react";
 import { Link, Navigate } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/use-auth";
 import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
 import { APP_CONFIG } from "@/config";
 import { formatSeason } from "@/utils/format";
 import { getHockeyDateToday } from "@/utils/timezone";
 import { useLeagues } from "@/features/draft";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import RankingTable from "@/components/common/RankingTable";
+import { calibrationRoundsColumns } from "@/components/rankingsPageTableColumns/calibrationRoundsColumns";
 import {
   AdminActionCard,
-  ConfirmDialog,
   adminApi,
   useAdminAction,
   type CacheScope,
   type CalibrationReport,
+  type CalibrationRoundReport,
   type SweepParams,
 } from "@/features/admin";
 
@@ -173,7 +176,7 @@ function InvalidateCachePanel({ defaultDate }: { defaultDate: string }) {
       <ConfirmDialog
         open={confirmOpen}
         title="Wipe all cached responses?"
-        body="This deletes every row in `response_cache`. The next request for each endpoint will regenerate from scratch — Claude calls will re-run on the next Pulse/Insights hit."
+        body="This deletes every row in `response_cache`. The next request for each endpoint will regenerate from scratch — LLM calls will re-run on the next Pulse/Insights hit."
         confirmLabel="Invalidate All"
         onConfirm={() => {
           setConfirmOpen(false);
@@ -465,35 +468,26 @@ function CalibrateSweepPanel() {
 }
 
 function CalibrateSummary({ report }: { report: CalibrationReport }) {
-  return (
-    <div className="border-2 border-[#1A1A1A] bg-[#FACC15]/10">
-      <div className="px-3 py-2 bg-[#FACC15] text-[#1A1A1A] text-[10px] uppercase tracking-widest font-bold flex justify-between">
-        <span>Season {report.season} · Brier {report.overall_brier.toFixed(4)}</span>
-        <span>Log-loss {report.overall_log_loss.toFixed(4)}</span>
-      </div>
-      {report.rounds.length > 0 && (
-        <table className="w-full text-xs">
-          <thead className="text-[10px] uppercase tracking-widest text-gray-500">
-            <tr>
-              <th className="px-3 py-1 text-left">Round</th>
-              <th className="px-3 py-1 text-right">Games</th>
-              <th className="px-3 py-1 text-right">Brier</th>
-              <th className="px-3 py-1 text-right">Log-loss</th>
-            </tr>
-          </thead>
-          <tbody>
-            {report.rounds.map((r) => (
-              <tr key={r.round} className="border-t border-gray-200">
-                <td className="px-3 py-1 font-bold">R{r.round}</td>
-                <td className="px-3 py-1 text-right tabular-nums">{r.games_scored}</td>
-                <td className="px-3 py-1 text-right tabular-nums">{r.brier.toFixed(4)}</td>
-                <td className="px-3 py-1 text-right tabular-nums">{r.log_loss.toFixed(4)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+  const header = (
+    <div className="px-3 py-2 bg-[#FACC15] text-[#1A1A1A] text-[10px] uppercase tracking-widest font-bold flex justify-between">
+      <span>Season {report.season} · Brier {report.overall_brier.toFixed(4)}</span>
+      <span>Log-loss {report.overall_log_loss.toFixed(4)}</span>
     </div>
+  );
+  if (report.rounds.length === 0) {
+    return <div className="border-2 border-[#1A1A1A]">{header}</div>;
+  }
+  return (
+    <RankingTable<CalibrationRoundReport>
+      data={report.rounds}
+      columns={calibrationRoundsColumns}
+      keyField="round"
+      rankField="round"
+      initialSortKey="round"
+      initialSortDirection="asc"
+      showRankColors={false}
+      customHeader={header}
+    />
   );
 }
 

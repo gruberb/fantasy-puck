@@ -37,11 +37,12 @@ frontend/src/
 │   └── realtime.ts         # WebSocketRealtimeService (draft only)
 │
 ├── contexts/
-│   ├── AuthContext.tsx     # Current session, sign-in/out, cross-tab sync
-│   └── LeagueContext.tsx   # Active league; memberships; last-viewed persistence
+│   ├── AuthContext.tsx     # AuthProvider: current session, sign-in/out, cross-tab sync
+│   ├── use-auth.ts         # Auth context object, types, useAuth()
+│   ├── LeagueContext.tsx   # LeagueProvider: active league; memberships; last-viewed persistence
+│   └── use-league.ts       # League context object, types, useLeague()
 │
-├── hooks/                  # Cross-feature generic hooks
-├── services/               # Cross-feature services
+├── hooks/                  # Cross-feature hooks (use-home-page-data, use-flash)
 ├── types/                  # Cross-feature TypeScript types
 ├── utils/                  # Pure utilities (format, math, date)
 │
@@ -150,7 +151,7 @@ From [`App.tsx:23-61`](../frontend/src/App.tsx):
 
 ### AuthContext
 
-File: [`frontend/src/contexts/AuthContext.tsx`](../frontend/src/contexts/AuthContext.tsx). Reads from and forwards to the singleton `authService` ([`features/auth/api/auth-service.ts`](../frontend/src/features/auth/api/auth-service.ts)).
+Provider in [`frontend/src/contexts/AuthContext.tsx`](../frontend/src/contexts/AuthContext.tsx); the context object and `useAuth()` live in [`contexts/use-auth.ts`](../frontend/src/contexts/use-auth.ts) so the provider file only exports a component (fast refresh). Reads from and forwards to the singleton `authService` ([`features/auth/api/auth-service.ts`](../frontend/src/features/auth/api/auth-service.ts)).
 
 Session flow:
 
@@ -165,7 +166,7 @@ Backend-issued JWTs do not expire on a timer. There is no refresh-token exchange
 
 ### LeagueContext
 
-File: [`frontend/src/contexts/LeagueContext.tsx`](../frontend/src/contexts/LeagueContext.tsx).
+Provider in [`frontend/src/contexts/LeagueContext.tsx`](../frontend/src/contexts/LeagueContext.tsx); `useLeague()` lives in [`contexts/use-league.ts`](../frontend/src/contexts/use-league.ts).
 
 Holds `activeLeagueId` (persisted to `localStorage["lastViewedLeagueId"]`), fetches the current user's memberships via React Query, and exposes:
 
@@ -247,7 +248,7 @@ The WebSocket base URL is derived from `API_URL` at construction time in `WebSoc
 
 ## Design system
 
-UI primitives come from [`@gruberb/fun-ui`](https://www.npmjs.com/package/@gruberb/fun-ui) — a brutalist component library (thick borders, chunky shadows, `Space Grotesk` display font). Direct consumers today: `LoadingSpinner`, `ErrorMessage`, `PageHeader`, `LiveIndicator`, and `Modal` (wrapped as `ConfirmDialog` for the admin dashboard). Styles are pulled in from `index.css`:
+UI primitives come from [`@gruberb/fun-ui`](https://www.npmjs.com/package/@gruberb/fun-ui) — a brutalist component library (thick borders, chunky shadows, `Space Grotesk` display font). Direct consumers today: `LoadingSpinner`, `ErrorMessage`, `PageHeader`, `LiveIndicator`, `Button` (main action buttons on the draft, league settings, league picker, my-leagues and settings pages, and the `ConfirmDialog` footer; a `Link` that should look like a button reuses its `brutal-btn brutal-btn-primary` classes), and `Modal`. Styles are pulled in from `index.css`:
 
 ```css
 @import "tailwindcss";
@@ -255,3 +256,9 @@ UI primitives come from [`@gruberb/fun-ui`](https://www.npmjs.com/package/@grube
 ```
 
 [`frontend/src/funUiSafelist.ts`](../frontend/src/funUiSafelist.ts) lists every arbitrary-value class baked into the fun-ui bundle (`border-[var(--color-brutal-black)]` etc.). Tailwind v4 skips `node_modules/` when scanning for classes, so without this file those utilities would never land in the output CSS and every fun-ui component would render unstyled. Regenerate with the one-liner in the file header if fun-ui ships new classes.
+
+Shared app-level primitives in `components/common/`:
+
+- `RankingTable` is the only table component. Column sets live in `components/rankingsPageTableColumns/` (one file per table, including the skaters, league race, league members and admin calibration tables). Beyond sorting, rank/name sticky columns and the header/date picker, it takes `rowClassName` (per-row classes such as dimming eliminated skaters or tinting the caller's team) and `stickyHeader` (pins the column header; the body becomes a 75vh scroll area because sticky positioning cannot escape the horizontal-overflow wrapper). Missing values sort below every real value.
+- `ConfirmDialog` wraps fun-ui `Modal` with a Cancel / Confirm footer and an optional `children` slot (the draft page renders the player preview there). Every explicit "are you sure" goes through it: admin dashboard actions, draft and sleeper picks, and the destructive actions on league settings. Do not use `window.confirm`.
+- `Toast` plus `hooks/use-flash.ts` (`useFlash()`) render the bottom-centre success/error message on the settings, league settings and my-leagues pages. One message slot per page; a new flash replaces the old one and restarts its timer.

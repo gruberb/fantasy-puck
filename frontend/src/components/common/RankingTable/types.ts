@@ -2,19 +2,19 @@ import { ReactNode } from "react";
 
 export type RankingData = Record<string, any>;
 
-export interface Column {
+export interface Column<T extends RankingData = RankingData> {
   key: string; // Property name in data or special key like 'rank'
   header: string; // Column header text
-  render?: (value: any, row: RankingData, index: number) => ReactNode; // Optional custom renderer
+  render?: (value: any, row: T, index: number) => ReactNode; // Optional custom renderer
   className?: string; // Optional class for the column
-  responsive?: "always" | "md" | "lg"; // When to show the column
+  responsive?: "always" | "sm" | "md" | "lg"; // When to show the column
   sortable?: boolean; // Whether this column is sortable
 }
 
-export interface RankingTableProps {
+export interface RankingTableProps<T extends RankingData = RankingData> {
   // Core data props
-  data: RankingData[];
-  columns: Column[];
+  data: T[];
+  columns: Column<T>[];
   keyField?: string;
   rankField?: string;
 
@@ -48,6 +48,14 @@ export interface RankingTableProps {
   // Behavior
   initialSortKey?: string;
   initialSortDirection?: "asc" | "desc";
+  /** Extra classes for a body row, e.g. dimming eliminated players.
+   *  Rows default to `bg-white`; a background override needs the `!`
+   *  modifier so it also reaches the sticky rank/name cells. */
+  rowClassName?: (row: T) => string;
+  /** Pins the column header while the body scrolls. The body becomes
+   *  its own vertical scroll area (capped at 75vh) because sticky
+   *  positioning cannot escape the horizontal-overflow container. */
+  stickyHeader?: boolean;
 
   showDatePicker?: boolean;
   selectedDate?: string;

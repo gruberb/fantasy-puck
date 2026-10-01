@@ -27,6 +27,7 @@ pub async fn get_players_per_team(
                 .players
                 .into_iter()
                 .map(|player| PlayerWithTeamResponse {
+                    id: player.id,
                     nhl_id: player.nhl_id,
                     name: player.name,
                     fantasy_team_id: player.fantasy_team_id,

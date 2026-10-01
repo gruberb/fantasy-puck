@@ -1,10 +1,10 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { RankingTableProps } from "./types";
+import { Column, RankingData, RankingTableProps } from "./types";
 import RankingTableHeader from "./RankingTableHeader";
 import RankingTableEmpty from "./RankingTableEmpty";
 import { LoadingSpinner } from "@gruberb/fun-ui";
 
-const RankingTable = ({
+const RankingTable = <T extends RankingData>({
   // Core data props
   data,
   columns,
@@ -32,6 +32,8 @@ const RankingTable = ({
   // Behavior
   initialSortKey,
   initialSortDirection = "desc",
+  rowClassName,
+  stickyHeader = false,
 
   // Date picker props with defaults
   showDatePicker = false,
@@ -39,7 +41,7 @@ const RankingTable = ({
   onDateChange,
   minDate,
   maxDate,
-}: RankingTableProps) => {
+}: RankingTableProps<T>) => {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
@@ -108,27 +110,8 @@ const RankingTable = ({
     // Create a copy for sorting
     let result = [...safeData];
 
-    // Apply sorting
-    result.sort((a, b) => {
-      // Get values for the sort key
-      const aValue = a[sortKey];
-      const bValue = b[sortKey];
-
-      // Handle string comparison
-      if (typeof aValue === "string" && typeof bValue === "string") {
-        return sortDirection === "asc"
-          ? aValue.localeCompare(bValue)
-          : bValue.localeCompare(aValue);
-      }
-
-      // Handle number comparison
-      if (typeof aValue === "number" && typeof bValue === "number") {
-        return sortDirection === "asc" ? aValue - bValue : bValue - aValue;
-      }
-
-      // Default return (handles undefined, etc.)
-      return 0;
-    });
+    const direction = sortDirection === "asc" ? 1 : -1;
+    result.sort((a, b) => direction * compareValues(a[sortKey], b[sortKey]));
 
     // Apply limit if specified
     if (limit && limit > 0) {
@@ -142,6 +125,32 @@ const RankingTable = ({
   const nameColumnIndex = columns.findIndex((col) => col.key !== rankField);
   const hasNameColumn = nameColumnIndex !== -1;
 
+  const renderHeaderLabel = (column: Column<T>) =>
+    column.sortable ? (
+      <button
+        className="focus:outline-none cursor-pointer"
+        onClick={() => handleSort(column.key)}
+      >
+        {column.header}
+        {sortKey === column.key && (
+          <span className="ml-1">{sortDirection === "asc" ? "↑" : "↓"}</span>
+        )}
+      </button>
+    ) : (
+      column.header
+    );
+
+  // Sticky rank/name headers sit on the corner of both scroll axes, so
+  // they need to stack above the other pinned headers.
+  const pinnedHeaderClass = stickyHeader ? "top-0 z-30" : "z-20";
+  const scrollHeaderClass = stickyHeader ? "sticky top-0 z-20" : "";
+  const showDefaultHeader = !!(
+    title ||
+    dateBadge ||
+    viewAllLink ||
+    showDatePicker
+  );
+
   return (
     <div className={`ranking-table-container ${className}`}>
       {/* Header section: caller can pass `customHeader` to replace the
@@ -149,7 +158,7 @@ const RankingTable = ({
           + pulse dot inside the same outer border. */}
       {customHeader ? (
         customHeader
-      ) : (
+      ) : showDefaultHeader && (
         <div className="ranking-table-header">
           <RankingTableHeader
             title={title}
@@ -183,14 +192,20 @@ const RankingTable = ({
           <div className="ranking-table-body">
             <div
               ref={tableContainerRef}
-              className="overflow-x-auto scrollbar-hide"
+              className={
+                stickyHeader
+                  ? "overflow-auto max-h-[75vh]"
+                  : "overflow-x-auto scrollbar-hide"
+              }
               style={{ position: "relative" }}
             >
               <table ref={tableRef} className="ranking-table">
                 <thead>
                   <tr>
                     {/* Rank column (sticky) */}
-                    <th className="sticky left-0 z-20 bg-[#FACC15]/20 text-center">
+                    <th
+                      className={`sticky left-0 ${pinnedHeaderClass} bg-[#FACC15]/20 text-center`}
+                    >
                       {columns.find((col) => col.key === rankField)?.header ||
                         "Rank"}
                     </th>
@@ -198,10 +213,10 @@ const RankingTable = ({
                     {/* Name column (sticky if found) */}
                     {hasNameColumn && (
                       <th
-                        className="sticky z-20 border-l border-[#FACC15]/10 sticky-shadow bg-[#FACC15]/20"
+                        className={`sticky ${pinnedHeaderClass} border-l border-[#FACC15]/10 sticky-shadow bg-[#FACC15]/20`}
                         style={{ left: "65px" }}
                       >
-                        {columns[nameColumnIndex].header}
+                        {renderHeaderLabel(columns[nameColumnIndex])}
                       </th>
                     )}
 
@@ -211,50 +226,29 @@ const RankingTable = ({
                         (col, idx) =>
                           col.key !== rankField && idx !== nameColumnIndex,
                       )
-                      .map((column) => {
-                        // Determine responsive class
-                        let responsiveClass = "";
-                        if (column.responsive === "md") {
-                          responsiveClass = "hidden md:table-cell";
-                        } else if (column.responsive === "lg") {
-                          responsiveClass = "hidden lg:table-cell";
-                        }
-
-                        return (
-                          <th
-                            key={column.key}
-                            className={`${responsiveClass} ${column.className || ""}`}
-                          >
-                            {column.sortable ? (
-                              <button
-                                className="focus:outline-none cursor-pointer"
-                                onClick={() => handleSort(column.key)}
-                              >
-                                {column.header}
-                                {sortKey === column.key && (
-                                  <span className="ml-1">
-                                    {sortDirection === "asc" ? "↑" : "↓"}
-                                  </span>
-                                )}
-                              </button>
-                            ) : (
-                              column.header
-                            )}
-                          </th>
-                        );
-                      })}
+                      .map((column) => (
+                        <th
+                          key={column.key}
+                          className={`${scrollHeaderClass} ${responsiveClasses[column.responsive ?? "always"]} ${column.className || ""}`}
+                        >
+                          {renderHeaderLabel(column)}
+                        </th>
+                      ))}
                   </tr>
                 </thead>
                 <tbody>
                   {displayItems.map((item, index) => {
-                    const key = item[keyField] || index;
-                    const rankValue = item[rankField] || index + 1;
+                    const key = item[keyField] ?? index;
+                    const rankValue = item[rankField] ?? index + 1;
 
                     return (
-                      <tr key={key} className="group hover:bg-[#fef9e7]">
+                      <tr
+                        key={key}
+                        className={`group bg-white hover:bg-[#fef9e7] ${rowClassName?.(item) ?? ""}`}
+                      >
                         {/* Rank column (sticky) */}
                         <td
-                          className="sticky left-0 z-10 text-center bg-white group-hover:bg-[#fef9e7] transition-colors"
+                          className="sticky left-0 z-10 text-center bg-inherit group-hover:bg-[#fef9e7] transition-colors"
                           style={{ width: "50px" }}
 >
                           <div className={getRankColor(Number(rankValue))}>
@@ -265,7 +259,7 @@ const RankingTable = ({
                         {/* Name column (sticky if found) */}
                         {hasNameColumn && (
                           <td
-                            className="sticky z-10 border-l border-gray-50 bg-white group-hover:bg-[#fef9e7] transition-colors"
+                            className="sticky z-10 border-l border-gray-50 bg-inherit group-hover:bg-[#fef9e7] transition-colors"
                             style={{ left: "65px" }}
                           >
                             {columns[nameColumnIndex].render
@@ -285,22 +279,11 @@ const RankingTable = ({
                               col.key !== rankField && idx !== nameColumnIndex,
                           )
                           .map((column) => {
-                            // Get cell value
                             const value = item[column.key];
-
-                            // Determine responsive class
-                            let responsiveClass = "";
-                            if (column.responsive === "md") {
-                              responsiveClass = "hidden md:table-cell";
-                            } else if (column.responsive === "lg") {
-                              responsiveClass = "hidden lg:table-cell";
-                            }
-
-                            // Use custom renderer if provided
                             return (
                               <td
                                 key={column.key}
-                                className={`${responsiveClass} ${column.className || ""}`}
+                                className={`${responsiveClasses[column.responsive ?? "always"]} ${column.className || ""}`}
                               >
                                 {column.render
                                   ? column.render(value, item, index)
@@ -336,5 +319,21 @@ const RankingTable = ({
     </div>
   );
 };
+
+const responsiveClasses: Record<NonNullable<Column["responsive"]>, string> = {
+  always: "",
+  sm: "hidden sm:table-cell",
+  md: "hidden md:table-cell",
+  lg: "hidden lg:table-cell",
+};
+
+// Missing values rank below every real value so a sparse stat (e.g. TOI
+// for a call-up) sinks to the bottom of a descending sort.
+function compareValues(a: unknown, b: unknown): number {
+  if (a == null || b == null) return a == null ? (b == null ? 0 : -1) : 1;
+  if (typeof a === "string" && typeof b === "string") return a.localeCompare(b);
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  return 0;
+}
 
 export default RankingTable;

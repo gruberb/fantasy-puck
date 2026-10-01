@@ -162,8 +162,7 @@ pub fn project_one(
     };
     let beta_weight = if hist_gp > 0 { BETA } else { 0.0 };
 
-    let numerator =
-        ALPHA * rs_ppg + po_gp as f32 * blended_po_rate + beta_weight * historical_ppg;
+    let numerator = ALPHA * rs_ppg + po_gp as f32 * blended_po_rate + beta_weight * historical_ppg;
     let denominator = ALPHA + po_gp as f32 + beta_weight;
     let base_ppg = if denominator > 0.0 {
         numerator / denominator
@@ -442,9 +441,9 @@ mod tests {
         // First 3 games (older) at 18 min; last 3 (recent) at 9 min.
         // Log is most-recent-first, so recent[0..3] = 9min, older[3..] = 18min.
         let log = vec![
-            gs_with_toi(0, 0, 540), // recent 1
-            gs_with_toi(0, 0, 540), // recent 2
-            gs_with_toi(0, 0, 540), // recent 3
+            gs_with_toi(0, 0, 540),  // recent 1
+            gs_with_toi(0, 0, 540),  // recent 2
+            gs_with_toi(0, 0, 540),  // recent 3
             gs_with_toi(0, 0, 1080), // older 1
             gs_with_toi(0, 0, 1080), // older 2
             gs_with_toi(0, 0, 1080), // older 3

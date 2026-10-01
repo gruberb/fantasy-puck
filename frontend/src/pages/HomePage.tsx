@@ -4,14 +4,16 @@ import ActionButtons from "@/components/home/ActionButtons";
 import { LiveRankingsTable } from "@/components/home/LiveRankingsTable";
 import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
 import RankingTable from "@/components/common/RankingTable";
-import { useHomePageData } from "@/hooks/useHomePageData";
+import { useHomePageData } from "@/hooks/use-home-page-data";
 import { useSleepersRankingsColumns } from "@/components/rankingsPageTableColumns/sleepersColumns";
 import { useSeasonRankingsColumns } from "@/components/rankingsPageTableColumns/seasonColumns";
 import { useDailyRankingsColumns } from "@/components/rankingsPageTableColumns/dailysColumns";
-import { useAuth } from "@/contexts/AuthContext";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useAuth } from "@/contexts/use-auth";
+import { useLeague } from "@/contexts/use-league";
 import { api } from "@/api/client";
 import { formatSeason } from "@/utils/format";
+import type { Ranking, RankingItem } from "@/types/rankings";
+import type { Skater } from "@/types/skaters";
 
 // ── League Members List (for pre-draft state) ─────────────────────────────
 
@@ -94,7 +96,7 @@ const HomePage = () => {
 
   const hasRankings = !rankingsError && Array.isArray(rankings) && rankings.length > 0;
   const hasDailyRankings = !yesterdayRankingsError && dailyRankingsData.length > 0;
-  const hasSleepers = !sleepersError && sleepersData && sleepersData.length > 0;
+  const hasSleepers = !sleepersError && !!sleepersData && sleepersData.length > 0;
   const hasAnyData = hasRankings || hasDailyRankings || hasSleepers;
   const isLoading = rankingsLoading || yesterdayRankingsLoading || sleepersLoading;
   const isPublicLeagueView = Boolean(activeLeague && !isMember);
@@ -154,7 +156,7 @@ const HomePage = () => {
     }
 
     // Draft is active (or paused)
-    if (draftStatus === "active" || draftStatus === "paused") {
+    if (draftSession && (draftStatus === "active" || draftStatus === "paused")) {
       return (
         <div>
           <PageHeader title={activeLeague.name} badge={formatSeason(activeLeague.season)} />
@@ -231,7 +233,7 @@ const HomePage = () => {
         yesterdayRankingsLoading={yesterdayRankingsLoading}
         hasDailyRankings={hasDailyRankings}
         yesterdayDate={yesterdayDate}
-        sleepersData={sleepersData}
+        sleepersData={sleepersData ?? []}
         sleepersLoading={sleepersLoading}
         hasSleepers={hasSleepers}
         leaguePrefix={lp}
@@ -244,14 +246,14 @@ const HomePage = () => {
 // ── Rankings Dashboard (extracted for reuse) ──────────────────────────────
 
 interface RankingsDashboardProps {
-  rankings: unknown;
+  rankings: Ranking[] | undefined;
   rankingsLoading: boolean;
   hasRankings: boolean;
-  dailyRankingsData: unknown[];
+  dailyRankingsData: RankingItem[];
   yesterdayRankingsLoading: boolean;
   hasDailyRankings: boolean;
-  yesterdayDate: string;
-  sleepersData: unknown[];
+  yesterdayDate: Date;
+  sleepersData: Skater[];
   sleepersLoading: boolean;
   hasSleepers: boolean;
   leaguePrefix: string;

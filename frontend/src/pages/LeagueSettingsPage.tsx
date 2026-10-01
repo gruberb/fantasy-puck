@@ -1,9 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
-import { useLeague } from "@/contexts/LeagueContext";
+import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/use-auth";
+import { useLeague } from "@/contexts/use-league";
 import { api } from "@/api/client";
-import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
+import { Button, LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
+import RankingTable from "@/components/common/RankingTable";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { Toast } from "@/components/common/Toast";
+import { getLeagueMembersColumns } from "@/components/rankingsPageTableColumns/leagueMembersColumns";
+import { useFlash } from "@/hooks/use-flash";
 import { formatSeason } from "@/utils/format";
 import { APP_CONFIG } from "@/config";
 import {
@@ -11,6 +17,9 @@ import {
   useDraftSession,
   usePlayerPool,
   useAdminDraftActions,
+  leagueKeys,
+  membershipKeys,
+  type LeagueMember,
 } from "@/features/draft";
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -42,6 +51,13 @@ interface NhlSkaterLeader {
   value: number;
 }
 
+interface PendingConfirm {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  action: () => Promise<void>;
+}
+
 // ── Component ─────────────────────────────────────────────────────────────
 
 const LeagueSettingsPage = () => {
@@ -49,15 +65,15 @@ const LeagueSettingsPage = () => {
   const { user, profile, loading: authLoading } = useAuth();
   const { activeLeague } = useLeague();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   // Draft controls
   const [totalRounds, setTotalRounds] = useState(10);
   const [snakeDraft, setSnakeDraft] = useState(true);
   const [startingDraft, setStartingDraft] = useState(false);
 
-  // Messages
-  const [statusMsg, setStatusMsg] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const { flash: toast, showFlash } = useFlash();
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
 
   // Team name editing
   const [editingTeamId, setEditingTeamId] = useState<number | null>(null);
@@ -86,14 +102,13 @@ const LeagueSettingsPage = () => {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
-  const flash = (msg: string) => { setStatusMsg(msg); setErrorMsg(null); setTimeout(() => setStatusMsg(null), 4000); };
   const flashError = (msg: string) => {
     let friendly = msg;
     if (msg.includes("foreign key constraint")) friendly = "Can't delete: there are draft picks or other data linked to this. Delete the draft session first.";
     if (msg.includes("violates unique constraint")) friendly = "This already exists.";
     if (msg.includes("row-level security") || msg.includes("RLS")) friendly = "Permission denied. Make sure you own this league.";
     if (msg.includes("Not enough") || msg.includes("at least")) friendly = msg;
-    setErrorMsg(friendly); setStatusMsg(null); setTimeout(() => setErrorMsg(null), 6000);
+    showFlash(friendly, "error");
   };
 
   // ── Player fetching ─────────────────────────────────────────────────────
@@ -107,13 +122,13 @@ const LeagueSettingsPage = () => {
       const rawGroups = await api.getFantasyPlayers(leagueId) as Array<{
         nhlTeam: string;
         players: Array<{
-          nhlId: number; name: string; fantasyTeamId: number;
+          id: number; nhlId: number; name: string; fantasyTeamId: number;
           fantasyTeamName: string; position: string; nhlTeam: string;
         }>;
       }>;
       const allPlayers: FantasyPlayer[] = (rawGroups ?? []).flatMap((group) =>
         group.players.map((p) => ({
-          id: p.nhlId, team_id: p.fantasyTeamId, nhl_id: p.nhlId,
+          id: p.id, team_id: p.fantasyTeamId, nhl_id: p.nhlId,
           name: p.name, position: p.position, nhl_team: p.nhlTeam,
         })),
       );
@@ -125,13 +140,13 @@ const LeagueSettingsPage = () => {
       const sleepersByTeam = new Map<number, FantasyPlayer>();
       try {
         const sleepersRaw = await api.getSleepers(leagueId) as Array<{
-          nhlId: number; name: string; position: string; nhlTeam: string;
+          id: number; nhlId: number; name: string; position: string; nhlTeam: string;
           fantasyTeamId: number | null;
         }>;
         for (const s of sleepersRaw ?? []) {
           if (s.fantasyTeamId) {
             sleepersByTeam.set(s.fantasyTeamId, {
-              id: s.nhlId, team_id: s.fantasyTeamId, nhl_id: s.nhlId,
+              id: s.id, team_id: s.fantasyTeamId, nhl_id: s.nhlId,
               name: s.name, position: s.position, nhl_team: s.nhlTeam,
             });
           }
@@ -160,10 +175,8 @@ const LeagueSettingsPage = () => {
     if (nhlPlayersCache || nhlPlayersFetching) return;
     setNhlPlayersFetching(true);
     try {
-      const API_URL = import.meta.env.VITE_API_URL || "https://api.fantasy-puck.ca/api";
-      const response = await fetch(`${API_URL}/nhl/skaters/top?limit=800&season=${APP_CONFIG.DEFAULT_SEASON}&game_type=${APP_CONFIG.DEFAULT_GAME_TYPE}&include_form=false&form_games=0`);
-      const data = await response.json();
-      const players = (data.data ?? []).map((p: any) => ({
+      const skaters = await api.getTopSkaters(800, parseInt(APP_CONFIG.DEFAULT_SEASON), APP_CONFIG.DEFAULT_GAME_TYPE, 0);
+      const players = skaters.map((p) => ({
         id: p.id, firstName: { default: p.firstName }, lastName: { default: p.lastName },
         sweaterNumber: p.sweaterNumber, teamAbbrev: p.teamAbbrev, position: p.position,
         headshot: p.headshot, value: p.stats?.points ?? 0,
@@ -187,16 +200,23 @@ const LeagueSettingsPage = () => {
 
   // ── Handlers ─────────────────────────────────────────────────────────────
 
-  const handleRemoveMember = async (memberId: string, memberName: string) => {
-    if (!window.confirm(`Remove "${memberName}" from this league? This cannot be undone.`)) return;
-    try { await api.removeLeagueMember(leagueId!, memberId); await fetchMembers(); flash(`Member "${memberName}" removed.`); } catch (e: any) { flashError(e.message || "Failed to remove member"); }
+  const handleRemoveMember = (member: LeagueMember) => {
+    const memberName = member.displayName ?? "Unknown";
+    setPendingConfirm({
+      title: "Remove member?",
+      body: `Remove "${memberName}" from this league? This cannot be undone.`,
+      confirmLabel: "Remove",
+      action: async () => {
+        try { await api.removeLeagueMember(leagueId!, member.id); await fetchMembers(); showFlash(`Member "${memberName}" removed.`); } catch (e: any) { flashError(e.message || "Failed to remove member"); }
+      },
+    });
   };
 
   const handleStartEditTeamName = (teamId: number, currentName: string) => { setEditingTeamId(teamId); setEditingTeamName(currentName); };
   const handleCancelEditTeamName = () => { setEditingTeamId(null); setEditingTeamName(""); };
   const handleSaveTeamName = async (teamId: number) => {
     if (!editingTeamName.trim()) return;
-    try { await api.updateTeamName(teamId, editingTeamName.trim()); setEditingTeamId(null); setEditingTeamName(""); await fetchMembers(); flash("Team name updated."); } catch (e: any) { flashError(e.message || "Failed to update team name"); }
+    try { await api.updateTeamName(teamId, editingTeamName.trim()); setEditingTeamId(null); setEditingTeamName(""); await fetchMembers(); showFlash("Team name updated."); } catch (e: any) { flashError(e.message || "Failed to update team name"); }
   };
 
   const handleStartFullDraft = async () => {
@@ -208,7 +228,7 @@ const LeagueSettingsPage = () => {
       await startDraft(sess.id);
       await fetchSession();
       await fetchMembers();
-      flash("Draft started!");
+      showFlash("Draft started!");
     } catch (e: any) {
       flashError(e.message || "Failed to start draft");
     } finally { setStartingDraft(false); }
@@ -217,36 +237,72 @@ const LeagueSettingsPage = () => {
   const handlePauseResume = async () => {
     if (!session?.id) return;
     try {
-      if (session.status === "active") { await pauseDraft(session.id); await fetchSession(); flash("Draft paused"); }
-      else if (session.status === "paused") { await resumeDraft(session.id); await fetchSession(); flash("Draft resumed"); }
+      if (session.status === "active") { await pauseDraft(session.id); await fetchSession(); showFlash("Draft paused"); }
+      else if (session.status === "paused") { await resumeDraft(session.id); await fetchSession(); showFlash("Draft resumed"); }
     } catch (e: any) { flashError(e.message || "Failed to update draft status"); }
   };
 
-  const handleDeleteDraftSession = async () => {
+  const handleDeleteDraftSession = () => {
     if (!session?.id || !leagueId) return;
-    if (!window.confirm("This will DELETE all draft picks, the player pool, the draft session itself, and all fantasy players created from this draft. This cannot be undone. Are you sure?")) return;
-    try {
-      await api.deleteDraftSession(session.id);
-      setSession(null); setTeamPlayers([]); await fetchSession(); flash("Draft session and all related data deleted.");
-    } catch (e: any) { flashError(e.message || "Failed to delete draft session"); }
+    const sessionId = session.id;
+    setPendingConfirm({
+      title: "Delete draft session?",
+      body: "This will DELETE all draft picks, the player pool, the draft session itself, and all fantasy players created from this draft. This cannot be undone. Are you sure?",
+      confirmLabel: "Delete Draft",
+      action: async () => {
+        try {
+          await api.deleteDraftSession(sessionId);
+          setSession(null); setTeamPlayers([]); await fetchSession(); showFlash("Draft session and all related data deleted.");
+        } catch (e: any) { flashError(e.message || "Failed to delete draft session"); }
+      },
+    });
   };
 
-  const handleDeleteLeague = async () => {
+  const handleDeleteLeague = () => {
     if (!leagueId || !activeLeague) return;
-    if (!window.confirm(`Delete league "${activeLeague.name}"? This will also delete all members, draft sessions, and related data.`)) return;
-    try { await api.deleteLeague(leagueId); navigate("/"); } catch (e: any) { flashError(e.message || "Failed to delete league"); }
+    setPendingConfirm({
+      title: "Delete league?",
+      body: `Delete league "${activeLeague.name}"? This will also delete all members, draft sessions, and related data.`,
+      confirmLabel: "Delete League",
+      action: async () => {
+        try {
+          await api.deleteLeague(leagueId);
+          await queryClient.invalidateQueries({ queryKey: leagueKeys.all });
+          await queryClient.invalidateQueries({ queryKey: membershipKeys.all });
+          navigate("/");
+        } catch (e: any) { flashError(e.message || "Failed to delete league"); }
+      },
+    });
   };
 
   const toggleTeamExpanded = (teamId: number) => { setExpandedTeams((prev) => { const next = new Set(prev); if (next.has(teamId)) next.delete(teamId); else next.add(teamId); return next; }); };
 
-  const handleDeletePlayer = async (playerId: number, playerName: string) => {
-    if (!window.confirm(`Remove "${playerName}" from their team?`)) return;
-    try { await api.removePlayer(playerId); await fetchTeamPlayersAuto(); flash(`Player "${playerName}" removed.`); } catch (e: any) { flashError(e.message || "Failed to remove player"); }
+  const handleDeletePlayer = (playerId: number, playerName: string) => {
+    setPendingConfirm({
+      title: "Remove player?",
+      body: `Remove "${playerName}" from their team?`,
+      confirmLabel: "Remove",
+      action: async () => {
+        try { await api.removePlayer(playerId); await fetchTeamPlayersAuto(); showFlash(`Player "${playerName}" removed.`); } catch (e: any) { flashError(e.message || "Failed to remove player"); }
+      },
+    });
   };
 
-  const handleDeleteSleeper = async (sleeperId: number, sleeperName: string) => {
-    if (!window.confirm(`Remove sleeper "${sleeperName}"?`)) return;
-    try { await api.removeSleeper(sleeperId); await fetchTeamPlayersAuto(); flash(`Sleeper "${sleeperName}" removed.`); } catch (e: any) { flashError(e.message || "Failed to remove sleeper"); }
+  const handleDeleteSleeper = (sleeperId: number, sleeperName: string) => {
+    setPendingConfirm({
+      title: "Remove sleeper?",
+      body: `Remove sleeper "${sleeperName}"?`,
+      confirmLabel: "Remove",
+      action: async () => {
+        try { await api.removeSleeper(sleeperId); await fetchTeamPlayersAuto(); showFlash(`Sleeper "${sleeperName}" removed.`); } catch (e: any) { flashError(e.message || "Failed to remove sleeper"); }
+      },
+    });
+  };
+
+  const handleConfirmPending = () => {
+    const pending = pendingConfirm;
+    setPendingConfirm(null);
+    if (pending) void pending.action();
   };
 
   const handleAddPlayerFromSearch = async (nhlPlayer: NhlSkaterLeader) => {
@@ -259,7 +315,7 @@ const LeagueSettingsPage = () => {
       });
       setSearchQuery(""); setSearchFocused(false);
       await fetchTeamPlayersAuto();
-      flash(`${playerName} added successfully.`);
+      showFlash(`${playerName} added successfully.`);
     } catch (e: any) { flashError(e.message || "Failed to add player"); } finally { setAddingPlayer(false); }
   };
 
@@ -312,81 +368,53 @@ const LeagueSettingsPage = () => {
         subtitle={formatSeason(activeLeague.season)}
       />
 
-      {/* Toast messages */}
-      {statusMsg && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#1A1A1A] text-white px-6 py-3 border-2 border-[#16A34A] text-sm font-bold uppercase tracking-wider shadow-[4px_4px_0px_0px_#16A34A]">
-          {statusMsg}
-        </div>
-      )}
-      {errorMsg && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#1A1A1A] text-white px-6 py-3 border-2 border-[#EF4444] text-sm font-bold uppercase tracking-wider shadow-[4px_4px_0px_0px_#EF4444] max-w-lg text-center">
-          {errorMsg}
-        </div>
-      )}
+      <Toast flash={toast} />
+      <ConfirmDialog
+        open={!!pendingConfirm}
+        title={pendingConfirm?.title ?? ""}
+        body={pendingConfirm?.body}
+        confirmLabel={pendingConfirm?.confirmLabel}
+        onConfirm={handleConfirmPending}
+        onCancel={() => setPendingConfirm(null)}
+      />
 
       {/* ── Members ────────────────────────────────────────────────────────── */}
-      <div className="fantasy-card">
-        <div className="card-header">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold">Members ({members.length})</h2>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(`${window.location.origin}/league/${leagueId}`);
-                flash("Invite link copied to clipboard!");
-              }}
-              className="text-xs font-bold uppercase tracking-wider px-3 py-1.5 bg-[#FACC15] text-[#1A1A1A] border-2 border-[#1A1A1A] shadow-[2px_2px_0px_0px_#1A1A1A] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all duration-100"
-            >
-              Copy Invite Link
-            </button>
-          </div>
-        </div>
-        <div className="p-6">
-          {membersLoading ? <LoadingSpinner size="small" message="Loading members..." /> : members.length === 0 ? (
-            <p className="text-gray-500 text-sm">No members yet. Share the invite link above!</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left py-2 px-3 font-semibold text-gray-700">Order</th>
-                    <th className="text-left py-2 px-3 font-semibold text-gray-700">Player</th>
-                    <th className="text-left py-2 px-3 font-semibold text-gray-700">Team</th>
-                    <th className="text-right py-2 px-3 font-semibold text-gray-700">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {members.map((m) => (
-                    <tr key={m.id} className="border-b border-gray-100">
-                      <td className="py-2 px-3">
-                        <span className="inline-block w-8 text-center py-0.5 border border-gray-300 rounded-none text-xs font-mono">{m.draftOrder}</span>
-                      </td>
-                      <td className="py-2 px-3 text-gray-900">{m.displayName ?? "Unknown"}</td>
-                      <td className="py-2 px-3">
-                        {editingTeamId === m.fantasyTeamId ? (
-                          <div className="flex items-center gap-2">
-                            <input type="text" value={editingTeamName} onChange={(e) => setEditingTeamName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSaveTeamName(m.fantasyTeamId)} className="px-2 py-1 border border-gray-300 rounded-none text-sm w-32" autoFocus />
-                            <button onClick={() => handleSaveTeamName(m.fantasyTeamId)} className="text-xs text-green-600 font-bold">Save</button>
-                            <button onClick={handleCancelEditTeamName} className="text-xs text-gray-400">Cancel</button>
-                          </div>
-                        ) : (
-                          <button onClick={() => handleStartEditTeamName(m.fantasyTeamId, m.teamName ?? "")} className="text-gray-700 hover:text-[#2563EB] cursor-pointer" title="Click to edit">
-                            {m.teamName ?? "—"}
-                          </button>
-                        )}
-                      </td>
-                      <td className="py-2 px-3 text-right">
-                        <button onClick={() => handleRemoveMember(m.id, m.displayName ?? "Unknown")} className="text-red-400 hover:text-red-600 transition-colors" title="Remove member">
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      <RankingTable<LeagueMember>
+        data={members}
+        columns={getLeagueMembersColumns({
+          editingTeamId,
+          editingTeamName,
+          onEditingTeamNameChange: setEditingTeamName,
+          onStartEdit: handleStartEditTeamName,
+          onSaveEdit: handleSaveTeamName,
+          onCancelEdit: handleCancelEditTeamName,
+          onRemove: handleRemoveMember,
+        })}
+        rankField="draftOrder"
+        initialSortKey="draftOrder"
+        initialSortDirection="asc"
+        showRankColors={false}
+        isLoading={membersLoading}
+        emptyMessage="No members yet. Share the invite link above!"
+        customHeader={
+          <div className="card-header">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold">Members ({members.length})</h2>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="bg-[#FACC15]"
+                onClick={() => {
+                  navigator.clipboard.writeText(`${window.location.origin}/league/${leagueId}`);
+                  showFlash("Invite link copied to clipboard!");
+                }}
+              >
+                Copy Invite Link
+              </Button>
             </div>
-          )}
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* ── Draft Management ───────────────────────────────────────────────── */}
       <div className="fantasy-card">
@@ -402,14 +430,14 @@ const LeagueSettingsPage = () => {
               <div className="flex flex-wrap gap-4 items-end">
                 <div><label className="block text-xs text-gray-500 mb-1">Total Rounds</label><input type="number" value={totalRounds} onChange={(e) => setTotalRounds(Math.max(1, parseInt(e.target.value) || 1))} min={1} max={30} className="w-24 px-3 py-2 border-2 border-[#1A1A1A] rounded-none focus:ring-2 focus:ring-[#2563EB]/40 focus:border-[#2563EB] outline-none text-center" /></div>
                 <div className="flex items-center gap-2"><input type="checkbox" id="snakeDraft" checked={snakeDraft} onChange={(e) => setSnakeDraft(e.target.checked)} className="w-4 h-4 text-[#2563EB] border-gray-300 rounded-none focus:ring-[#2563EB]" /><label htmlFor="snakeDraft" className="text-sm text-gray-700">Snake Draft</label></div>
-                <button onClick={handleStartFullDraft} disabled={startingDraft || members.length < 2} className="btn-gradient disabled:opacity-50 disabled:cursor-not-allowed">
+                <Button onClick={handleStartFullDraft} disabled={startingDraft || members.length < 2}>
                   {startingDraft ? (
                     <span className="flex items-center gap-2">
                       <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
                       Setting up draft...
                     </span>
                   ) : "Start Draft"}
-                </button>
+                </Button>
               </div>
               {members.length < 2 && (
                 <p className="text-sm text-yellow-700">Need at least 2 league members to start ({members.length} currently)</p>
@@ -426,13 +454,13 @@ const LeagueSettingsPage = () => {
               <div className="flex flex-wrap gap-3">
                 {(session.status === "active" || session.status === "paused") && (
                   <>
-                    <button onClick={handlePauseResume} className="btn-secondary-enhanced">{session.status === "active" ? "Pause Draft" : "Resume Draft"}</button>
-                    <Link to={`/league/${leagueId}/draft`} className="btn-gradient inline-flex items-center">Open Draft Board<svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg></Link>
+                    <Button variant="secondary" onClick={handlePauseResume}>{session.status === "active" ? "Pause Draft" : "Resume Draft"}</Button>
+                    <Link to={`/league/${leagueId}/draft`} className="brutal-btn brutal-btn-primary px-5 py-2.5 text-sm inline-flex items-center">Open Draft Board<svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg></Link>
                   </>
                 )}
               </div>
               <div className="mt-3">
-                <button onClick={handleDeleteDraftSession} className="text-sm px-4 py-2 rounded-none border-2 border-red-300 text-red-600 hover:bg-red-50 hover:border-red-400 transition-all font-medium cursor-pointer">Delete Draft Session</button>
+                <Button variant="danger" size="sm" onClick={handleDeleteDraftSession}>Delete Draft Session</Button>
               </div>
             </>
           )}
@@ -544,7 +572,7 @@ const LeagueSettingsPage = () => {
                                   <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 bg-gray-200 text-gray-600">{tp.sleeper.position}</span>
                                   <span className="text-xs text-gray-400">{tp.sleeper.nhl_team}</span>
                                 </div>
-                                <button onClick={() => handleDeleteSleeper(tp.sleeper!.nhl_id, tp.sleeper!.name)} className="text-red-400 hover:text-red-600 hover:bg-red-50 rounded-none px-2 py-1 text-xs font-medium transition-colors">Remove</button>
+                                <button onClick={() => handleDeleteSleeper(tp.sleeper!.id, tp.sleeper!.name)} className="text-red-400 hover:text-red-600 hover:bg-red-50 rounded-none px-2 py-1 text-xs font-medium transition-colors">Remove</button>
                               </div>
                             )}
                           </>
@@ -563,9 +591,9 @@ const LeagueSettingsPage = () => {
       <div className="fantasy-card">
         <div className="card-header"><h2 className="text-xl font-bold text-red-400">Danger Zone</h2></div>
         <div className="p-6">
-          <button onClick={handleDeleteLeague} className="text-sm px-4 py-2 rounded-none border-2 border-red-300 text-red-600 hover:bg-red-50 hover:border-red-400 transition-all font-medium cursor-pointer">
+          <Button variant="danger" size="sm" onClick={handleDeleteLeague}>
             Delete League
-          </button>
+          </Button>
           <p className="text-xs text-gray-400 mt-2">This will permanently delete the league and all associated data.</p>
         </div>
       </div>

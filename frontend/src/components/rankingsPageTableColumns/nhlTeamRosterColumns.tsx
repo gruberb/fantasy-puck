@@ -1,6 +1,6 @@
 import type { Column } from "@/components/common/RankingTable/types";
 import type { NhlTeamRosterRow } from "@/types/leagueStats";
-import { getNHLTeamUrlSlug } from "@/utils/nhlTeams";
+import { nhlTeamUrl } from "@/utils/nhlTeams";
 
 /**
  * Column set for the "NHL Teams" table on /stats — one row per NHL
@@ -30,7 +30,7 @@ export function useNhlTeamRosterColumns(): Column[] {
             )}
             <div>
               <a
-                href={`https://www.nhl.com/${getNHLTeamUrlSlug(team.nhlTeam)}`}
+                href={nhlTeamUrl(team.nhlTeam)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="font-bold text-base text-[#1A1A1A] hover:text-[#2563EB]"

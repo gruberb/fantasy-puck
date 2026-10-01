@@ -6,16 +6,22 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
 
+use fantasy_hockey::api::routes::AppState;
 use fantasy_hockey::config::Config;
+use fantasy_hockey::domain::ports::prediction::PredictionService;
+use fantasy_hockey::infra::db::nhl_mirror;
 use fantasy_hockey::infra::jobs::historical_seed::seed_historical_skaters_if_empty;
 use fantasy_hockey::infra::jobs::playoff_ingest::{
     ingest_playoff_games_for_range, is_playoff_skater_game_stats_empty,
 };
 use fantasy_hockey::infra::jobs::scheduler;
-use fantasy_hockey::infra::jobs::scheduler::{init_rankings_scheduler, populate_historical_rankings};
-use fantasy_hockey::domain::ports::prediction::PredictionService;
+use fantasy_hockey::infra::jobs::scheduler::{
+    init_rankings_scheduler, populate_historical_rankings,
+};
 use fantasy_hockey::infra::jobs::{live_poller, meta_poller};
-use fantasy_hockey::infra::prediction::claude::{ClaudeNarrator, NullNarrator};
+use fantasy_hockey::infra::prediction::narrator::{LlmNarrator, NullNarrator};
+use fantasy_hockey::infra::prediction::openrouter::OpenRouterClient;
+use fantasy_hockey::ws::draft_hub::DraftHub;
 use fantasy_hockey::FantasyDb;
 use fantasy_hockey::{api, NhlClient};
 
@@ -26,8 +32,8 @@ struct App {
     #[arg(default_value = "serve")]
     command: String,
 
-    /// Port to listen on
-    #[arg(short, long, default_value = "3000")]
+    /// Port to listen on; overrides `PORT` from the environment.
+    #[arg(short, long)]
     port: Option<u16>,
 }
 
@@ -58,8 +64,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize season config from typed Config (populates OnceLock accessors)
     api::init_season_config(&config);
-    info!("Season config: {} game_type={} playoffs={} end={}",
-        api::season(), api::game_type(), api::playoff_start(), api::season_end());
+    info!(
+        "Season config: {} game_type={} playoffs={} end={}",
+        api::season(),
+        api::game_type(),
+        api::playoff_start(),
+        api::season_end()
+    );
 
     // Override port from CLI arg if provided
     let config = if let Some(port) = args.port {
@@ -90,13 +101,40 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("database migration failed: {}", e))?;
     info!("Database migrations up to date");
 
-    let today = chrono::Utc::now()
-        .with_timezone(&chrono_tz::America::New_York)
-        .format("%Y-%m-%d")
-        .to_string();
+    let today = fantasy_hockey::domain::time::hockey_today();
 
-    // Initialize the rankings scheduler
-    init_rankings_scheduler(Arc::new(db.clone()), Arc::new(nhl_client.clone())).await?;
+    // Without an OpenRouter key, narrative-bearing handlers degrade to
+    // "no narrative" rather than failing the whole server boot.
+    let llm = config
+        .openrouter_api_key
+        .clone()
+        .map(|key| OpenRouterClient::new(key, config.openrouter_model.clone()))
+        .transpose()?
+        .map(Arc::new);
+    let prediction: Arc<dyn PredictionService> = match &llm {
+        Some(client) => {
+            info!(
+                "Prediction adapter: LlmNarrator via OpenRouter ({})",
+                client.model()
+            );
+            Arc::new(LlmNarrator::new(client.clone()))
+        }
+        None => {
+            info!("Prediction adapter: NullNarrator (OPENROUTER_API_KEY unset)");
+            Arc::new(NullNarrator)
+        }
+    };
+    let state = Arc::new(AppState {
+        db: db.clone(),
+        nhl_client: nhl_client.clone(),
+        config: config.clone(),
+        draft_hub: DraftHub::new(),
+        prediction,
+        llm,
+    });
+
+    // Held for the process lifetime so the cron jobs stay registered.
+    let _scheduler = init_rankings_scheduler(state.clone()).await?;
 
     // Seed historical playoff skater totals if the table is empty. Runs
     // in the background so startup latency isn't affected; idempotent.
@@ -117,7 +155,10 @@ async fn main() -> anyhow::Result<()> {
             let start = api::playoff_start().to_string();
             let end = today.as_str().min(api::season_end()).to_string();
             tokio::spawn(async move {
-                info!("Background: populating historical rankings from {} to {}", start, end);
+                info!(
+                    "Background: populating historical rankings from {} to {}",
+                    start, end
+                );
                 if let Err(e) = populate_historical_rankings(&db_bg, &nhl_bg, &start, &end).await {
                     tracing::error!("Background backfill failed: {}", e);
                 } else {
@@ -130,25 +171,28 @@ async fn main() -> anyhow::Result<()> {
         // today if the table is empty. Idempotent (UPSERT on conflict),
         // so a rerun is cheap but the emptiness gate avoids hitting the
         // NHL API unnecessarily on every deploy.
+        // A DB error must not trigger a full NHL backfill.
         let empty = is_playoff_skater_game_stats_empty(&db)
             .await
-            .unwrap_or(true);
+            .unwrap_or_else(|e| {
+                tracing::error!("playoff skater stats emptiness check failed: {e}");
+                false
+            });
         if empty {
             let db_bg = db.clone();
             let nhl_bg = Arc::new(nhl_client.clone());
             let start = api::playoff_start().to_string();
             let end = today.as_str().min(api::season_end()).to_string();
             tokio::spawn(async move {
-                info!("Background: backfilling playoff skater stats from {} to {}", start, end);
+                info!(
+                    "Background: backfilling playoff skater stats from {} to {}",
+                    start, end
+                );
                 match ingest_playoff_games_for_range(&db_bg, &nhl_bg, &start, &end).await {
-                    Ok(rows) => info!(
-                        rows,
-                        "Background: playoff skater stats backfill complete"
-                    ),
-                    Err(e) => tracing::error!(
-                        "Background: playoff skater stats backfill failed: {}",
-                        e
-                    ),
+                    Ok(rows) => info!(rows, "Background: playoff skater stats backfill complete"),
+                    Err(e) => {
+                        tracing::error!("Background: playoff skater stats backfill failed: {}", e)
+                    }
                 }
             });
         }
@@ -204,27 +248,24 @@ async fn main() -> anyhow::Result<()> {
         let db_seed = db.clone();
         let nhl_seed = Arc::new(nhl_client.clone());
         tokio::spawn(async move {
-            // Wait long enough for meta_poller's first tick to land
-            // today's schedule into nhl_games — rehydrate iterates
-            // those rows for boxscores. Stagger is 15 s; +30 s gives
-            // the schedule fetch + upsert time to complete.
-            tokio::time::sleep(std::time::Duration::from_secs(45)).await;
-            let count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM nhl_player_game_stats",
-            )
-            .fetch_one(db_seed.pool())
-            .await
-            .unwrap_or(0);
-            if count > 0 {
-                tracing::debug!(
-                    rows = count,
-                    "auto-seed: nhl_player_game_stats has data, skipping rehydrate"
-                );
-                return;
+            // Same delay as the live poller: by then meta_poller's first
+            // tick has landed today's schedule, which rehydrate iterates.
+            tokio::time::sleep(fantasy_hockey::tuning::live_mirror::LIVE_POLL_STARTUP_DELAY).await;
+            match nhl_mirror::player_game_stats_is_empty(db_seed.pool()).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::debug!(
+                        "auto-seed: nhl_player_game_stats has data, skipping rehydrate"
+                    );
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("auto-seed: emptiness check failed, skipping rehydrate: {e}");
+                    return;
+                }
             }
             info!("auto-seed: nhl_player_game_stats is empty; running rehydrate to seed mirror");
-            let summary =
-                fantasy_hockey::infra::jobs::rehydrate::run(&db_seed, nhl_seed).await;
+            let summary = fantasy_hockey::infra::jobs::rehydrate::run(&db_seed, nhl_seed).await;
             info!(
                 games = summary.games_upserted,
                 player_rows = summary.boxscore_player_rows,
@@ -235,26 +276,10 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Compose the prediction adapter. In production with
-    // `ANTHROPIC_API_KEY` set we use the Claude narrator; without a
-    // key we wire a null adapter so handlers that optionally
-    // include a narrative degrade to "no narrative" rather than
-    // failing the whole server boot.
-    let prediction: Arc<dyn PredictionService> = match ClaudeNarrator::from_env() {
-        Some(n) => {
-            info!("Prediction adapter: ClaudeNarrator");
-            Arc::new(n)
-        }
-        None => {
-            info!("Prediction adapter: NullNarrator (ANTHROPIC_API_KEY unset)");
-            Arc::new(NullNarrator)
-        }
-    };
-
     // Run the API server. When the server's graceful shutdown fires
     // we cancel the pollers so they stop cleanly on SIGTERM.
     info!("Starting web server on port {}", config.port);
-    let result = api::run_server(db, nhl_client, config, prediction).await;
+    let result = api::run_server(state).await;
     poller_cancel.cancel();
     result
 }

@@ -9,7 +9,8 @@ use tracing::info;
 
 use crate::api::response::{json_success, ApiResponse};
 use crate::api::routes::AppState;
-use crate::auth::middleware::AuthUser;
+use crate::auth::middleware::AdminUser;
+use crate::domain::models::nhl::GAME_TYPE_REGULAR;
 use crate::error::{Error, Result};
 use crate::infra::calibrate::{
     calibrate_season, calibrate_sweep, CalibrationGrid, CalibrationReport, SweepReport,
@@ -21,13 +22,10 @@ use crate::infra::jobs::rehydrate::{self, RehydrateSummary};
 use crate::infra::jobs::scheduler;
 
 pub async fn process_rankings(
-    auth: AuthUser,
+    _admin: AdminUser,
     State(state): State<Arc<AppState>>,
     Path(date): Path<String>,
 ) -> Result<Json<ApiResponse<String>>> {
-    if !auth.is_admin {
-        return Err(Error::Forbidden("Admin access required".into()));
-    }
     // Process rankings for all leagues
     let league_ids = state.db.get_all_league_ids().await?;
     for league_id in &league_ids {
@@ -47,13 +45,10 @@ pub struct InvalidateCacheParams {
 }
 
 pub async fn invalidate_cache(
-    auth: AuthUser,
+    _admin: AdminUser,
     State(state): State<Arc<AppState>>,
     Query(params): Query<InvalidateCacheParams>,
 ) -> Result<Json<ApiResponse<String>>> {
-    if !auth.is_admin {
-        return Err(Error::Forbidden("Admin access required".into()));
-    }
     match params.scope.as_deref() {
         Some("all") => {
             state.db.cache().invalidate_all().await?;
@@ -63,7 +58,7 @@ pub async fn invalidate_cache(
             ))
         }
         Some("today") => {
-            let today = crate::api::handlers::insights::hockey_today();
+            let today = crate::domain::time::hockey_today();
             state.db.cache().invalidate_by_date(&today).await?;
             Ok(json_success(format!(
                 "Cache invalidated for today ({})",
@@ -75,7 +70,7 @@ pub async fn invalidate_cache(
             Ok(json_success(format!("Cache invalidated for date {}", date)))
         }
         None => {
-            let today = crate::api::handlers::insights::hockey_today();
+            let today = crate::domain::time::hockey_today();
             let cache_key = format!("match_day:{}", today);
             state.db.cache().invalidate_cache(&cache_key).await?;
             Ok(json_success(format!(
@@ -103,13 +98,10 @@ pub struct BackfillHistoricalParams {
 /// for future Elo calibration work. Safe to re-run; upserts are
 /// idempotent on `(game_id, player_id)` and `game_id`.
 pub async fn backfill_historical_playoffs(
-    auth: AuthUser,
+    _admin: AdminUser,
     State(state): State<Arc<AppState>>,
     Query(params): Query<BackfillHistoricalParams>,
 ) -> Result<Json<ApiResponse<String>>> {
-    if !auth.is_admin {
-        return Err(Error::Forbidden("Admin access required".into()));
-    }
     let nhl = Arc::new(state.nhl_client.clone());
     let rows = ingest_playoff_games_for_range(&state.db, &nhl, &params.start, &params.end).await?;
     info!(
@@ -140,17 +132,16 @@ pub struct RebackfillParams {
 /// `short_year` is derived automatically from the 8-digit season
 /// (e.g. 20222023 → 2023) since that's what the series-games URL needs.
 pub async fn rebackfill_carousel(
-    auth: AuthUser,
+    _admin: AdminUser,
     State(state): State<Arc<AppState>>,
     Query(params): Query<RebackfillParams>,
 ) -> Result<Json<ApiResponse<String>>> {
-    if !auth.is_admin {
-        return Err(Error::Forbidden("Admin access required".into()));
-    }
     let nhl = Arc::new(state.nhl_client.clone());
-    let rows =
-        rebackfill_playoff_season_via_carousel(&state.db, &nhl, params.season).await?;
-    info!(season = params.season, rows, "carousel-driven rebackfill complete");
+    let rows = rebackfill_playoff_season_via_carousel(&state.db, &nhl, params.season).await?;
+    info!(
+        season = params.season,
+        rows, "carousel-driven rebackfill complete"
+    );
     Ok(json_success(format!(
         "Rebackfilled {} completed playoff games for season {}",
         rows, params.season
@@ -173,13 +164,10 @@ pub struct CalibrateParams {
 /// …) — if the aggregate Brier looks off, that's the signal we need
 /// to invest in grid-search tuning.
 pub async fn calibrate(
-    auth: AuthUser,
+    _admin: AdminUser,
     State(state): State<Arc<AppState>>,
     Query(params): Query<CalibrateParams>,
 ) -> Result<Json<ApiResponse<CalibrationReport>>> {
-    if !auth.is_admin {
-        return Err(Error::Forbidden("Admin access required".into()));
-    }
     let report = calibrate_season(&state.db, &state.nhl_client, params.season).await?;
     info!(
         season = params.season,
@@ -256,15 +244,13 @@ fn parse_usize_list(s: Option<&str>) -> std::result::Result<Vec<usize>, String> 
 /// goalies + 5000-trial sim × every league) easily exceeds browser or
 /// Fly edge timeouts. Watch the server logs for per-league completion.
 pub async fn prewarm_cache(
-    auth: AuthUser,
+    _admin: AdminUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<String>>> {
-    if !auth.is_admin {
-        return Err(Error::Forbidden("Admin access required".into()));
-    }
-    let db = state.db.clone();
-    let nhl = state.nhl_client.clone();
+    let state_bg = state.clone();
     tokio::spawn(async move {
+        let db = &state_bg.db;
+        let nhl = &state_bg.nhl_client;
         info!("Admin-triggered pre-warm starting");
         // Refresh Edge opportunistically, but respect the freshness
         // gate. Operators commonly hit this endpoint after deploys or
@@ -272,8 +258,8 @@ pub async fn prewarm_cache(
         // after the cron refresh leaves the NHL rate-limit window hot
         // before roster and leaderboard prewarm starts.
         let nhl_arc = std::sync::Arc::new(nhl.clone());
-        let _ = crate::infra::jobs::edge_refresher::run(&db, nhl_arc, false).await;
-        scheduler::prewarm_derived_payloads(&db, &nhl).await;
+        let _ = crate::infra::jobs::edge_refresher::run(db, nhl_arc, false).await;
+        scheduler::prewarm_derived_payloads(&state_bg).await;
         info!("Admin-triggered pre-warm complete");
     });
     Ok(json_success(
@@ -290,20 +276,15 @@ pub async fn prewarm_cache(
 /// Grid is capped at 200 cells to keep a misconfigured sweep from
 /// pegging the server for hours.
 pub async fn calibrate_sweep_handler(
-    auth: AuthUser,
+    _admin: AdminUser,
     State(state): State<Arc<AppState>>,
     Query(params): Query<CalibrateSweepParams>,
 ) -> Result<Json<ApiResponse<SweepReport>>> {
-    if !auth.is_admin {
-        return Err(Error::Forbidden("Admin access required".into()));
-    }
     let grid = CalibrationGrid {
-        points_scale: parse_f32_list(params.points_scale.as_deref())
-            .map_err(Error::Validation)?,
+        points_scale: parse_f32_list(params.points_scale.as_deref()).map_err(Error::Validation)?,
         shrinkage: parse_f32_list(params.shrinkage.as_deref()).map_err(Error::Validation)?,
         k_factor: parse_f32_list(params.k_factor.as_deref()).map_err(Error::Validation)?,
-        home_ice_elo: parse_f32_list(params.home_ice_elo.as_deref())
-            .map_err(Error::Validation)?,
+        home_ice_elo: parse_f32_list(params.home_ice_elo.as_deref()).map_err(Error::Validation)?,
         trials: parse_usize_list(params.trials.as_deref()).map_err(Error::Validation)?,
     };
     let report = calibrate_sweep(&state.db, &state.nhl_client, params.season, &grid).await?;
@@ -332,13 +313,9 @@ pub async fn calibrate_sweep_handler(
 /// on the request is fine — it finishes well inside any reasonable
 /// edge timeout.
 pub async fn refresh_club_stats(
-    auth: AuthUser,
+    _admin: AdminUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<ClubStatsRefreshSummary>>> {
-    if !auth.is_admin {
-        return Err(Error::Forbidden("Admin access required".into()));
-    }
-
     let season = crate::api::season();
     let teams = state.nhl_client.get_all_teams().await?;
     let pool = state.db.pool();
@@ -351,12 +328,16 @@ pub async fn refresh_club_stats(
         if i > 0 {
             tokio::time::sleep(crate::tuning::live_mirror::ROSTER_FETCH_DELAY).await;
         }
-        match state.nhl_client.get_club_stats(team, season, 2).await {
+        match state
+            .nhl_client
+            .get_club_stats(team, season, GAME_TYPE_REGULAR)
+            .await
+        {
             Ok(stats) => {
                 match crate::infra::db::nhl_mirror::upsert_team_club_stats(
                     pool,
                     season as i32,
-                    2,
+                    GAME_TYPE_REGULAR as i16,
                     team,
                     &stats.skaters,
                 )
@@ -402,12 +383,9 @@ pub struct ClubStatsRefreshSummary {
 ///
 /// Admin-only. Returns a JSON summary of row counts.
 pub async fn rehydrate_mirror(
-    auth: AuthUser,
+    _admin: AdminUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<RehydrateSummary>>> {
-    if !auth.is_admin {
-        return Err(Error::Forbidden("Admin access required".into()));
-    }
     let nhl = Arc::new(state.nhl_client.clone());
     let summary = rehydrate::run(&state.db, nhl).await;
     Ok(json_success(summary))

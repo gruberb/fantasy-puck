@@ -69,7 +69,7 @@ impl DailyRanking {
             .map(|performance| {
                 // Get top 3 players by points
                 let mut players = performance.player_performances;
-                players.sort_by(|a, b| b.points.cmp(&a.points));
+                players.sort_by_key(|x| std::cmp::Reverse(x.points));
                 let top_players = players
                     .into_iter()
                     .take(3)
@@ -94,7 +94,7 @@ impl DailyRanking {
             .collect::<Vec<_>>();
 
         // Sort and assign ranks
-        rankings.sort_by(|a, b| b.daily_points.cmp(&a.daily_points));
+        rankings.sort_by_key(|x| std::cmp::Reverse(x.daily_points));
         for (i, ranking) in rankings.iter_mut().enumerate() {
             ranking.rank = i + 1;
         }
@@ -129,4 +129,3 @@ pub struct PlayerInGame {
     pub nhl_team: String,
     pub position: String,
 }
-

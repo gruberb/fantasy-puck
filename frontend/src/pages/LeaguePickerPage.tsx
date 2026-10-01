@@ -1,14 +1,13 @@
 import { useEffect, useState, useRef } from "react";
 import { useNavigate, Link, useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { useLeague } from "@/contexts/LeagueContext";
-import { LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
-import { useAuth } from "@/contexts/AuthContext";
+import { useLeague } from "@/contexts/use-league";
+import { Button, LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
+import { useAuth } from "@/contexts/use-auth";
 import { api } from "@/api/client";
 import { formatSeason } from "@/utils/format";
-import { APP_CONFIG } from "@/config";
-
-const STORAGE_KEY = "lastViewedLeagueId";
+import { APP_CONFIG, LAST_VIEWED_LEAGUE_KEY } from "@/config";
+import { leagueKeys, membershipKeys } from "@/features/draft";
 
 const LeaguePickerPage = () => {
   const navigate = useNavigate();
@@ -38,8 +37,8 @@ const LeaguePickerPage = () => {
     try {
       const league = await api.createLeague(newLeagueName.trim(), APP_CONFIG.DEFAULT_SEASON) as { id: string };
       await api.joinLeague(league.id, newTeamName.trim());
-      await queryClient.invalidateQueries({ queryKey: ["leagues"] });
-      await queryClient.invalidateQueries({ queryKey: ["memberships"] });
+      await queryClient.invalidateQueries({ queryKey: leagueKeys.all });
+      await queryClient.invalidateQueries({ queryKey: membershipKeys.all });
       setNewLeagueName("");
       setNewTeamName("");
       setShowCreateForm(false);
@@ -57,8 +56,8 @@ const LeaguePickerPage = () => {
     setJoinError(null);
     try {
       await api.joinLeague(leagueId, joinTeamName.trim());
-      await queryClient.invalidateQueries({ queryKey: ["leagues"] });
-      await queryClient.invalidateQueries({ queryKey: ["memberships"] });
+      await queryClient.invalidateQueries({ queryKey: leagueKeys.all });
+      await queryClient.invalidateQueries({ queryKey: membershipKeys.all });
       setJoiningLeagueId(null);
       setJoinTeamName("");
       navigate(`/league/${leagueId}`);
@@ -85,7 +84,7 @@ const LeaguePickerPage = () => {
     }
 
     if (user && myLeagues.length > 0) {
-      const lastViewed = localStorage.getItem(STORAGE_KEY);
+      const lastViewed = localStorage.getItem(LAST_VIEWED_LEAGUE_KEY);
       const match = lastViewed
         ? myLeagues.find((l) => l.id === lastViewed)
         : null;
@@ -198,13 +197,12 @@ const LeaguePickerPage = () => {
                     <p className="text-sm text-red-600 mb-3">{joinError}</p>
                   )}
                   <div className="flex gap-2">
-                    <button
+                    <Button
                       onClick={() => handleJoinLeague(league.id)}
                       disabled={joining || !joinTeamName.trim()}
-                      className="btn-gradient disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                     >
                       {joining ? "Joining..." : "Join League"}
-                    </button>
+                    </Button>
                     <button
                       onClick={() => { setJoiningLeagueId(null); setJoinTeamName(""); setJoinError(null); }}
                       className="text-sm text-gray-500 uppercase font-bold hover:text-[#1A1A1A] transition-colors"
@@ -226,12 +224,11 @@ const LeaguePickerPage = () => {
                   </svg>
                 </Link>
                 {canJoin && !isJoiningThis && (
-                  <button
+                  <Button
                     onClick={() => { setJoiningLeagueId(league.id); setJoinTeamName(""); setJoinError(null); }}
-                    className="btn-gradient text-sm"
                   >
                     Join
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -266,13 +263,12 @@ const LeaguePickerPage = () => {
                   <p className="text-sm text-red-600 mb-3">{createError}</p>
                 )}
                 <div className="flex gap-2">
-                  <button
+                  <Button
                     onClick={handleCreateLeague}
                     disabled={creating || !newLeagueName.trim() || !newTeamName.trim()}
-                    className="btn-gradient disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                   >
                     {creating ? "Creating..." : "Create & Join"}
-                  </button>
+                  </Button>
                   <button
                     onClick={() => {
                       setShowCreateForm(false);

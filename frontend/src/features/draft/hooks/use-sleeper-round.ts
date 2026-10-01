@@ -1,9 +1,9 @@
 import { useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import { draftApi } from '../api/draft-api';
+import { draftApi } from '@/features/draft/api/draft-api';
 import { draftSessionQueryKey } from './use-draft-session';
-import { getPickerForPick } from '../types';
-import type { DraftSession, LeagueMember, PlayerPoolEntry } from '../types';
+import { getPickerForPick } from '@/features/draft/types';
+import type { DraftSession, LeagueMember, PlayerPoolEntry } from '@/features/draft/types';
 
 export interface SleeperPick {
   id: number;

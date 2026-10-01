@@ -1,7 +1,7 @@
 import { SkaterStats } from "@/types/skaters";
 import { usePlayoffsData } from "@/features/rankings";
 import RankingTable from "@/components/common/RankingTable";
-import { getNHLTeamUrlSlug } from "@/utils/nhlTeams";
+import { nhlPlayerProfileUrl, nhlTeamUrl } from "@/utils/nhlTeams";
 
 interface PlayerRosterProps {
   players: SkaterStats[];
@@ -36,7 +36,7 @@ export default function PlayerRoster({ players }: PlayerRosterProps) {
             <div>
               <div className="ml-4">
                 <a
-                  href={`https://www.nhl.com/player/${player.nhlId}`}
+                  href={nhlPlayerProfileUrl(player.nhlId)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-gray-900 hover:text-[#2563EB] hover:underline flex items-center font-medium"
@@ -56,7 +56,7 @@ export default function PlayerRoster({ players }: PlayerRosterProps) {
                 <span>
                   {player.nhlTeam ? (
                     <a
-                      href={`https://www.nhl.com/${getNHLTeamUrlSlug(player.nhlTeam)}`}
+                      href={nhlTeamUrl(player.nhlTeam)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="hover:text-[#2563EB] hover:underline"

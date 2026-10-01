@@ -1,53 +1,36 @@
-//! Anthropic `/v1/messages` adapter implementing
+//! OpenRouter-backed adapter implementing
 //! [`crate::domain::ports::prediction::PredictionService`].
 //!
-//! All production narrative generation routes through this type.
-//! The HTTP client is built once at construction time; each request
-//! spans one Claude round-trip, capped by
-//! [`crate::tuning::http::CLAUDE_TIMEOUT`].
+//! All production team-diagnosis narratives route through this type.
+//! Each request is one round-trip through
+//! [`super::openrouter::OpenRouterClient`], capped by
+//! [`crate::tuning::http::LLM_TIMEOUT`].
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use reqwest::Client;
-use tracing::{error, warn};
+use tracing::warn;
 
+use super::openrouter::OpenRouterClient;
 use crate::domain::ports::prediction::PredictionService;
 
-const CLAUDE_API_URL: &str = "https://api.anthropic.com/v1/messages";
-const CLAUDE_API_VERSION: &str = "2023-06-01";
-const MODEL: &str = "claude-sonnet-4-6";
-// Large enough for four markdown sections with bullet lists in the
-// Player-by-Player block — a 10-skater roster can run to ~10 bullets.
-const MAX_TOKENS: u32 = 2600;
-
-pub struct ClaudeNarrator {
-    api_key: String,
-    http: Client,
+pub struct LlmNarrator {
+    client: Arc<OpenRouterClient>,
 }
 
-impl ClaudeNarrator {
-    /// Build a `ClaudeNarrator` from the `ANTHROPIC_API_KEY` env var.
-    /// Returns `None` if the key is unset — in that case the main
-    /// composition root falls back to a [`NullNarrator`] so the rest
-    /// of the server still boots.
-    pub fn from_env() -> Option<Self> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").ok()?;
-        let http = Client::builder()
-            .timeout(crate::tuning::http::CLAUDE_TIMEOUT)
-            .build()
-            .ok()?;
-        Some(Self { api_key, http })
+impl LlmNarrator {
+    pub fn new(client: Arc<OpenRouterClient>) -> Self {
+        Self { client }
     }
 }
 
 #[async_trait]
-impl PredictionService for ClaudeNarrator {
+impl PredictionService for LlmNarrator {
     async fn team_diagnosis(
         &self,
         team: &crate::api::dtos::teams::TeamPointsResponse,
     ) -> Option<String> {
-        let Some(diagnosis) = team.diagnosis.as_ref() else {
-            return None;
-        };
+        let diagnosis = team.diagnosis.as_ref()?;
         let payload = serde_json::to_string(team).ok()?;
         let headline = build_team_diagnosis_headline(team, diagnosis);
 
@@ -59,64 +42,27 @@ impl PredictionService for ClaudeNarrator {
             TEAM_DIAGNOSIS_SYSTEM_PROMPT
         };
 
-        let body = serde_json::json!({
-            "model": MODEL,
-            "max_tokens": MAX_TOKENS,
-            "system": system,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": format!(
-                        "=== HEADLINE ===\n{}\n\n=== FULL PAYLOAD ===\n{}",
-                        headline, payload
-                    )
-                }
-            ]
-        });
+        let user = format!(
+            "=== HEADLINE ===\n{}\n\n=== FULL PAYLOAD ===\n{}",
+            headline, payload
+        );
 
-        let http_response = match self
-            .http
-            .post(CLAUDE_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", CLAUDE_API_VERSION)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
+        match self
+            .client
+            .complete(system, &user, crate::tuning::llm::TEAM_DIAGNOSIS_MAX_TOKENS)
             .await
         {
-            Ok(r) => r,
+            Ok(text) => Some(text),
             Err(e) => {
-                warn!("team_diagnosis: Claude API call failed: {}", e);
-                return None;
+                warn!("team_diagnosis: {e:#}");
+                None
             }
-        };
-
-        if !http_response.status().is_success() {
-            let status = http_response.status();
-            let body = http_response.text().await.unwrap_or_default();
-            warn!("team_diagnosis: Claude returned {}: {}", status, body);
-            return None;
         }
-
-        let body: serde_json::Value = match http_response.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                error!("team_diagnosis: failed to parse Claude response: {}", e);
-                return None;
-            }
-        };
-        body.get("content")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|block| block.get("text"))
-            .and_then(|t| t.as_str())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
     }
 }
 
-/// Fallback implementation used when `ANTHROPIC_API_KEY` is unset
-/// (local dev without Anthropic credentials). Every narrative call
+/// Fallback implementation used when `OPENROUTER_API_KEY` is unset
+/// (local dev without OpenRouter credentials). Every narrative call
 /// returns `None` so the Pulse page renders without the narrative
 /// block rather than refusing to start the server.
 pub struct NullNarrator;

@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
-import { getNHLTeamUrlSlug } from "@/utils/nhlTeams";
-import { useLeague } from "@/contexts/LeagueContext";
+import { nhlPlayerProfileUrl, nhlTeamUrl } from "@/utils/nhlTeams";
+import { useLeague } from "@/contexts/use-league";
 
 interface PlayerCardProps {
   player: {
@@ -73,7 +73,7 @@ const PlayerCard = ({
           <div className={`${nameTextSize} font-medium text-gray-800 truncate`}>
             {player.nhlId ? (
               <a
-                href={`https://www.nhl.com/player/${player.nhlId}`}
+                href={nhlPlayerProfileUrl(player.nhlId)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-[#2563EB] hover:underline"
@@ -100,7 +100,7 @@ const PlayerCard = ({
             <span className="truncate">
               {player.nhlTeam ? (
                 <a
-                  href={`https://www.nhl.com/${getNHLTeamUrlSlug(player.nhlTeam)}`}
+                  href={nhlTeamUrl(player.nhlTeam)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="hover:text-[#2563EB] hover:underline"

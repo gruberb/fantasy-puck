@@ -4,17 +4,20 @@
 //!   projection model. Pure data adapter: pulls features out of the
 //!   playoff-history tables and hands them to the pure-domain
 //!   simulator in `crate::domain::prediction`.
-//! - [`claude`] — Anthropic `/v1/messages` adapter. Implements
+//! - [`narrator`] — LLM narrative adapter. Implements
 //!   [`crate::domain::ports::prediction::PredictionService`] so
 //!   handlers never see a raw HTTP client. A future gRPC-backed
 //!   replacement can implement the same trait.
+//! - [`openrouter`] — OpenRouter chat-completions client used by
+//!   `narrator` and the Insights narratives.
 //!
-//! The Elo adapter and the Claude adapter both live under this
+//! The Elo adapter and the narrative adapter both live under this
 //! module because they are the two "prediction" edges of the
 //! system — different protocols, same architectural role.
 
-pub mod claude;
 pub mod elo;
+pub mod narrator;
+pub mod openrouter;
 pub mod race_odds_cache;
 
 // Keep the pre-Phase-5.5 call sites working (`use crate::infra::

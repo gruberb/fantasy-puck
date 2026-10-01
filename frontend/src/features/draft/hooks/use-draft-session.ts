@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { draftApi } from '../api/draft-api';
+import { draftApi } from '@/features/draft/api/draft-api';
 import { realtimeService } from '@/lib/realtime';
 import { draftPicksQueryKey } from './use-draft-picks';
 import { playerPoolQueryKey } from './use-player-pool';
-import type { DraftSession, DraftPick } from '../types';
+import { eligibleSleepersQueryKey, sleeperPicksQueryKey } from './use-sleeper-round';
+import type { DraftSession, DraftPick } from '@/features/draft/types';
 
 export const draftSessionQueryKey = (leagueId: string | null) =>
   ['draft', 'session', leagueId] as const;
@@ -54,8 +55,8 @@ export function useDraftSession(leagueId: string | null) {
         }
       },
       onSleeperUpdated: () => {
-        queryClient.invalidateQueries({ queryKey: ['draft', 'eligibleSleepers', sessionId] });
-        queryClient.invalidateQueries({ queryKey: ['draft', 'sleeperPicks', sessionId] });
+        queryClient.invalidateQueries({ queryKey: eligibleSleepersQueryKey(sessionId) });
+        queryClient.invalidateQueries({ queryKey: sleeperPicksQueryKey(sessionId) });
         if (leagueId) {
           queryClient.invalidateQueries({ queryKey: draftSessionQueryKey(leagueId) });
         }

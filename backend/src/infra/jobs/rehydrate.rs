@@ -1,5 +1,6 @@
-//! Admin "rehydrate" — run every poller step synchronously plus any
-//! one-shot backfills needed right after a deploy.
+//! Admin "rehydrate": run every mirror step (shared with the meta poller
+//! via [`super::mirror_steps`]) synchronously, plus the boxscore backfill
+//! needed right after a deploy.
 //!
 //! Reachable via `GET /api/admin/rehydrate`. Safe to call repeatedly
 //! (all writes are idempotent) but heavy on a cold mirror:
@@ -12,13 +13,16 @@ use std::sync::Arc;
 use serde::Serialize;
 use tracing::{info, warn};
 
+use crate::domain::models::nhl::GAME_TYPE_PLAYOFFS;
+use crate::domain::time::DATE_FORMAT;
 use crate::infra::db::{nhl_mirror, FantasyDb};
+use crate::infra::jobs::mirror_steps::{self, MirrorCtx, Step};
 use crate::infra::nhl::client::NhlClient;
 use crate::tuning::live_mirror;
 
 /// Summary shape returned to the admin caller. Counters are
-/// best-effort; individual failures are logged and the function
-/// keeps going rather than aborting the whole run.
+/// best-effort; individual failures are recorded in `errors` and the run
+/// keeps going rather than aborting.
 #[derive(Debug, Default, Serialize)]
 pub struct RehydrateSummary {
     pub games_upserted: usize,
@@ -27,6 +31,7 @@ pub struct RehydrateSummary {
     pub goalie_rows: usize,
     pub standings_rows: usize,
     pub rosters_upserted: usize,
+    pub club_stats_rows: usize,
     pub rosters_skipped_fresh: bool,
     pub bracket_captured: bool,
     pub aggregates_skipped_fresh: bool,
@@ -36,235 +41,154 @@ pub struct RehydrateSummary {
     pub errors: Vec<String>,
 }
 
+impl RehydrateSummary {
+    /// Records the error for a step and returns its output if it ran.
+    fn record<T>(&mut self, label: &str, result: crate::error::Result<Step<T>>) -> Option<T> {
+        match result {
+            Ok(Step::Ran(out)) => Some(out),
+            Ok(Step::Fresh) => None,
+            Err(e) => {
+                self.errors.push(format!("{label}: {e}"));
+                None
+            }
+        }
+    }
+}
+
 pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>) -> RehydrateSummary {
     let mut summary = RehydrateSummary::default();
-    let season = crate::api::season();
-    let game_type = crate::api::game_type();
+    let ctx = MirrorCtx {
+        db,
+        nhl: &nhl,
+        season: crate::api::season(),
+        game_type: crate::api::game_type(),
+    };
     let pool = db.pool();
 
-    // Freshness thresholds mirror meta_poller's cadences so hitting
-    // rehydrate twice back-to-back after the meta poller has
-    // populated everything is a cheap no-op rather than a 35-call
-    // fan-out. These can still be overridden by a cold-start boot
-    // where the tables are genuinely empty.
+    // Same cadences as the meta poller, so a rehydrate right after the
+    // poller populated everything is a cheap no-op.
     let schedule_ttl = live_mirror::META_POLL_INTERVAL;
     let agg_ttl =
         live_mirror::META_POLL_INTERVAL * live_mirror::AGGREGATES_REFRESH_EVERY_N_META_TICKS;
     let roster_ttl =
         live_mirror::META_POLL_INTERVAL * live_mirror::ROSTER_REFRESH_EVERY_N_META_TICKS;
 
-    // ---- Schedule: playoff start → today (+1). Per-date freshness
-    // gate so a repeat rehydrate skips dates the meta poller just
-    // wrote.
-    //
-    // ET-today, not UTC — same rationale as in meta_poller. NHL's
-    // schedule endpoint keys games by ET local date.
-    let today = chrono::Utc::now()
-        .with_timezone(&chrono_tz::America::New_York)
-        .date_naive();
-    let mut dates: Vec<String> = Vec::new();
-    let playoff_start = crate::api::playoff_start();
-    let start_naive = chrono::NaiveDate::parse_from_str(playoff_start, "%Y-%m-%d").unwrap_or(today);
-    let mut cursor = if start_naive <= today {
-        start_naive
-    } else {
-        today
+    // ---- Schedule and landings: playoff start (or today) through tomorrow.
+    let today = crate::domain::time::hockey_today_date();
+    let today_str = today.format(DATE_FORMAT).to_string();
+    let start = chrono::NaiveDate::parse_from_str(crate::api::playoff_start(), DATE_FORMAT)
+        .unwrap_or(today)
+        .min(today);
+    for date in start
+        .iter_days()
+        .take_while(|d| *d <= today + chrono::Duration::days(1))
+    {
+        let date = date.format(DATE_FORMAT).to_string();
+        let result =
+            mirror_steps::schedule_date(&ctx, &date, schedule_ttl, date == today_str).await;
+        if let Some(sync) = summary.record(&format!("schedule {date}"), result) {
+            summary.games_upserted += sync.upserted;
+            summary.games_cancelled += sync.cancelled;
+        }
+        match mirror_steps::landings_for_date(&ctx, &date).await {
+            Ok(n) => summary.landing_captures += n,
+            Err(e) => summary.errors.push(format!("landings {date}: {e}")),
+        }
+    }
+
+    // ---- Aggregates.
+    let mut any_aggregate_ran = false;
+    let result = mirror_steps::skater_leaderboard(&ctx, agg_ttl).await;
+    if let Some(n) = summary.record("skater leaderboard", result) {
+        summary.skater_rows = n;
+        any_aggregate_ran = true;
+    }
+    let result = mirror_steps::goalie_leaderboard(&ctx, agg_ttl).await;
+    if let Some(n) = summary.record("goalie leaderboard", result) {
+        summary.goalie_rows = n;
+        any_aggregate_ran = true;
+    }
+    let result = mirror_steps::standings(&ctx, agg_ttl).await;
+    if let Some(n) = summary.record("standings", result) {
+        summary.standings_rows = n;
+        any_aggregate_ran = true;
+    }
+    if ctx.game_type == GAME_TYPE_PLAYOFFS {
+        let result = mirror_steps::playoff_bracket(&ctx, agg_ttl).await;
+        if let Some(captured) = summary.record("playoff bracket", result) {
+            summary.bracket_captured = captured;
+            any_aggregate_ran = true;
+        }
+    }
+    summary.aggregates_skipped_fresh = !any_aggregate_ran && summary.errors.is_empty();
+
+    // ---- Rosters and club stats.
+    match mirror_steps::rosters_and_club_stats(&ctx, roster_ttl).await {
+        Ok(Step::Fresh) => summary.rosters_skipped_fresh = true,
+        Ok(Step::Ran(sync)) => {
+            summary.rosters_upserted = sync.rosters;
+            summary.club_stats_rows = sync.club_stats_rows;
+            summary.errors.extend(sync.failures);
+        }
+        Err(e) => summary.errors.push(format!("rosters: {e}")),
+    }
+
+    // ---- Boxscores for every started game this season. Upserting the
+    // boxscore also derives the score, which is what backfills games that
+    // finalized before the live poller ever saw them.
+    let games = match nhl_mirror::list_started_games(pool, ctx.season as i32).await {
+        Ok(g) => g,
+        Err(e) => {
+            summary.errors.push(format!("list games: {e}"));
+            Vec::new()
+        }
     };
-    while cursor <= today + chrono::Duration::days(1) {
-        dates.push(cursor.format("%Y-%m-%d").to_string());
-        cursor += chrono::Duration::days(1);
-    }
-    for date in &dates {
-        let last = nhl_mirror::last_update_nhl_games_for_date(pool, date)
-            .await
-            .unwrap_or(None);
-        if !nhl_mirror::is_stale(last, schedule_ttl) {
-            continue;
-        }
-        match nhl.get_schedule_by_date(date).await {
-            Ok(schedule) => {
-                let games = schedule.games_for_date(date);
-                for g in &games {
-                    if let Err(e) = nhl_mirror::upsert_game(pool, g, date).await {
-                        summary.errors.push(format!("upsert_game {}: {}", g.id, e));
-                    } else {
-                        summary.games_upserted += 1;
-                    }
-                }
-                match nhl_mirror::reconcile_schedule_for_date(
-                    pool,
-                    date,
-                    season as i32,
-                    game_type as i16,
-                    &games,
-                )
-                .await
-                {
-                    Ok(n) => summary.games_cancelled += n,
-                    Err(e) => summary
-                        .errors
-                        .push(format!("schedule reconcile {}: {}", date, e)),
-                }
-                if date == &today.format("%Y-%m-%d").to_string() {
-                    let insights_pattern = format!("insights:%:{}:{}:{}", season, game_type, date);
-                    if let Err(e) = db.cache().invalidate_by_like(&insights_pattern).await {
-                        summary
-                            .errors
-                            .push(format!("insights cache invalidate {}: {}", date, e));
-                    }
-                }
-            }
-            Err(e) => summary.errors.push(format!("schedule {}: {}", date, e)),
-        }
-    }
+    info!(games = games.len(), "rehydrate: processing boxscores");
 
-    // ---- Aggregates (standings, leaderboards, bracket). Gated
-    // behind a single freshness check on standings as a proxy —
-    // these four tables move together on game-end events.
-    let agg_last = nhl_mirror::last_update_nhl_standings(pool, season as i32)
-        .await
-        .unwrap_or(None);
-    if nhl_mirror::is_stale(agg_last, agg_ttl) {
-        match nhl.get_skater_stats(&season, game_type).await {
-            Ok(leaders) => match nhl_mirror::upsert_skater_leaderboard(
-                pool,
-                season as i32,
-                game_type as i16,
-                &leaders,
-            )
-            .await
-            {
-                Ok(n) => summary.skater_rows = n,
-                Err(e) => summary.errors.push(format!("skater upsert: {}", e)),
-            },
-            Err(e) => summary.errors.push(format!("skater leaderboard: {}", e)),
-        }
-
-        if let Ok(payload) = nhl.get_goalie_stats(&season, game_type).await {
-            let json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
-            match nhl_mirror::upsert_goalie_leaderboard(
-                pool,
-                season as i32,
-                game_type as i16,
-                &json,
-            )
-            .await
-            {
-                Ok(n) => summary.goalie_rows = n,
-                Err(e) => summary.errors.push(format!("goalie upsert: {}", e)),
-            }
-        }
-
-        if let Ok(payload) = nhl.get_standings_raw().await {
-            match nhl_mirror::upsert_standings(pool, season as i32, &payload).await {
-                Ok(n) => summary.standings_rows = n,
-                Err(e) => summary.errors.push(format!("standings upsert: {}", e)),
-            }
-        }
-
-        if game_type == 3 {
-            if let Ok(Some(carousel)) = nhl.get_playoff_carousel(season.to_string()).await {
-                let json = serde_json::to_value(&carousel).unwrap_or(serde_json::Value::Null);
-                if nhl_mirror::upsert_playoff_bracket(pool, season as i32, &json)
-                    .await
-                    .is_ok()
-                {
-                    summary.bracket_captured = true;
-                }
-            }
-        }
-    } else {
-        summary.aggregates_skipped_fresh = true;
-    }
-
-    // ---- Team rosters, paced (250 ms between calls) so NHL's
-    // per-IP rate limit never trips. Gated on roster_ttl so
-    // repeat runs within 24 h are no-ops.
-    let roster_last = nhl_mirror::last_update_nhl_team_rosters(pool, season as i32)
-        .await
-        .unwrap_or(None);
-    if nhl_mirror::is_stale(roster_last, roster_ttl) {
-        if let Ok(teams) = nhl.get_all_teams().await {
-            for (i, team) in teams.iter().enumerate() {
-                if i > 0 {
-                    tokio::time::sleep(live_mirror::ROSTER_FETCH_DELAY).await;
-                }
-                if let Ok(players) = nhl.get_team_roster(team).await {
-                    if nhl_mirror::upsert_team_roster(pool, team, season as i32, &players)
-                        .await
-                        .is_ok()
-                    {
-                        summary.rosters_upserted += 1;
-                    }
-                }
-            }
-        }
-    } else {
-        summary.rosters_skipped_fresh = true;
-    }
-
-    // ---- Boxscores + landing for every game we know about.
-    // For each game:
-    //   - If state is FUT/PRE, try the landing (write-once).
-    //   - Unless state is FUT, fetch the boxscore and upsert
-    //     per-player stats. `upsert_boxscore_players` also
-    //     derives home_score / away_score from the boxscore
-    //     itself — that's what backfills scores for games that
-    //     finalized before the live poller ever saw them.
-    let game_rows: Vec<(i64, String, String, String)> = sqlx::query_as(
-        "SELECT game_id, home_team, away_team, game_state FROM nhl_games WHERE game_state <> 'CANCELLED'",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-    info!(games = game_rows.len(), "rehydrate: processing boxscores");
-
-    for (gid, home, away, state) in &game_rows {
-        if state == "FUT" || state == "PRE" {
-            if let Ok(landing) = nhl.get_game_landing_raw(*gid as u32).await {
-                let matchup = landing
-                    .get("matchup")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
-                if let Ok(true) = nhl_mirror::capture_game_landing(pool, *gid, &matchup).await {
-                    summary.landing_captures += 1;
-                }
-            }
-        }
-
-        if state == "FUT" {
-            continue;
-        }
-        let boxscore_result = if matches!(state.as_str(), "FINAL" | "OFF") {
-            nhl.get_game_boxscore_fresh(*gid as u32).await
+    for g in &games {
+        let is_final = matches!(g.game_state.as_str(), "FINAL" | "OFF");
+        let boxscore = if is_final {
+            nhl.get_game_boxscore_fresh(g.game_id as u32).await
         } else {
-            nhl.get_game_boxscore(*gid as u32).await
+            nhl.get_game_boxscore(g.game_id as u32).await
         };
-        match boxscore_result {
-            Ok(box_score) => {
-                match nhl_mirror::upsert_boxscore_players(pool, *gid, home, away, &box_score).await
-                {
-                    Ok(n) => {
-                        summary.boxscore_games_processed += 1;
-                        summary.boxscore_player_rows += n;
-                    }
-                    Err(e) => warn!(game_id = gid, "rehydrate: upsert boxscore failed: {}", e),
-                }
-                // Rehydrate is the explicit "I want the canonical box"
-                // pathway, so a successful boxscore upsert seals the
-                // game for aggregated reads. Live-poll runs that
-                // happen to coincide with rehydrate are still
-                // idempotent — both paths just write NOW().
-                if matches!(state.as_str(), "FINAL" | "OFF") {
-                    if let Err(e) = nhl_mirror::mark_game_stats_finalized(pool, *gid).await {
-                        warn!(
-                            game_id = gid,
-                            "rehydrate: mark_game_stats_finalized failed: {}", e
-                        );
-                    }
-                }
+        let box_score = match boxscore {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(game_id = g.game_id, "rehydrate: fetch boxscore failed: {e}");
+                continue;
             }
-            Err(e) => warn!(game_id = gid, "rehydrate: fetch boxscore failed: {}", e),
+        };
+        match nhl_mirror::upsert_boxscore_players(
+            pool,
+            g.game_id,
+            &g.home_team,
+            &g.away_team,
+            &box_score,
+        )
+        .await
+        {
+            Ok(n) => {
+                summary.boxscore_games_processed += 1;
+                summary.boxscore_player_rows += n;
+            }
+            Err(e) => {
+                warn!(
+                    game_id = g.game_id,
+                    "rehydrate: upsert boxscore failed: {e}"
+                );
+                continue;
+            }
+        }
+        // Rehydrate is the explicit "I want the canonical box" path, so a
+        // successful upsert of a final game seals it for aggregated reads.
+        if is_final {
+            if let Err(e) = nhl_mirror::mark_game_stats_finalized(pool, g.game_id).await {
+                warn!(
+                    game_id = g.game_id,
+                    "rehydrate: mark_game_stats_finalized failed: {e}"
+                );
+            }
         }
     }
 
@@ -275,6 +199,7 @@ pub async fn run(db: &FantasyDb, nhl: Arc<NhlClient>) -> RehydrateSummary {
         goalies = summary.goalie_rows,
         standings = summary.standings_rows,
         rosters = summary.rosters_upserted,
+        club_stats = summary.club_stats_rows,
         rosters_skipped_fresh = summary.rosters_skipped_fresh,
         bracket = summary.bracket_captured,
         aggregates_skipped_fresh = summary.aggregates_skipped_fresh,

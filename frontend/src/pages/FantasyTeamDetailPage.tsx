@@ -6,8 +6,8 @@ import PlayoffStatus from "@/components/fantasyTeamDetail/PlayoffStatus";
 import PlayerRoster from "@/components/fantasyTeamDetail/PlayerRoster";
 import TeamBetsTable from "@/components/fantasyTeamDetail/TeamBetsTable";
 import { useTeamDetail } from "@/features/teams";
-import { useLeague } from "@/contexts/LeagueContext";
-import { getNHLTeamLogoUrl } from "@/utils/nhlTeams";
+import { useLeague } from "@/contexts/use-league";
+import { getNHLTeamLogoUrl, NHL_HEADSHOT_FALLBACK, nhlHeadshotUrl } from "@/utils/nhlTeams";
 
 const FantasyTeamDetailPage = () => {
   const { teamId } = useParams<{ teamId: string }>();
@@ -49,10 +49,10 @@ const FantasyTeamDetailPage = () => {
             </div>
             <div className="p-6 flex items-center gap-5">
               <img
-                src={teamSleeper.imageUrl || `https://assets.nhle.com/mugs/nhl/latest/${teamSleeper.nhlId}.png`}
+                src={teamSleeper.imageUrl || nhlHeadshotUrl(teamSleeper.nhlId)}
                 alt={teamSleeper.name}
                 className="w-20 h-20 rounded-none object-cover bg-gray-100 border-2 border-[#1A1A1A] flex-shrink-0"
-                onError={(e) => { (e.target as HTMLImageElement).src = "https://assets.nhle.com/mugs/nhl/latest/default.png"; }}
+                onError={(e) => { (e.target as HTMLImageElement).src = NHL_HEADSHOT_FALLBACK; }}
               />
               <div className="flex-1 min-w-0">
                 <p className="font-bold text-xl text-[#1A1A1A]">{teamSleeper.name}</p>

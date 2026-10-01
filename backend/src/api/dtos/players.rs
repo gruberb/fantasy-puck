@@ -11,6 +11,7 @@ pub struct NhlTeamPlayersResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerWithTeamResponse {
+    pub id: i64,
     pub nhl_id: i64,
     pub name: String,
     pub fantasy_team_id: i64,

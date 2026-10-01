@@ -2,7 +2,18 @@
 
 All notable changes to Fantasy Puck are documented here.
 
-## Unreleased
+## v1.27.0 / v1.21.0 — 2026-10-01 (BE v1.27.0 / FE v1.21.0)
+
+### Changed — AI narratives go through OpenRouter on Sonnet 5.5
+
+All LLM calls (daily Insights narratives, season recap, Pulse "Your Read"
+and team-breakdown narratives) now go through OpenRouter's chat-completions
+API instead of calling the Anthropic API directly. The backend reads
+`OPENROUTER_API_KEY` and an optional `OPENROUTER_MODEL` (default
+`anthropic/claude-sonnet-5.5`); `ANTHROPIC_API_KEY` is no longer used.
+Insights previously ran on a hardcoded Haiku model and now uses the same
+configured model as the other narratives. Without a key the backend falls
+back to the no-op narrator as before.
 
 ### Changed — Both Fly apps idle to zero when there is no traffic
 
@@ -13,6 +24,96 @@ First request after an idle period pays a cold start. The backend setting
 is an off-season choice: a suspended machine only wakes on inbound HTTP, so
 live polling and the daily crons do not run while it is idle, which is fine
 past the season window where those jobs self-skip anyway.
+
+### Fixed — Authorization and cross-league data bugs
+
+- Removing a player or a sleeper deleted by row id *or* NHL id, so removing
+  a player in one league removed that NHL player from every league's teams.
+  Deletes now go by row id only. The settings page also sent the NHL id, so
+  player removal usually returned 404; it now sends the row id.
+- Draft control endpoints (populate pool, randomize order, start, pause,
+  resume, start sleeper round) only required a login. They now require the
+  league owner; draft reads, picks, finalize and complete require league
+  membership. Global admins pass both checks. Sleeper removal requires the
+  league owner.
+- A sleeper pick could name a team from another league, and the "already a
+  sleeper" check was global, so a sleeper in one league blocked that player
+  everywhere. Both are now scoped to the draft's league.
+- The draft WebSocket accepted anyone and created a channel for any session
+  id. It now requires a valid token and league membership before the
+  upgrade, and drops a session's channel once its last client disconnects.
+
+### Fixed — Concurrent draft picks
+
+Two picks at the same moment could claim the same slot or player. Each
+pick (and each sleeper pick) is now one transaction holding a row lock on
+the draft session, with unique indexes on the pick slot and the player per
+session as a backstop.
+
+### Fixed — Insights regenerated every five minutes
+
+The meta poller cleared today's Insights cache on every tick, so narratives
+were regenerated with an LLM call all day. The cache is now dropped only
+when a game on today's schedule is added, cancelled, or changes state.
+
+### Fixed — Data correctness
+
+- Race Odds "Current" now counts only finalized games inside the season
+  window, the same rule as Rankings, so the two no longer disagree
+  mid-evening.
+- Race odds read every NHL input from the mirror instead of calling the NHL
+  API on a cache miss. Regular-season points now cover every skater rather
+  than the top 25 per category, so the Fantasy Champion board holds the
+  intended top 40, and the per-team home-ice bonus works from mirrored
+  standings again.
+- In regular-season mode the skater leaderboard refresh overwrote club-stats
+  goal, assist and point totals with zero for players missing from a
+  category.
+- Games in the NHL's `PRE` state were stored as `PREVIEW` and dropped out of
+  live polling until the next schedule refresh.
+- Recent form took a player's oldest games instead of the newest.
+- A finished 3-4 series counted as an elimination game; the regular-season
+  player pool fell back to standings once the first round finished; Pulse
+  ignored the `CRIT` game state; `--port` always overrode `PORT`; a failed
+  emptiness check at startup triggered a full NHL backfill.
+- Two panics on external data (LLM JSON extraction, NHL start times) are
+  gone. A malformed id in a URL returns 400 instead of 500, and an NHL 404
+  (for example an unpublished playoff bracket) returns 404 instead of 502.
+- Outside playoff mode, the skaters table, team detail and bets no longer
+  dim every team as eliminated.
+
+### Changed — Backend structure
+
+- Errors keep their full cause chain in logs; client-facing messages are
+  unchanged.
+- The meta poller and the admin rehydrate share one set of mirror steps.
+  Rehydrate now also refreshes club stats, and mirror writers are batched
+  into one statement per table.
+- SQL moved out of handlers into the database layer; the database service
+  wrapper layer, about 30 dead functions and three dead modules are gone.
+- Shared modules for the ET hockey date, cache keys, playoff bracket state,
+  draft order, and admin authorization replace duplicated copies.
+- The top-skaters and roster endpoints read from the mirror, and request
+  limits are capped.
+- One application state is built at startup and shared by the router, the
+  scheduler and the admin prewarm; OpenRouter settings come from config.
+- New database migrations add raw standings entries, goalie wins, and the
+  draft pick unique indexes.
+
+### Changed — Frontend structure
+
+- Type checking now actually runs; it previously checked no files and hid
+  45 type errors, which are fixed.
+- The skaters, league race, league members and calibration tables use the
+  shared ranking table, which gained sticky headers and per-row styles.
+  Name columns marked sortable now sort.
+- Confirm prompts use one shared dialog instead of browser `confirm()` and
+  hand-built modals; buttons use the shared button component; flash
+  messages use one toast.
+- Insight cards, NHL link helpers, game-state helpers and query keys are
+  shared. The home live table and the Games page share one request, and
+  Insights now sends the auth header.
+- About 30 unused files and many unused CSS classes are removed.
 
 ## v1.26.0 — 2026-06-16 (BE v1.26.0)
 

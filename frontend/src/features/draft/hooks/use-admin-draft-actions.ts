@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
-import { draftApi } from '../api/draft-api';
-import type { DraftSession } from '../types';
+import { draftApi } from '@/features/draft/api/draft-api';
+import type { DraftSession } from '@/features/draft/types';
 
 export function useAdminDraftActions() {
   const createSessionMutation = useMutation({

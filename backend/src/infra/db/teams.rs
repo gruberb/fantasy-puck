@@ -1,19 +1,41 @@
+use crate::infra::db::FantasyDb;
 use std::collections::HashMap;
 
-use sqlx::postgres::PgPool;
 use sqlx::Row;
 
-use crate::error::Result;
 use crate::domain::models::db::{FantasyTeam, FantasyTeamBets, NhlBetCount, TeamNhlCount};
 use crate::domain::models::fantasy::{FantasyTeamInGame, PlayerInGame};
+use crate::error::Result;
 
-pub struct TeamDbService<'a> {
-    pool: &'a PgPool,
-}
-
-impl<'a> TeamDbService<'a> {
-    pub fn new(pool: &'a PgPool) -> Self {
-        Self { pool }
+impl FantasyDb {
+    /// Snapshot one league's scoring teams for `date` from
+    /// `v_daily_fantasy_totals` into `daily_rankings`, ranked by points.
+    /// Returns the number of rows written; teams that didn't score get no
+    /// row. `daily_rankings.date` is TEXT while the view's is DATE, hence
+    /// the casts.
+    pub async fn snapshot_daily_rankings(&self, league_id: &str, date: &str) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO daily_rankings (date, team_id, league_id, rank, points, goals, assists)
+            SELECT $2::text, team_id, $1::uuid,
+                   ROW_NUMBER() OVER (ORDER BY points DESC, team_id),
+                   points, goals, assists
+              FROM v_daily_fantasy_totals
+             WHERE league_id = $1::uuid
+               AND date = $2::text::date
+               AND points > 0
+            ON CONFLICT (team_id, date, league_id) DO UPDATE SET
+                rank = EXCLUDED.rank,
+                points = EXCLUDED.points,
+                goals = EXCLUDED.goals,
+                assists = EXCLUDED.assists
+            "#,
+        )
+        .bind(league_id)
+        .bind(date)
+        .execute(self.pool())
+        .await?;
+        Ok(result.rows_affected())
     }
 
     /// Get a fantasy team by ID, verifying it belongs to the given league
@@ -28,7 +50,7 @@ impl<'a> TeamDbService<'a> {
         )
         .bind(team_id)
         .bind(league_id)
-        .fetch_one(self.pool)
+        .fetch_one(self.pool())
         .await?;
 
         Ok(team)
@@ -45,7 +67,7 @@ impl<'a> TeamDbService<'a> {
             "#,
         )
         .bind(league_id)
-        .fetch_all(self.pool)
+        .fetch_all(self.pool())
         .await?;
 
         Ok(teams)
@@ -72,7 +94,7 @@ impl<'a> TeamDbService<'a> {
             "#,
         )
         .bind(league_id)
-        .fetch_all(self.pool)
+        .fetch_all(self.pool())
         .await?;
 
         // Group them in Rust by (team_id + team_name)
@@ -165,7 +187,7 @@ impl<'a> TeamDbService<'a> {
                     position,
                 )
             })
-            .fetch_all(self.pool)
+            .fetch_all(self.pool())
             .await?;
 
         // Group by fantasy team
@@ -203,59 +225,6 @@ impl<'a> TeamDbService<'a> {
         Ok(result)
     }
 
-    /// Return last-N-days of team points for every team in the league,
-    /// clipped so no row older than `min_date` is returned. Result:
-    /// team_id -> Vec<i32> in chronological order (oldest first).
-    /// Missing days are absent from each vec rather than padded with zeros.
-    ///
-    /// `min_date` (YYYY-MM-DD, inclusive) keeps pre-playoff daily_rankings
-    /// from leaking into Pulse's "Yesterday" column on day 1 of a new
-    /// round — passing `playoff_start()` clears everything before puck
-    /// drop. Pass an empty string to disable the clip.
-    pub async fn get_team_sparklines(
-        &self,
-        league_id: &str,
-        days: i32,
-        min_date: &str,
-    ) -> Result<HashMap<i64, Vec<i32>>> {
-        let since = chrono::Utc::now()
-            - chrono::Duration::days(days as i64);
-        let window_start = since.format("%Y-%m-%d").to_string();
-        // Take the later of the trailing-N-days window and the caller's
-        // `min_date` floor — whichever clips more.
-        let since_str: String = if !min_date.is_empty() && min_date > window_start.as_str() {
-            min_date.to_string()
-        } else {
-            window_start
-        };
-
-        let rows = sqlx::query(
-            r#"
-            SELECT team_id, date, points
-            FROM daily_rankings
-            WHERE league_id = $1::uuid
-              AND date >= $2
-            ORDER BY team_id, date
-            "#,
-        )
-        .bind(league_id)
-        .bind(&since_str)
-        .map(|row: sqlx::postgres::PgRow| {
-            (
-                row.get::<i64, _>("team_id"),
-                row.get::<i32, _>("points"),
-            )
-        })
-        .fetch_all(self.pool)
-        .await?;
-
-        let mut map: HashMap<i64, Vec<i32>> = HashMap::new();
-        for (team_id, points) in rows {
-            map.entry(team_id).or_default().push(points);
-        }
-        Ok(map)
-    }
-
     /// For each fantasy team in the league, return the list of rostered players
     /// in a simple flat structure. Used by the Series Forecast on Pulse.
     pub async fn get_all_teams_with_players(
@@ -288,9 +257,17 @@ impl<'a> TeamDbService<'a> {
             let player_name: Option<String> = row.try_get("player_name").ok();
             let nhl_team: Option<String> = row.try_get("nhl_team").ok();
             let position: Option<String> = row.try_get("position").ok();
-            (team_id, team_name, player_id, nhl_id, player_name, nhl_team, position)
+            (
+                team_id,
+                team_name,
+                player_id,
+                nhl_id,
+                player_name,
+                nhl_team,
+                position,
+            )
         })
-        .fetch_all(self.pool)
+        .fetch_all(self.pool())
         .await?;
 
         let mut map: HashMap<i64, FantasyTeamInGame> = HashMap::new();
@@ -300,8 +277,13 @@ impl<'a> TeamDbService<'a> {
                 team_name: team_name.clone(),
                 players: Vec::new(),
             });
-            if let (Some(player_id), Some(nhl_id), Some(player_name), Some(nhl_team), Some(position)) =
-                (player_id, nhl_id, player_name, nhl_team, position)
+            if let (
+                Some(player_id),
+                Some(nhl_id),
+                Some(player_name),
+                Some(nhl_team),
+                Some(position),
+            ) = (player_id, nhl_id, player_name, nhl_team, position)
             {
                 entry.players.push(PlayerInGame {
                     player_id,
@@ -323,7 +305,7 @@ impl<'a> TeamDbService<'a> {
         sqlx::query("UPDATE fantasy_teams SET name = $1 WHERE id = $2")
             .bind(name)
             .bind(team_id)
-            .execute(self.pool)
+            .execute(self.pool())
             .await?;
 
         Ok(())
@@ -346,7 +328,7 @@ impl<'a> TeamDbService<'a> {
             "SELECT DISTINCT team_id FROM daily_rankings WHERE league_id = $1::uuid",
         )
         .bind(league_id)
-        .fetch_all(self.pool)
+        .fetch_all(self.pool())
         .await?;
 
         for team_id in team_ids {
@@ -401,7 +383,7 @@ impl<'a> TeamDbService<'a> {
                 row.get::<i64, _>("true_rank"),
             )
         })
-        .fetch_all(self.pool)
+        .fetch_all(self.pool())
         .await?;
 
         // Process all daily rankings
@@ -424,7 +406,7 @@ impl<'a> TeamDbService<'a> {
     }
 }
 
-impl<'a> TeamDbService<'a> {
+impl FantasyDb {
     /// Sparkline that merges the `daily_rankings` historical rollup
     /// with today's live running total from `v_daily_fantasy_totals`.
     /// Returns per-team points for the last `days` days, ordered by
@@ -457,9 +439,7 @@ impl<'a> TeamDbService<'a> {
         // by the schedule ingest, so asking for the UTC date at 00:12 UTC
         // would return an empty window for the current ET game night and
         // zero-pad `points_today` to 0 for every team.
-        let today = chrono::Utc::now()
-            .with_timezone(&chrono_tz::America::New_York)
-            .date_naive();
+        let today = crate::domain::time::hockey_today_date();
         let window_start = today - chrono::Duration::days((days - 1).max(0) as i64);
         let min_date_parsed = chrono::NaiveDate::parse_from_str(min_date, "%Y-%m-%d").ok();
         let sql_since = match min_date_parsed {
@@ -511,18 +491,20 @@ impl<'a> TeamDbService<'a> {
                 row.get::<i32, _>("points"),
             )
         })
-        .fetch_all(self.pool)
+        .fetch_all(self.pool())
         .await?;
 
         // Dedup per (team, date): the outer ORDER BY ensures src=1
         // (daily_rankings) comes first when both sources have the
         // same (team, date). We keep the first row per unique key.
-        let mut seen: std::collections::HashSet<(i64, String)> =
-            std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<(i64, String)> = std::collections::HashSet::new();
         let mut by_team_date: HashMap<i64, HashMap<String, i32>> = HashMap::new();
         for (team_id, date, points) in rows {
             if seen.insert((team_id, date.clone())) {
-                by_team_date.entry(team_id).or_default().insert(date, points);
+                by_team_date
+                    .entry(team_id)
+                    .or_default()
+                    .insert(date, points);
             }
         }
 

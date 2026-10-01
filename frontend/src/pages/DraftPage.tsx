@@ -1,10 +1,10 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { createPortal } from "react-dom";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
-import { useLeague } from "@/contexts/LeagueContext";
-import { getNHLTeamFullName, getNHLTeamLogoUrl } from "@/utils/nhlTeams";
-import { ErrorMessage, LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
+import { useAuth } from "@/contexts/use-auth";
+import { useLeague } from "@/contexts/use-league";
+import { getNHLTeamFullName, getNHLTeamLogoUrl, NHL_HEADSHOT_FALLBACK, nhlHeadshotUrl } from "@/utils/nhlTeams";
+import { Button, ErrorMessage, LoadingSpinner, PageHeader } from "@gruberb/fun-ui";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { APP_CONFIG, QUERY_INTERVALS } from "@/config";
 import {
   useLeagueMembers,
@@ -86,6 +86,19 @@ function TeamDropdown({ teams, value, onChange, playerCount }: { teams: string[]
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function PickPreview({ player }: { player: PlayerPoolEntry }) {
+  return (
+    <div className="text-center space-y-2">
+      <img src={player.headshotUrl} alt={player.name} className="w-20 h-20 rounded-none object-cover mx-auto bg-gray-200" onError={(e) => { (e.target as HTMLImageElement).src = NHL_HEADSHOT_FALLBACK; }} />
+      <p className="text-lg font-bold text-gray-900">{player.name}</p>
+      <div className="flex items-center justify-center gap-2">
+        <PositionBadge position={player.position} />
+        <span className="text-sm text-gray-500">{player.nhlTeam}</span>
+      </div>
     </div>
   );
 }
@@ -217,16 +230,6 @@ const DraftPage = () => {
 
   useEffect(() => { setElapsed(0); }, [session?.currentPickIndex]);
 
-  // Lock body scroll when confirm modal is open
-  useEffect(() => {
-    if (confirmPlayer) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => { document.body.style.overflow = ""; };
-  }, [confirmPlayer]);
-
   const handlePick = async (player: PlayerPoolEntry) => {
     if (!session || !myMember || !isMyTurn || picking) return;
     try {
@@ -346,13 +349,9 @@ const DraftPage = () => {
           <p className="text-gray-600">All {session.totalRounds * sortedMembers.length} picks have been made. The league owner needs to finalize the draft before moving to the sleeper round.</p>
 
           {isLeagueOwner ? (
-            <button
-              onClick={handleFinalize}
-              disabled={finalizing}
-              className="btn-gradient text-lg px-8 py-3 disabled:opacity-50"
-            >
+            <Button size="lg" onClick={handleFinalize} disabled={finalizing}>
               {finalizing ? "Finalizing..." : "Finalize Draft & Start Sleeper Round"}
-            </button>
+            </Button>
           ) : (
             <p className="text-sm text-gray-500">Waiting for the league owner to finalize the draft...</p>
           )}
@@ -445,7 +444,7 @@ const DraftPage = () => {
                   const canPick = isMySleeperTurn && !sleeperPicking;
                   return (
                     <div key={player.id} onClick={() => { if (canPick) setConfirmSleeper(player); }} className={`flex items-center gap-3 p-3 rounded-none border-2 transition-all ${canPick ? "border-[#FACC15]/30 bg-white hover:bg-[#FACC15]/5 hover:border-[#FACC15]/50 cursor-pointer" : "border-gray-200 bg-white"}`}>
-                      <img src={player.headshotUrl} alt={player.name} className="w-10 h-10 rounded-none object-cover bg-gray-200 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = "https://assets.nhle.com/mugs/nhl/latest/default.png"; }} />
+                      <img src={player.headshotUrl} alt={player.name} className="w-10 h-10 rounded-none object-cover bg-gray-200 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = NHL_HEADSHOT_FALLBACK; }} />
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-sm text-gray-900 truncate">{player.name}</p>
                         <div className="flex items-center gap-2 mt-0.5"><PositionBadge position={player.position} /><span className="text-xs text-gray-500">{player.nhlTeam}</span></div>
@@ -459,27 +458,18 @@ const DraftPage = () => {
           </div>
         </div>
 
-        {/* Sleeper confirm modal */}
-        {confirmSleeper && createPortal(
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setConfirmSleeper(null)}>
-            <div className="fantasy-card max-w-sm w-full border-2 border-[#1A1A1A]" onClick={(e) => e.stopPropagation()}>
-              <div className="card-header text-center" style={{ background: "#FACC15", color: "#1A1A1A" }}><h3 className="text-lg font-bold">Confirm Sleeper Pick</h3></div>
-              <div className="p-6 text-center space-y-4">
-                <img src={confirmSleeper.headshotUrl} alt={confirmSleeper.name} className="w-20 h-20 rounded-none object-cover mx-auto bg-gray-200" onError={(e) => { (e.target as HTMLImageElement).src = "https://assets.nhle.com/mugs/nhl/latest/default.png"; }} />
-                <div>
-                  <p className="text-lg font-bold text-gray-900">{confirmSleeper.name}</p>
-                  <div className="flex items-center justify-center gap-2 mt-1"><PositionBadge position={confirmSleeper.position} /><span className="text-sm text-gray-500">{confirmSleeper.nhlTeam}</span></div>
-                </div>
-                <p className="text-sm text-gray-600">Pick this player as your sleeper? Tracked separately from your main roster.</p>
-                <div className="flex gap-3 justify-center">
-                  <button onClick={() => setConfirmSleeper(null)} className="btn-secondary-enhanced">Cancel</button>
-                  <button onClick={() => handleSleeperPick(confirmSleeper)} disabled={sleeperPicking} className="bg-[#FACC15] text-[#1A1A1A] font-bold px-6 py-2 rounded-none border-2 border-[#1A1A1A] shadow-[4px_4px_0px_0px_#1A1A1A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-all disabled:opacity-50">{sleeperPicking ? "Picking..." : "Confirm Sleeper"}</button>
-                </div>
-              </div>
-            </div>
-          </div>,
-          document.body
-        )}
+        <ConfirmDialog
+          open={!!confirmSleeper}
+          title="Confirm Sleeper Pick"
+          body="Pick this player as your sleeper? Tracked separately from your main roster."
+          confirmLabel={sleeperPicking ? "Picking..." : "Confirm Sleeper"}
+          confirmVariant="primary"
+          confirmDisabled={sleeperPicking}
+          onConfirm={() => confirmSleeper && handleSleeperPick(confirmSleeper)}
+          onCancel={() => setConfirmSleeper(null)}
+        >
+          {confirmSleeper && <PickPreview player={confirmSleeper} />}
+        </ConfirmDialog>
       </div>
     );
   }
@@ -493,14 +483,11 @@ const DraftPage = () => {
         <div className="bg-white rounded-none border-2 border-[#1A1A1A] p-6 text-center space-y-4">
           <p className="text-gray-600">Every team has drafted their roster and picked a sleeper.</p>
           {isLeagueOwner ? (
-            <button
-              onClick={handleFinalizeSleepers}
-              className="btn-gradient text-lg px-8 py-3"
-            >
+            <Button size="lg" onClick={handleFinalizeSleepers}>
               Finalize & Go to League Overview
-            </button>
+            </Button>
           ) : (
-            <Link to={`/league/${leagueId}`} className="inline-block btn-gradient text-lg px-8 py-3">
+            <Link to={`/league/${leagueId}`} className="inline-block brutal-btn brutal-btn-primary px-7 py-3 text-base">
               Go to League Overview
             </Link>
           )}
@@ -521,7 +508,7 @@ const DraftPage = () => {
                   <span className="font-bold text-sm uppercase tracking-wider text-[#1A1A1A] w-32 truncate">{teamName}</span>
                   {teamSleeper ? (
                     <>
-                      <img src={`https://assets.nhle.com/mugs/nhl/latest/${teamSleeper.nhlId}.png`} alt="" className="w-10 h-10 rounded-none object-cover bg-gray-200 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = "https://assets.nhle.com/mugs/nhl/latest/default.png"; }} />
+                      <img src={nhlHeadshotUrl(teamSleeper.nhlId)} alt="" className="w-10 h-10 rounded-none object-cover bg-gray-200 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = NHL_HEADSHOT_FALLBACK; }} />
                       <span className="font-medium text-sm text-gray-900 flex-1">{teamSleeper.name}</span>
                       <PositionBadge position={teamSleeper.position} />
                       <img src={getNHLTeamLogoUrl(teamSleeper.nhlTeam)} alt="" className="w-5 h-5" />
@@ -592,7 +579,7 @@ const DraftPage = () => {
             <div className="text-center">
               <p className="text-lg font-bold text-yellow-600">Draft Complete!</p>
               {isLeagueOwner && !finalized && (
-                <button onClick={handleFinalize} disabled={finalizing} className="mt-2 bg-[#FFB81C] text-[#1A1A1A] text-sm font-bold px-4 py-2 rounded-none hover:bg-yellow-400 transition-all disabled:opacity-50 cursor-pointer">{finalizing ? "Syncing..." : "Finalize & Save Teams"}</button>
+                <Button size="sm" onClick={handleFinalize} disabled={finalizing} className="mt-2 bg-[#FFB81C] text-[#1A1A1A]">{finalizing ? "Syncing..." : "Finalize & Save Teams"}</Button>
               )}
             </div>
           ) : null}
@@ -648,7 +635,7 @@ const DraftPage = () => {
                   const canPick = !isPicked && session.status === "active" && isMyTurn && !picking;
                   return (
                     <div key={player.id} onClick={() => { if (canPick) setConfirmPlayer(player); }} className={`flex items-stretch rounded-none border-2 overflow-hidden transition-all ${isPicked ? "border-gray-200 bg-gray-50 opacity-60" : canPick ? "border-[#2563EB]/30 bg-white hover:bg-[#2563EB]/5 hover:border-[#2563EB]/50 cursor-pointer" : "border-gray-200 bg-white"}`}>
-                      <img src={player.headshotUrl} alt={player.name} className="w-14 h-auto object-cover bg-gray-200 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = "https://assets.nhle.com/mugs/nhl/latest/default.png"; }} />
+                      <img src={player.headshotUrl} alt={player.name} className="w-14 h-auto object-cover bg-gray-200 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = NHL_HEADSHOT_FALLBACK; }} />
                       <div className="flex-1 min-w-0 p-2.5">
                         <p className={`font-medium text-sm truncate ${isPicked ? "line-through text-gray-500" : "text-gray-900"}`}>{player.name}</p>
                         <div className="flex items-center gap-2 mt-0.5">
@@ -731,29 +718,18 @@ const DraftPage = () => {
         </div>
       </div>
 
-      {confirmPlayer && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setConfirmPlayer(null)}>
-          <div className="fantasy-card max-w-sm w-full border-2 border-[#1A1A1A]" onClick={(e) => e.stopPropagation()}>
-            <div className="card-header text-center"><h3 className="text-lg font-bold">Confirm Pick</h3></div>
-            <div className="p-6 text-center space-y-4">
-              <img src={confirmPlayer.headshotUrl} alt={confirmPlayer.name} className="w-20 h-20 rounded-none object-cover mx-auto bg-gray-200" onError={(e) => { (e.target as HTMLImageElement).src = "https://assets.nhle.com/mugs/nhl/latest/default.png"; }} />
-              <div>
-                <p className="text-lg font-bold text-gray-900">{confirmPlayer.name}</p>
-                <div className="flex items-center justify-center gap-2 mt-1">
-                  <PositionBadge position={confirmPlayer.position} />
-                  <span className="text-sm text-gray-500">{confirmPlayer.nhlTeam}</span>
-                </div>
-              </div>
-              <p className="text-sm text-gray-600">Are you sure you want to draft this player?</p>
-              <div className="flex gap-3 justify-center">
-                <button onClick={() => setConfirmPlayer(null)} className="btn-secondary-enhanced">Cancel</button>
-                <button onClick={() => handlePick(confirmPlayer)} disabled={picking} className="btn-gradient disabled:opacity-50">{picking ? "Picking..." : "Confirm Pick"}</button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      <ConfirmDialog
+        open={!!confirmPlayer}
+        title="Confirm Pick"
+        body="Are you sure you want to draft this player?"
+        confirmLabel={picking ? "Picking..." : "Confirm Pick"}
+        confirmVariant="primary"
+        confirmDisabled={picking}
+        onConfirm={() => confirmPlayer && handlePick(confirmPlayer)}
+        onCancel={() => setConfirmPlayer(null)}
+      >
+        {confirmPlayer && <PickPreview player={confirmPlayer} />}
+      </ConfirmDialog>
     </div>
   );
 };

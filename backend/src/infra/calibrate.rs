@@ -21,12 +21,13 @@
 //! search becomes justified and its target is the aggregate Brier
 //! across all backfilled seasons.
 
+use anyhow::Context;
 use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 use tracing::debug;
 
-use crate::infra::db::FantasyDb;
+use crate::domain::models::nhl::GAME_TYPE_REGULAR;
 use crate::domain::prediction::{
     backtest::{self, ResultRow},
     goalie_rating::{self, GoalieEntry},
@@ -37,6 +38,7 @@ use crate::domain::prediction::{
     },
 };
 use crate::error::{Error, Result};
+use crate::infra::db::FantasyDb;
 
 pub const ELO_K_FACTOR: f32 = std::f32::consts::LN_10 / 400.0;
 
@@ -209,7 +211,7 @@ pub async fn calibrate_season_with_knobs(
         simulate_with_seed(&sim_input, trials, CALIBRATION_RNG_SEED)
     })
     .await
-    .map_err(|e| Error::Internal(format!("calibrate sim join error: {e}")))?;
+    .context("calibrate sim join error")?;
 
     // 6. Score.
     let report = score(season, trials, &output, &outcomes);
@@ -384,8 +386,8 @@ fn build_ratings(
         .map(|(abbrev, base)| {
             let home_bonus = home_bonus_map.get(&abbrev).copied().unwrap_or(0.0);
             let goalie_bonus = goalie_bonuses.get(&abbrev).copied().unwrap_or(0.0);
-            let rating = TeamRating::with_home_bonus(base, home_bonus)
-                .with_goalie_bonus(goalie_bonus);
+            let rating =
+                TeamRating::with_home_bonus(base, home_bonus).with_goalie_bonus(goalie_bonus);
             (abbrev, rating)
         })
         .collect();
@@ -401,7 +403,7 @@ async fn fetch_historical_goalie_bonuses(
     nhl: &crate::NhlClient,
     season: u32,
 ) -> HashMap<String, f32> {
-    let leaders = match nhl.get_goalie_stats(&season, 2).await {
+    let leaders = match nhl.get_goalie_stats(&season, GAME_TYPE_REGULAR).await {
         Ok(l) => l,
         Err(e) => {
             tracing::warn!(
@@ -644,11 +646,8 @@ pub async fn calibrate_sweep(
         grid.trials.clone()
     };
 
-    let grid_size = axes_points.len()
-        * axes_shrink.len()
-        * axes_k.len()
-        * axes_home.len()
-        * axes_trials.len();
+    let grid_size =
+        axes_points.len() * axes_shrink.len() * axes_k.len() * axes_home.len() * axes_trials.len();
     if grid_size == 0 {
         return Err(Error::Validation("Empty calibration grid.".into()));
     }
@@ -671,12 +670,9 @@ pub async fn calibrate_sweep(
                             home_ice_elo,
                             trials,
                         };
-                        let report =
-                            calibrate_season_with_knobs(db, nhl, season, &knobs).await?;
-                        let brier_aggregate = report.brier_r1
-                            + report.brier_r2
-                            + report.brier_r3
-                            + report.brier_cup;
+                        let report = calibrate_season_with_knobs(db, nhl, season, &knobs).await?;
+                        let brier_aggregate =
+                            report.brier_r1 + report.brier_r2 + report.brier_r3 + report.brier_cup;
                         runs.push(SweepRun {
                             knobs,
                             brier_r1: report.brier_r1,
@@ -701,7 +697,7 @@ pub async fn calibrate_sweep(
     let best = runs
         .first()
         .cloned()
-        .ok_or_else(|| Error::Internal("Sweep produced no runs".into()))?;
+        .ok_or_else(|| Error::internal("sweep produced no runs"))?;
     Ok(SweepReport {
         season,
         grid_size,
@@ -709,4 +705,3 @@ pub async fn calibrate_sweep(
         runs,
     })
 }
-

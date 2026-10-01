@@ -465,14 +465,8 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
                         } else {
                             input.home_ice_bonus
                         };
-                        let outcome = simulate_series(
-                            *top_wins,
-                            *bottom_wins,
-                            gap,
-                            ice_bonus,
-                            true,
-                            rng,
-                        );
+                        let outcome =
+                            simulate_series(*top_wins, *bottom_wins, gap, ice_bonus, true, rng);
                         // Only games played *from now on* count as remaining.
                         let remaining = outcome
                             .total_games()
@@ -492,7 +486,9 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
                         // gracefully instead of panicking.
                         let (top, bot) = match (
                             winners.get(r.wrapping_sub(1)).and_then(|w| w.get(2 * i)),
-                            winners.get(r.wrapping_sub(1)).and_then(|w| w.get(2 * i + 1)),
+                            winners
+                                .get(r.wrapping_sub(1))
+                                .and_then(|w| w.get(2 * i + 1)),
                         ) {
                             (Some(a), Some(b)) => (a.clone(), b.clone()),
                             _ => {
@@ -621,11 +617,10 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
             let mut i = 0usize;
             while i < ranking.len() && earned_so_far + 1e-6 < 3.0 {
                 let score_i = ranking[i].1;
-                let j = i
-                    + ranking[i..]
-                        .iter()
-                        .take_while(|(_, s)| (*s - score_i).abs() < 1e-6)
-                        .count();
+                let j = i + ranking[i..]
+                    .iter()
+                    .take_while(|(_, s)| (*s - score_i).abs() < 1e-6)
+                    .count();
                 // This group's slice is [i, j). Give them (remaining / group_size).
                 let group_size = (j - i) as f32;
                 let remaining = (3.0 - earned_so_far).max(0.0);
@@ -656,14 +651,11 @@ fn run(input: &RaceSimInput, trials: usize, rng: &mut SmallRng) -> RaceSimOutput
         .enumerate()
         .map(|(i, team)| {
             let samples = &team_samples[i];
-            let current: i32 = team
-                .players
-                .iter()
-                .map(|p| p.playoff_points_so_far)
-                .sum();
+            let current: i32 = team.players.iter().map(|p| p.playoff_points_so_far).sum();
             let (mean, median, p10, p90) = summarise(samples);
 
-            let mut head_to_head: HashMap<i64, f32> = HashMap::with_capacity(n_teams.saturating_sub(1));
+            let mut head_to_head: HashMap<i64, f32> =
+                HashMap::with_capacity(n_teams.saturating_sub(1));
             for (j, opponent) in input.fantasy_teams.iter().enumerate() {
                 if i == j {
                     continue;
@@ -974,7 +966,12 @@ fn summarise(samples: &[f32]) -> (f32, f32, f32, f32) {
     let mut sorted: Vec<f32> = samples.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mean = samples.iter().copied().sum::<f32>() / samples.len() as f32;
-    (mean, percentile(&sorted, 0.50), percentile(&sorted, 0.10), percentile(&sorted, 0.90))
+    (
+        mean,
+        percentile(&sorted, 0.50),
+        percentile(&sorted, 0.10),
+        percentile(&sorted, 0.90),
+    )
 }
 
 fn percentile(sorted: &[f32], q: f32) -> f32 {
@@ -1047,18 +1044,12 @@ mod tests {
                 SimFantasyTeam {
                     team_id: 1,
                     team_name: "One".into(),
-                    players: vec![
-                        mk_player("A", "BOS", 0.6, 0),
-                        mk_player("B", "COL", 0.6, 0),
-                    ],
+                    players: vec![mk_player("A", "BOS", 0.6, 0), mk_player("B", "COL", 0.6, 0)],
                 },
                 SimFantasyTeam {
                     team_id: 2,
                     team_name: "Two".into(),
-                    players: vec![
-                        mk_player("C", "EDM", 0.6, 0),
-                        mk_player("D", "DAL", 0.6, 0),
-                    ],
+                    players: vec![mk_player("C", "EDM", 0.6, 0), mk_player("D", "DAL", 0.6, 0)],
                 },
             ],
         }
@@ -1069,7 +1060,10 @@ mod tests {
         let out = simulate_with_seed(&baseline_input(), 2000, 42);
         assert_eq!(out.teams.len(), 2);
         let total_win: f32 = out.teams.iter().map(|t| t.win_prob).sum();
-        assert!((total_win - 1.0).abs() < 1e-5, "win probs should sum to 1.0");
+        assert!(
+            (total_win - 1.0).abs() < 1e-5,
+            "win probs should sum to 1.0"
+        );
         for t in &out.teams {
             assert!(t.win_prob >= 0.0 && t.win_prob <= 1.0);
             assert!(t.projected_final_mean >= 0.0);
@@ -1086,10 +1080,7 @@ mod tests {
         input.fantasy_teams = vec![SimFantasyTeam {
             team_id: 1,
             team_name: "BruinsStack".into(),
-            players: vec![
-                mk_player("A", "BOS", 1.0, 0),
-                mk_player("B", "BOS", 1.0, 0),
-            ],
+            players: vec![mk_player("A", "BOS", 1.0, 0), mk_player("B", "BOS", 1.0, 0)],
         }];
         let out = simulate_with_seed(&input, 2000, 7);
         let team_spread = out.teams[0].p90 - out.teams[0].p10;
@@ -1137,9 +1128,7 @@ mod tests {
     fn advancing_team_gets_more_games() {
         let mut input = baseline_input();
         // BOS up 3-0 (in the InProgress R1 series).
-        if let Some(SeriesState::InProgress { top_wins, .. }) =
-            input.bracket.rounds[0].get_mut(0)
-        {
+        if let Some(SeriesState::InProgress { top_wins, .. }) = input.bracket.rounds[0].get_mut(0) {
             *top_wins = 3;
         } else {
             panic!("expected first R1 slot to be InProgress");
@@ -1174,12 +1163,8 @@ mod tests {
         // If every R1 slot is Completed, the sim must honour those winners
         // 100% of trials — no re-opening a decided series.
         let mut bracket = baseline_bracket();
-        let winners = [
-            "BOS", "TBL", "CAR", "PIT", "EDM", "COL", "DAL", "VGK",
-        ];
-        let losers = [
-            "BUF", "MTL", "OTT", "PHI", "ANA", "LAK", "MIN", "UTA",
-        ];
+        let winners = ["BOS", "TBL", "CAR", "PIT", "EDM", "COL", "DAL", "VGK"];
+        let losers = ["BUF", "MTL", "OTT", "PHI", "ANA", "LAK", "MIN", "UTA"];
         for (i, (w, l)) in winners.iter().zip(losers.iter()).enumerate() {
             bracket.rounds[0][i] = SeriesState::Completed {
                 winner: (*w).into(),
@@ -1531,7 +1516,9 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(11);
         let shape = 4.0f32;
         let scale = 1.5f32;
-        let samples: Vec<f32> = (0..8000).map(|_| sample_gamma(shape, scale, &mut rng)).collect();
+        let samples: Vec<f32> = (0..8000)
+            .map(|_| sample_gamma(shape, scale, &mut rng))
+            .collect();
         let mean = samples.iter().sum::<f32>() / samples.len() as f32;
         let var = samples.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / samples.len() as f32;
         let expected_mean = shape * scale;
@@ -1584,10 +1571,19 @@ mod tests {
         let s2 = round_depth_shrinkage(2);
         let s3 = round_depth_shrinkage(3);
         let s99 = round_depth_shrinkage(99);
-        assert!((s0 - 1.0).abs() < 1e-6, "round 0 must pass through unchanged");
+        assert!(
+            (s0 - 1.0).abs() < 1e-6,
+            "round 0 must pass through unchanged"
+        );
         assert!(s0 > s1 && s1 > s2 && s2 > s3, "shrinkage must be monotonic");
-        assert!(s3 >= 0.5 && s3 <= 0.7, "Cup Final shrinkage should land in [0.5, 0.7]");
-        assert!(s99 > 0.0, "out-of-bounds rounds still return positive shrinkage");
+        assert!(
+            (0.5..=0.7).contains(&s3),
+            "Cup Final shrinkage should land in [0.5, 0.7]"
+        );
+        assert!(
+            s99 > 0.0,
+            "out-of-bounds rounds still return positive shrinkage"
+        );
     }
 
     #[test]

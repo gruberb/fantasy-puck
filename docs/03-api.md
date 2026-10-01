@@ -39,9 +39,13 @@ Mapping from internal `Error` variants to HTTP status codes:
 
 JWT-based. The token goes in the `Authorization` header: `Bearer <jwt>`. Tokens do not carry an expiry; they remain valid until explicit sign-out or `JWT_SECRET` rotation.
 
-- **`AuthUser` extractor** ([`auth/middleware.rs:21-46`](../backend/src/auth/middleware.rs)) - required on most endpoints. Validates the token, returns 401 if missing or invalid.
-- **`OptionalAuth` extractor** ([`auth/middleware.rs:49-79`](../backend/src/auth/middleware.rs)) - accepts a token but does not require one. Invalid tokens still 401.
-- **Admin endpoints** additionally check `auth.is_admin` inside the handler; 403 if unset.
+Extractors live in [`auth/middleware.rs`](../backend/src/auth/middleware.rs):
+
+- **`AuthUser`**: required on most endpoints. Validates the token, returns 401 if missing or invalid.
+- **`OptionalAuth`**: accepts a token but does not require one. Invalid tokens still 401.
+- **`AdminUser`**: wraps `AuthUser` and returns 403 unless the `is_admin` claim is set. Every `/api/admin/*` handler takes it.
+
+In the route tables, "Required (member)" means the caller must belong to the league and "Required (owner)" means they must have created it. Global admins pass both checks, so they can repair drafts and rosters in leagues they don't belong to.
 
 Claim shape: `{ sub: user_id, email, is_admin, iat }`. The secret is `config.jwt_secret`.
 
@@ -88,22 +92,22 @@ Handlers in [`handlers/draft.rs`](../backend/src/api/handlers/draft.rs). The ful
 
 | Method | Path | Handler | Auth | Broadcasts on WS? |
 | --- | --- | --- | --- | --- |
-| GET | `/api/leagues/{league_id}/draft` | `get_draft_by_league` | Required | - |
+| GET | `/api/leagues/{league_id}/draft` | `get_draft_by_league` | Required (member) | - |
 | POST | `/api/leagues/{league_id}/draft` | `create_draft_session` | Required | - |
-| POST | `/api/leagues/{league_id}/draft/randomize-order` | `randomize_order` | Required | - |
-| GET | `/api/draft/{draft_id}` | `get_draft_state` | Required | - |
+| POST | `/api/leagues/{league_id}/draft/randomize-order` | `randomize_order` | Required (owner) | - |
+| GET | `/api/draft/{draft_id}` | `get_draft_state` | Required (member) | - |
 | DELETE | `/api/draft/{draft_id}` | `delete_draft` | Required | - |
-| POST | `/api/draft/{draft_id}/populate` | `populate_player_pool` | Required | `PlayerPoolUpdated` |
-| POST | `/api/draft/{draft_id}/start` | `start_draft` | Required | `SessionUpdated` |
-| POST | `/api/draft/{draft_id}/pause` | `pause_draft` | Required | `SessionUpdated` |
-| POST | `/api/draft/{draft_id}/resume` | `resume_draft` | Required | `SessionUpdated` |
+| POST | `/api/draft/{draft_id}/populate` | `populate_player_pool` | Required (owner) | `PlayerPoolUpdated` |
+| POST | `/api/draft/{draft_id}/start` | `start_draft` | Required (owner) | `SessionUpdated` |
+| POST | `/api/draft/{draft_id}/pause` | `pause_draft` | Required (owner) | `SessionUpdated` |
+| POST | `/api/draft/{draft_id}/resume` | `resume_draft` | Required (owner) | `SessionUpdated` |
 | POST | `/api/draft/{draft_id}/pick` | `make_pick` | Required | `PickMade` + `SessionUpdated` |
-| POST | `/api/draft/{draft_id}/finalize` | `finalize_draft` | Required | `SessionUpdated` |
-| POST | `/api/draft/{draft_id}/complete` | `complete_draft` | Required | `SessionUpdated` |
-| GET | `/api/draft/{draft_id}/sleepers` | `get_eligible_sleepers` | Required | - |
-| GET | `/api/draft/{draft_id}/sleeper-picks` | `get_sleeper_picks` | Required | - |
-| POST | `/api/draft/{draft_id}/sleeper/start` | `start_sleeper_round` | Required | `SessionUpdated` |
-| POST | `/api/draft/{draft_id}/sleeper/pick` | `make_sleeper_pick` | Required | `SleeperUpdated` |
+| POST | `/api/draft/{draft_id}/finalize` | `finalize_draft` | Required (member) | `SessionUpdated` |
+| POST | `/api/draft/{draft_id}/complete` | `complete_draft` | Required (member) | `SessionUpdated` |
+| GET | `/api/draft/{draft_id}/sleepers` | `get_eligible_sleepers` | Required (member) | - |
+| GET | `/api/draft/{draft_id}/sleeper-picks` | `get_sleeper_picks` | Required (member) | - |
+| POST | `/api/draft/{draft_id}/sleeper/start` | `start_sleeper_round` | Required (owner) | `SessionUpdated` |
+| POST | `/api/draft/{draft_id}/sleeper/pick` | `make_sleeper_pick` | Required (member) | `SleeperUpdated` |
 
 ### Fantasy teams and players
 
@@ -115,7 +119,7 @@ Handlers in [`handlers/teams.rs`](../backend/src/api/handlers/teams.rs) and [`ha
 | GET | `/api/fantasy/teams/{id}` | `get_team` | Required | `fantasy_teams` + `fantasy_players`, joined with the NHL skater-stats leaderboard. The rich per-player breakdown + descriptive diagnosis lives on `/api/pulse` instead. |
 | PUT | `/api/fantasy/teams/{id}` | `update_team_name` | Required | `UPDATE fantasy_teams` |
 | POST | `/api/fantasy/teams/{id}/players` | `add_player_to_team` | Required | `INSERT fantasy_players` |
-| DELETE | `/api/fantasy/players/{player_id}` | `remove_player` | Required | `DELETE fantasy_players` |
+| DELETE | `/api/fantasy/players/{player_id}` | `remove_player` | Required (owner) | `DELETE fantasy_players` by row id (the `id` returned by `GET /api/fantasy/players`) |
 | GET | `/api/fantasy/players` | `get_players_per_team` | Required | Groups `fantasy_players` by `nhl_team` |
 | GET | `/api/fantasy/team-bets` | `get_team_bets` | Required | Count of rostered players per NHL team, per fantasy team |
 | GET | `/api/fantasy/team-stats` | `get_team_stats` | Required | Aggregated team statistics |
@@ -138,7 +142,7 @@ Handlers in [`handlers/sleepers.rs`](../backend/src/api/handlers/sleepers.rs).
 | Method | Path | Handler | Auth | Data source |
 | --- | --- | --- | --- | --- |
 | GET | `/api/fantasy/sleepers` | `get_sleepers` | Required | `fantasy_sleepers` for league |
-| DELETE | `/api/fantasy/sleepers/{sleeper_id}` | `remove_sleeper` | Required | `DELETE fantasy_sleepers` |
+| DELETE | `/api/fantasy/sleepers/{sleeper_id}` | `remove_sleeper` | Required (owner) | `DELETE fantasy_sleepers` by row id |
 
 ### NHL data (mirror reads)
 
@@ -148,7 +152,7 @@ Handlers in [`handlers/games.rs`](../backend/src/api/handlers/games.rs), [`handl
 | --- | --- | --- | --- | --- |
 | GET | `/api/nhl/games` | `list_games` | Optional | `nhl_games` + `nhl_player_game_stats`; extended shape when `league_id` + `detail=extended` is passed |
 | GET | `/api/nhl/match-day` | `get_match_day` | Required | `nhl_games` for today (+ yesterday if early morning) + fantasy overlays; cached at `match_day:{date}` |
-| GET | `/api/nhl/skaters/top` | `get_top_skaters` | Optional | Playoffs: `nhl_player_game_stats` aggregate with G/A/P, PIM, +/-, and TOI/gm; regular season: NHL API fallback wrapped in `response_cache`. Optional `league_id` adds fantasy-team ownership tags. |
+| GET | `/api/nhl/skaters/top` | `get_top_skaters` | Optional | Playoffs: `nhl_player_game_stats` aggregate with G/A/P, PIM, +/-, and TOI/gm; other game types: mirrored season lines from `nhl_skater_season_stats` (no PIM), with optional form from `nhl_player_game_stats`. `limit` is capped at `MAX_TOP_SKATERS_LIMIT` and `form_games` at `MAX_FORM_GAMES`. Optional `league_id` adds fantasy-team ownership tags. |
 | GET | `/api/nhl/roster/{team}` | `get_team_roster` | Optional | `nhl_team_rosters` (JSONB roster) |
 | GET | `/api/nhl/playoffs` | `get_playoff_info` | Optional | `nhl_playoff_bracket` |
 
@@ -158,9 +162,9 @@ Handler in [`handlers/insights.rs`](../backend/src/api/handlers/insights.rs).
 
 | Method | Path | Handler | Auth | Data source |
 | --- | --- | --- | --- | --- |
-| GET | `/api/insights` | `get_insights` | Optional | `response_cache` (keyed per league) with miss-through to mirror reads + Claude narrative + Daily Faceoff headline scraper |
+| GET | `/api/insights` | `get_insights` | Optional | `response_cache` (keyed per league) with miss-through to mirror reads + LLM narrative + Daily Faceoff headline scraper |
 
-The response includes a generated narrative and a set of signals: hot players, cold players, today's slate, active-round series projections, and a **Last Night** recap (games that finalised on the previous hockey-date with their final score, post-game series state, and top scorers). `seriesProjections[]` can contain more than one round at once: the backend includes unfinished lower-round series plus concrete current-round matchups, while omitting completed series and unresolved `TBD` slots. The narrative object has these fields — `todays_watch`, `game_narratives[]`, `hot_players`, `bracket`, `last_night` (a markdown-ish string with `### Subheading` per game in a Daily Faceoff voice), and `season_recap`. `season_recap` is present **only once the bracket shows a Stanley Cup champion**: the daily preview fields go empty and this markdown wrap-up stands in for them (NHL Cup result plus, on the league-scoped route, the fantasy-league champion, final standings, and top scorers). See [05-prediction-engine.md §6b](./05-prediction-engine.md) for the `SeasonPhase` trigger. Narratives are cached per-day; invalidation is controlled by the daily prewarm cron, which overwrites the `insights:*` rows at 10:00 UTC. To force a regeneration mid-day, hit `GET /api/admin/cache/invalidate?scope=today`.
+The response includes a generated narrative and a set of signals: hot players, cold players, today's slate, active-round series projections, and a **Last Night** recap (games that finalised on the previous hockey-date with their final score, post-game series state, and top scorers). `seriesProjections[]` can contain more than one round at once: the backend includes unfinished lower-round series plus concrete current-round matchups, while omitting completed series and unresolved `TBD` slots. The narrative object has these fields — `todays_watch`, `game_narratives[]`, `hot_players`, `bracket`, `last_night` (a markdown-ish string with `### Subheading` per game in a Daily Faceoff voice), and `season_recap`. `season_recap` is present **only once the bracket shows a Stanley Cup champion**: the daily preview fields go empty and this markdown wrap-up stands in for them (NHL Cup result plus, on the league-scoped route, the fantasy-league champion, final standings, and top scorers). See [05-prediction-engine.md §6b](./05-prediction-engine.md) for the `SeasonPhase` trigger. Narratives are cached per-day. The daily prewarm cron overwrites the `insights:*` rows at 10:00 UTC, and the meta poller drops today's rows when a game on today's schedule is added, cancelled, or changes state (score-only changes don't regenerate the LLM text). To force a regeneration mid-day, hit `GET /api/admin/cache/invalidate?scope=today`.
 
 ### Pulse
 
@@ -168,7 +172,7 @@ Handler in [`handlers/pulse.rs`](../backend/src/api/handlers/pulse.rs).
 
 | Method | Path | Handler | Auth | Data source |
 | --- | --- | --- | --- | --- |
-| GET | `/api/pulse?league_id=...` | `get_pulse` | Required | `v_daily_fantasy_totals` (live), `nhl_games`, `nhl_playoff_bracket`, `nhl_player_game_stats` rollup, yesterday's mirror recap, cached race-odds payload, plus the per-caller `MyTeamDiagnosis` bundle cached at `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:bundle:v1` (which itself nests the Claude narrative cached at `…:v2`) |
+| GET | `/api/pulse?league_id=...` | `get_pulse` | Required | `v_daily_fantasy_totals` (live), `nhl_games`, `nhl_playoff_bracket`, `nhl_player_game_stats` rollup, yesterday's mirror recap, cached race-odds payload, plus the per-caller `MyTeamDiagnosis` bundle cached at `team_diagnosis:{league}:{team}:{season}:{gt}:{date}:bundle:v1` (which itself nests the LLM narrative cached at `…:v2`) |
 
 `PulseResponse` carries: the `leagueBoard` (with live `pointsToday` from `v_daily_fantasy_totals`, consumed by the dashboard's Live Rankings section — the Pulse page itself no longer renders this list), a per-team `seriesForecast`, the caller's `myGamesTonight`, a flat `gamesToday` list of today's NHL matchups, and an `nhlTeamCupOdds` map lifted from the cached race-odds payload.
 
@@ -179,9 +183,9 @@ Two additional blocks drive the Pulse page directly:
 
 Both blocks share one composition helper ([`handlers/team_breakdown::compose_team_breakdown`](../backend/src/api/handlers/team_breakdown.rs)). The daily 10:00 UTC prewarm job + the on-demand `GET /api/admin/prewarm` endpoint call `pulse::resolve_my_team_diagnosis` per (league × team) so the bundle cache is filled before any user lands on Pulse — the first request becomes a single SELECT.
 
-**Bundle cache**: `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:bundle:v1`. Holds the full `MyTeamDiagnosis` payload (per-player breakdown + `diagnosis.narrativeMarkdown`). Survives mid-evening game-end transitions intentionally — wiping it would force a synchronous Claude regen on the next Pulse load. Ages out on the date roll; rebuilt by the next morning's prewarm.
+**Bundle cache**: `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:bundle:v1`. Holds the full `MyTeamDiagnosis` payload (per-player breakdown + `diagnosis.narrativeMarkdown`). Survives mid-evening game-end transitions intentionally — wiping it would force a synchronous LLM regen on the next Pulse load. Ages out on the date roll; rebuilt by the next morning's prewarm.
 
-**Narrative cache**: `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:v2`. The Claude-generated text only. Invalidated by the live poller on `LIVE|CRIT → OFF|FINAL` transitions for games that any rostered player was in, so the next prewarm regenerates the narrative with the final score in view and folds it into the new bundle.
+**Narrative cache**: `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:v2`. The LLM-generated text only. Invalidated by the live poller on `LIVE|CRIT → OFF|FINAL` transitions for games that any rostered player was in, so the next prewarm regenerates the narrative with the final score in view and folds it into the new bundle.
 
 ### Race odds
 
@@ -212,7 +216,7 @@ All admin handlers check `auth.is_admin` and return 403 if unset. Handlers in [`
 
 | Method | Path | Handler | Auth |
 | --- | --- | --- | --- |
-| GET | `/ws/draft/{session_id}` | `ws::handler::ws_draft` at [`backend/src/ws/handler.rs`](../backend/src/ws/handler.rs) | Optional (token via query string) |
+| GET | `/ws/draft/{session_id}?token=<jwt>` | `ws::handler::ws_draft` at [`backend/src/ws/handler.rs`](../backend/src/ws/handler.rs) | Required (member), token via query string |
 
 See [`08-draft.md`](./08-draft.md) for the message types and reconnect behavior.
 
@@ -225,9 +229,9 @@ All written to `response_cache` by handlers. All read from the same table. Inval
 | Cache key | Written by | Invalidated by |
 | --- | --- | --- |
 | `match_day:{date}` | `handlers/games.rs` (`get_match_day`) | Admin invalidate, scope=`{date}` |
-| `insights:...` | `handlers/insights.rs` | Daily prewarm overwrites at 10:00 UTC; admin invalidate |
+| `insights:...` | `handlers/insights.rs` | Daily prewarm overwrites at 10:00 UTC; meta poller on a state change in today's schedule; admin invalidate |
 | `race_odds:...` | `handlers/race_odds.rs` | Same pattern as insights |
-| `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:v2` | `handlers/team_breakdown.rs` (Claude narrative) | Live poller's `invalidate_by_like("team_diagnosis:{league}:%:v2")` on `LIVE \| CRIT → OFF \| FINAL` for games involving any rostered player |
+| `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:v2` | `handlers/team_breakdown.rs` (LLM narrative) | Live poller's `invalidate_by_like("team_diagnosis:{league}:%:v2")` on `LIVE \| CRIT → OFF \| FINAL` for games involving any rostered player |
 | `team_diagnosis:{league_id}:{team_id}:{season}:{gt}:{date}:bundle:v1` | `handlers/pulse.rs` (`resolve_my_team_diagnosis`) | Daily 10:00 UTC prewarm overwrite; admin invalidate. Not wiped on game-end — see `06-business-logic.md`. |
 
 ## Query params worth knowing

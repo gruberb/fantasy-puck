@@ -36,8 +36,7 @@ pub fn from_standings(root: &serde_json::Value) -> HashMap<String, f32> {
                 .and_then(|a| a.get("default"))
                 .and_then(|a| a.as_str())?
                 .to_string();
-            let season_points =
-                entry.get("points").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let season_points = entry.get("points").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
             let rating = blend(entry, season_points);
             Some((abbrev, rating))
         })
@@ -46,7 +45,10 @@ pub fn from_standings(root: &serde_json::Value) -> HashMap<String, f32> {
 
 fn blend(entry: &serde_json::Value, season_points: f32) -> f32 {
     let l10_w = entry.get("l10Wins").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let l10_l = entry.get("l10Losses").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let l10_l = entry
+        .get("l10Losses")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
     let l10_otl = entry
         .get("l10OtLosses")
         .and_then(|v| v.as_f64())
@@ -92,18 +94,36 @@ mod tests {
     fn hot_l10_lifts_rating_above_season() {
         // 100 RS pts + 8-1-1 L10 (17 pts → 139.4 extrapolated) → ~111.8.
         let root = json!({ "standings": [entry("HOT", 100, 8, 1, 1)] });
-        let rating = from_standings(&root).get("HOT").copied().unwrap_or_default();
-        assert!(rating > 108.0, "hot team should rise above season pts, got {rating}");
-        assert!(rating < 115.0, "blend should damp, not replace; got {rating}");
+        let rating = from_standings(&root)
+            .get("HOT")
+            .copied()
+            .unwrap_or_default();
+        assert!(
+            rating > 108.0,
+            "hot team should rise above season pts, got {rating}"
+        );
+        assert!(
+            rating < 115.0,
+            "blend should damp, not replace; got {rating}"
+        );
     }
 
     #[test]
     fn cold_l10_drops_rating_below_season() {
         // 100 RS pts + 2-7-1 L10 (5 pts → 41 extrapolated) → ~82.3.
         let root = json!({ "standings": [entry("COLD", 100, 2, 7, 1)] });
-        let rating = from_standings(&root).get("COLD").copied().unwrap_or_default();
-        assert!(rating < 85.0, "cold team should drop below season pts, got {rating}");
-        assert!(rating > 78.0, "blend should damp, not replace; got {rating}");
+        let rating = from_standings(&root)
+            .get("COLD")
+            .copied()
+            .unwrap_or_default();
+        assert!(
+            rating < 85.0,
+            "cold team should drop below season pts, got {rating}"
+        );
+        assert!(
+            rating > 78.0,
+            "blend should damp, not replace; got {rating}"
+        );
     }
 
     #[test]
@@ -113,7 +133,10 @@ mod tests {
                 { "teamAbbrev": { "default": "BARE" }, "points": 92 },
             ]
         });
-        let rating = from_standings(&root).get("BARE").copied().unwrap_or_default();
+        let rating = from_standings(&root)
+            .get("BARE")
+            .copied()
+            .unwrap_or_default();
         assert!((rating - 92.0).abs() < 1e-5);
     }
 

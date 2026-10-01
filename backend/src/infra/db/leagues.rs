@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-use crate::infra::db::FantasyDb;
 use crate::error::{Error, Result};
+use crate::infra::db::FantasyDb;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct LeagueRow {
@@ -63,10 +63,7 @@ impl FantasyDb {
     }
 
     /// Get all members of a league, joined with their profiles and fantasy teams.
-    pub async fn get_league_members(
-        &self,
-        league_id: &str,
-    ) -> Result<Vec<LeagueMemberRow>> {
+    pub async fn get_league_members(&self, league_id: &str) -> Result<Vec<LeagueMemberRow>> {
         let members = sqlx::query_as::<_, LeagueMemberRow>(
             r#"
             SELECT
@@ -91,12 +88,7 @@ impl FantasyDb {
     }
 
     /// Join a league: create a fantasy team and add a league membership in a transaction.
-    pub async fn join_league(
-        &self,
-        league_id: &str,
-        user_id: &str,
-        team_name: &str,
-    ) -> Result<()> {
+    pub async fn join_league(&self, league_id: &str, user_id: &str, team_name: &str) -> Result<()> {
         let mut tx = self.pool().begin().await?;
 
         let team_id: i64 = sqlx::query_scalar(
@@ -141,17 +133,18 @@ impl FantasyDb {
 
     /// Verify the user is the league owner. Returns Forbidden if not.
     pub async fn verify_league_owner(&self, league_id: &str, user_id: &str) -> Result<()> {
-        let created_by: Option<String> = sqlx::query_scalar(
-            "SELECT created_by::text FROM leagues WHERE id = $1::uuid",
-        )
-        .bind(league_id)
-        .fetch_optional(self.pool())
-        .await?
-        .ok_or_else(|| Error::NotFound("League not found".into()))?;
+        let created_by: Option<String> =
+            sqlx::query_scalar("SELECT created_by::text FROM leagues WHERE id = $1::uuid")
+                .bind(league_id)
+                .fetch_optional(self.pool())
+                .await?
+                .ok_or_else(|| Error::NotFound("League not found".into()))?;
 
         match created_by {
             Some(owner) if owner == user_id => Ok(()),
-            _ => Err(Error::Forbidden("Only the league owner can perform this action".into())),
+            _ => Err(Error::Forbidden(
+                "Only the league owner can perform this action".into(),
+            )),
         }
     }
 
@@ -170,11 +163,7 @@ impl FantasyDb {
     }
 
     /// Validate that a member belongs to a league. Returns the member id.
-    pub async fn validate_league_member(
-        &self,
-        member_id: &str,
-        league_id: &str,
-    ) -> Result<String> {
+    pub async fn validate_league_member(&self, member_id: &str, league_id: &str) -> Result<String> {
         let id: String = sqlx::query_scalar(
             "SELECT id::text FROM league_members WHERE id = $1::uuid AND league_id = $2::uuid",
         )

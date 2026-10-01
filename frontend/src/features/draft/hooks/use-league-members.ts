@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { draftApi } from '../api/draft-api';
-import type { LeagueMember } from '../types';
+import { draftApi } from '@/features/draft/api/draft-api';
+import type { LeagueMember } from '@/features/draft/types';
 
 export const leagueMembersQueryKey = (leagueId: string | null) =>
   ['draft', 'leagueMembers', leagueId] as const;

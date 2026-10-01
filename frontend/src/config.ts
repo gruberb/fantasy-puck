@@ -15,6 +15,12 @@
 // that cadence — the scanning pattern is "find the right key, read the
 // comment, decide whether to change".
 
+import { formatSeason } from "@/utils/format";
+
+// localStorage key for the league the user last opened. Read by the league
+// picker for redirect, cleared on sign-out.
+export const LAST_VIEWED_LEAGUE_KEY = "lastViewedLeagueId";
+
 // API URL. The backend runs at `api.fantasy-puck.ca` in production,
 // and at `http://localhost:3000` when running `make run` locally
 // (Vite's dev server proxies to VITE_API_URL).
@@ -37,10 +43,6 @@ const GAME_TYPE_LABEL = GAME_TYPE_LABELS[DEFAULT_GAME_TYPE] ?? "Playoffs";
 const PLAYOFF_START = import.meta.env.VITE_NHL_PLAYOFF_START || "2026-04-18";
 const SEASON_END = import.meta.env.VITE_NHL_SEASON_END || "2026-06-14";
 
-function formatSeason(s: string): string {
-  return s.length === 8 ? `${s.slice(0, 4)}/${s.slice(4)}` : s;
-}
-
 // App settings derived from env vars at build time.
 export const APP_CONFIG = {
   APP_NAME: "Fantasy NHL Dashboard",
@@ -52,7 +54,6 @@ export const APP_CONFIG = {
   BRAND_LABEL: `NHL ${DEFAULT_SEASON.slice(4)}`,
   FORM_GAMES: 5,
   SKATERS_LIMIT: 1000,
-  HOME_SKATERS_LIMIT: 10,
   PLAYOFF_START,
   SEASON_END,
 };
@@ -86,7 +87,7 @@ export const QUERY_INTERVALS = {
   DEFAULT_STALE_MS: 5 * 60 * 1000,
 
   // Insights is a once-per-day narrative. Keep it stale for 15 min so
-  // repeated navigations don't regenerate the Claude call.
+  // repeated navigations don't regenerate the LLM call.
   INSIGHTS_STALE_MS: 15 * 60 * 1000,
 
   // Race-Odds is a heavy Monte Carlo payload. Same cadence as Insights.

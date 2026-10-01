@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import { Game } from "@/types/games";
-import { NHL_TEAMS_BY_ABBREV } from "@/utils/nhlTeams";
+import { NHL_TEAMS_BY_ABBREV, nhlGamecenterUrl } from "@/utils/nhlTeams";
+import { isFinal, isLive } from "@/utils/gameState";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -159,9 +160,8 @@ const NHLGameCard = ({
 
   // Game status
   const gameStatus = game.gameState || "SCHEDULED";
-  const isLive =
-    gameStatus.toUpperCase() === "LIVE" || gameStatus.toUpperCase() === "CRIT";
-  const isGameComplete = gameStatus === "FINAL" || gameStatus === "OFF";
+  const live = isLive(gameStatus);
+  const isGameComplete = isFinal(gameStatus);
   const hasScore =
     game.awayScore !== undefined &&
     game.awayScore !== null &&
@@ -186,7 +186,7 @@ const NHLGameCard = ({
       <div
         className="cursor-pointer hover:bg-gray-50/30 transition-colors"
         onClick={() =>
-          window.open(`https://www.nhl.com/gamecenter/${game.id}`, "_blank")
+          window.open(nhlGamecenterUrl(game.id), "_blank")
         }
       >
         {/* Matchup row with diagonal stripes */}
@@ -252,7 +252,7 @@ const NHLGameCard = ({
                     <div className="flex flex-col items-center min-w-[60px] sm:min-w-[80px]">
                       <StatusBadge
                         period={game.period}
-                        isLive={isLive}
+                        isLive={live}
                         isGameComplete={isGameComplete}
                       />
                       <div className="text-[10px] sm:text-xs text-gray-500 font-medium mt-1">
@@ -281,11 +281,11 @@ const NHLGameCard = ({
                     <div className="text-[10px] sm:text-xs text-gray-400 font-medium">
                       {dateString}
                     </div>
-                    {isLive && (
+                    {live && (
                       <div className="mt-1.5">
                         <StatusBadge
                           period={game.period}
-                          isLive={isLive}
+                          isLive={live}
                           isGameComplete={isGameComplete}
                         />
                       </div>
@@ -353,7 +353,7 @@ const NHLGameCard = ({
           <div className="px-4 sm:px-6">
             <div className="pb-3 pt-3 border-t border-gray-200 flex justify-center gap-6">
               <a
-                href={`https://www.nhl.com/gamecenter/${game.id}/recap`}
+                href={nhlGamecenterUrl(game.id, "recap")}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-[#2563EB] transition-colors flex items-center gap-1"
@@ -369,7 +369,7 @@ const NHLGameCard = ({
                 Highlights
               </a>
               <a
-                href={`https://www.nhl.com/gamecenter/${game.id}/boxscore`}
+                href={nhlGamecenterUrl(game.id, "boxscore")}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-[#2563EB] transition-colors flex items-center gap-1"
